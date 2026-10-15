@@ -1,0 +1,5 @@
+*.nnova2 binary
+*.txt text eol=lf
+*.json text eol=lf
+*.rs text eol=lf
+*.py text eol=lf

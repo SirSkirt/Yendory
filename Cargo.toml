@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/yendory-engine"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+repository = "https://github.com/SirSkirt/yendory"
+
+[profile.test]
+# The compatibility tests run the full 1.18M-parameter model; unoptimized they are very slow.
+opt-level = 3

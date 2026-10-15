@@ -1,0 +1,25 @@
+Yendory Engine — origin of the code
+
+crates/yendory-engine/src/model/{mod.rs,tape.rs,cache.rs,golden.rs} and
+crates/yendory-engine/src/tokenizer.rs are carried over from Neural Nova:
+
+  repository: https://github.com/SirSkirt/novaai
+  branch:     experimental/neural-nova
+  commit:     1f456b5cb4b8f6c8ccdd91ad035387eb42ccbb3d (2026-10-15)
+  paths:      neural-nova/src/nova2/*, neural-nova/src/tokenizer.rs
+  license:    MIT (declared in neural-nova/Cargo.toml)
+
+Changes made in Yendory: the type Nova2 is renamed Bicameral and the module nova2 is renamed
+model; checkpoint I/O moved to model/checkpoint.rs (same .nnova2 layout, now byte-identical on
+load -> save, and malformed files return errors instead of panicking); the KV cache re-windows
+past max_tokens exactly like the reference; an id-level generate_cached_ids was added; code was
+reformatted with rustfmt. The network mathematics and parameter layout are unchanged.
+
+reference/ is the numpy specification written by Claude for the Nova-2 "Bicameral" design
+(Nova2-Bicameral-architecture package and the step-19,000 training package, 2026-10-15).
+docs/ARCHITECTURE.md and docs/EXPERIMENTS.md come from the same architecture package.
+
+The name "Yendory" began as a word made up by an early version of Nova while she was learning
+to communicate; her school was jokingly called "Yendory University".
+
+The license for Yendory as a whole has not been chosen yet.
