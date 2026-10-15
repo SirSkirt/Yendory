@@ -1,18 +1,19 @@
 name: studio-release
 
-# Builds Yendory Studio installers on GitHub's machines:
+# Builds Yendory Studio installers on GitHub's machines and publishes them as a pre-release on the
+# repository's Releases page:
 #   Windows  : NSIS setup .exe
 #   Linux    : .deb and .AppImage
 #   Android  : .apk for arm64 + armv7 phones, signed with the committed debug key
-# Push a tag like `studio-v0.1.0` to publish a GitHub Release with all of them. Branch pushes that
-# change the app, and manual runs from the Actions tab, attach the installers to the run as
-# artifacts; a manual run creates a release only if you enter a tag.
+# - A branch push that changes the app or the Engine publishes a development pre-release tagged
+#   `studio-v<version>-dev.<run number>` (the newest 5 are kept; older ones are removed).
+# - A pushed tag like `studio-v0.1.0` publishes a pre-release with that tag.
+# - A manual run from the Actions tab publishes with the tag you enter, or a development tag.
 
 on:
   push:
     tags: ["studio-v*"]
-    # Pushes that change the app or the Engine build all installers as artifacts (no release),
-    # so every change is proven to package on Windows, Linux and Android.
+    # Pushes that change the app or the Engine build and publish a development pre-release.
     branches: ["**"]
     paths:
       - "apps/studio/**"
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional: create a release with this tag (e.g. studio-v0.1.0). Leave empty for artifacts only."
+        description: "Optional: release tag (e.g. studio-v0.1.0). Leave empty for a development pre-release."
         required: false
         default: ""
 
@@ -162,18 +163,41 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish release
+    name: Publish pre-release
     needs: [desktop, android]
-    if: startsWith(github.ref, 'refs/tags/studio-v') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/studio/package.json
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
-      - name: Create GitHub release
+      - name: Choose the tag
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/studio/package.json').version")"
+          if [[ "$GITHUB_REF" == refs/tags/studio-v* ]]; then
+            TAG="$GITHUB_REF_NAME"; DEV=false
+          elif [[ -n "${INPUT_TAG:-}" ]]; then
+            TAG="$INPUT_TAG"; DEV=false
+          else
+            TAG="studio-v$VERSION-dev.$GITHUB_RUN_NUMBER"; DEV=true
+          fi
+          [[ "$TAG" =~ ^studio-v[0-9A-Za-z.+-]+$ ]] || { echo "::error::Bad tag: $TAG"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "dev=$DEV" >> "$GITHUB_OUTPUT"
+      - name: Publish to Releases
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DEV: ${{ steps.tag.outputs.dev }}
         run: |
           set -euo pipefail
           # Installer names contain spaces ("Yendory Studio_0.1.0_amd64.deb"): keep them intact.
@@ -181,16 +205,40 @@ jobs:
           mv SHA256SUMS.txt dist/
           mapfile -d '' FILES < <(find dist -type f -print0 | sort -z)
           printf '%s\n' "${FILES[@]}"
-          cat > notes.md <<'NOTES'
-          Yendory Studio desktop and Android builds, made by GitHub Actions from this commit.
+          {
+            if [[ "$DEV" == true ]]; then
+              echo "Development build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA:0:7}. Only the newest 5 development builds are kept."
+            else
+              echo "Yendory Studio desktop and Android builds, made by GitHub Actions from ${GITHUB_SHA:0:7}."
+            fi
+            cat <<'NOTES'
 
           - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway".
           - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
-          - **Android:** install the `.apk` (allow installs from this source). Keep Studio open while it teaches.
+          - **Android:** install the `.apk` (allow installs from this source). Every build is signed with the same debug key, so it installs over the previous one and keeps your models. Keep Studio open while it teaches.
 
-          Built by CI only: these installers have not been tested on a physical device for this release.
+          Built by CI only: these installers have not been tested on a physical device for this release. `SHA256SUMS.txt` lists the checksum of every file.
           NOTES
-          sed -i 's/^          //' notes.md
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Yendory Studio ${TAG#studio-v}" --notes-file notes.md --prerelease \
-            "${FILES[@]}"
+          } > notes.md
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # A re-run of the same workflow run: replace the files.
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Studio ${TAG#studio-v}" --notes-file notes.md --prerelease --latest=false \
+              "${FILES[@]}"
+          fi
+      - name: Remove old development pre-releases
+        if: steps.tag.outputs.dev == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("^studio-v.*-dev\\.[0-9]+$")))]
+                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do
+            echo "Removing $old"
+            gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          done

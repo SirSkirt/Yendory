@@ -29,8 +29,13 @@ Linux needs `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (and `patchelf` fo
 ## Releases
 
 `.github/workflows/studio-release.yml` builds a Windows installer, Linux `.deb` / `.AppImage`
-and an Android `.apk` on GitHub's machines. Push a tag `studio-vX.Y.Z` to publish them as a
-GitHub Release, or run the workflow from the Actions tab to get them as downloadable artifacts.
+and an Android `.apk` on GitHub's machines and publishes them as a **pre-release** on the
+Releases page:
+
+- every push that changes Studio or the Engine → `studio-v<version>-dev.<run>` (the newest 5
+  development pre-releases are kept, older ones are deleted);
+- a pushed tag `studio-vX.Y.Z` → a pre-release with that tag;
+- a manual run from the Actions tab → the tag you enter, or a development tag.
 Android builds are all signed with one committed debug key (`keys/README.md`); no secrets needed.
 
 ## Known limits
