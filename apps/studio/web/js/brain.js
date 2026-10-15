@@ -1,9 +1,11 @@
 "use strict";
-// Brain visualizer. Drawing (hemisphere shapes, dot placement, sizes, colours, fibre glow) is
-// Neural Nova's original; the data comes from Engine measurements of a real forward pass.
+// Brain visualizer. The hemisphere shapes and dot layout are Neural Nova's original; colours come
+// from the notebook palette (styles.css); the data comes from Engine measurements of a real
+// forward pass.
 window.Brain = (() => {
   const svgNS = "http://www.w3.org/2000/svg";
   const $ = id => document.getElementById(id);
+  const colour = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   function neuron(x, y, magnitude, hue, detail) {
     const c = document.createElementNS(svgNS, "circle");
@@ -39,7 +41,8 @@ window.Brain = (() => {
   function clear() {
     $("leftActivity").replaceChildren();
     $("rightActivity").replaceChildren();
-    $("bridgeFibers").querySelectorAll("path").forEach(p => { p.style.opacity = ""; p.style.stroke = ""; p.style.filter = ""; });
+    $("bridgeFibers").classList.remove("live");
+    $("bridgeFibers").querySelectorAll("path").forEach(p => { p.style.opacity = ""; p.style.strokeWidth = ""; });
   }
 
   function show(m, stageIndex) {
@@ -53,7 +56,7 @@ window.Brain = (() => {
     attention.forEach((w, i) => {
       const p = nodeLocation(i, attention.length, 245);
       const detail = `${stageLabel(stage)} · attention to token ${i} (${m.tokens[i]}) · ${(w * 100).toFixed(3)}% (mean of ${stage.attention.length} heads)`;
-      left.append(neuron(p.x, p.y, w / strongest, "#65caff", detail));
+      left.append(neuron(p.x, p.y, w / strongest, colour("--brain-left"), detail));
     });
 
     // Right hemisphere: a deterministic subsample of the actual activations.
@@ -69,21 +72,21 @@ window.Brain = (() => {
     });
     dots.forEach((d, i) => {
       const p = nodeLocation(i, dots.length, 555);
-      right.append(neuron(p.x, p.y, d.level, "#c09aff", `Dense pathway · ${d.layer} · neuron ${d.index} · measured activation ${d.value.toFixed(6)}`));
+      right.append(neuron(p.x, p.y, d.level, colour("--brain-right"), `Dense pathway · ${d.layer} · neuron ${d.index} · measured activation ${d.value.toFixed(6)}`));
     });
 
     // Interconnect fibres: gate openings of every right->left injection, in five groups.
     const gates = m.trace.gates.flatMap(g => g.gate);
     const maximum = Math.max(1e-8, ...gates.map(Math.abs));
-    // Green glow only when cutting the right->left path measurably changes the output.
+    // The fibres turn "live" green only when cutting the right->left path measurably changes the output.
     const verified = m.ablation.without_right_to_left > 1e-5;
+    $("bridgeFibers").classList.toggle("live", verified);
     $("bridgeFibers").querySelectorAll("path").forEach((path, i) => {
       const start = Math.floor(i * gates.length / 5), end = Math.floor((i + 1) * gates.length / 5);
       const mean = gates.slice(start, end).reduce((s, v) => s + Math.abs(v), 0) / Math.max(1, end - start);
       const intensity = Math.min(1, mean / maximum);
-      path.style.opacity = (.12 + .85 * intensity).toFixed(2);
-      path.style.stroke = verified ? "#34dc80" : "#48d0b4";
-      path.style.filter = verified ? "drop-shadow(0 0 4px rgba(52,220,128,.65))" : "";
+      path.style.opacity = (.15 + .85 * intensity).toFixed(2);
+      path.style.strokeWidth = (1.4 + 2.2 * intensity).toFixed(1);
     });
     return { attention, stage };
   }

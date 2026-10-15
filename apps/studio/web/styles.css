@@ -1,5 +1,5 @@
 /* Yendory Studio — "lab notebook" design. Warm paper, ink, ruled lines, tables over tiles.
-   The brain visualizer keeps Neural Nova's original look inside a framed specimen plate. */
+   The brain visualizer keeps Neural Nova's hemisphere shapes, recoloured in this palette. */
 :root {
   --paper: #f4eee1;
   --sheet: #fbf8f0;
@@ -147,16 +147,40 @@ table { border-collapse: collapse; width: 100%; }
 .transcript .who { font: 600 13px var(--mono); color: var(--margin); margin-right: 8px; }
 .transcript .model .who { color: var(--accent); }
 
-/* Brain specimen plate (visualizer keeps Neural Nova's original look) */
+/* Brain specimen plate: Neural Nova's hemisphere shapes, drawn in the notebook palette. */
+:root {
+  --brain-stage: #f8f3e7;
+  --brain-left: #284a7e;  --brain-left-fill: #e4e9f1;
+  --brain-right: #a5463c; --brain-right-fill: #f4e3dd;
+  --brain-bridge: #8a8f5a; --brain-bridge-live: #3f7a3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brain-stage: #18160f;
+    --brain-left: #93b2e4;  --brain-left-fill: #1c2433;
+    --brain-right: #e0907f; --brain-right-fill: #2e1e1a;
+    --brain-bridge: #b8bb86; --brain-bridge-live: #8fd18a;
+  }
+}
 .plate-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
 .plate { margin: 0; padding: 14px; background: var(--sheet); border: 1px solid var(--rule-strong); box-shadow: 0 0 0 6px var(--sheet), 0 0 0 7px var(--rule-strong); }
 .plate figcaption { font: italic 14px var(--serif); color: var(--ink-soft); margin-top: 10px; }
-.brain-stage { border: 1px solid #2d3e59; border-radius: 14px; background: radial-gradient(ellipse at center, #192b3f, #0c1423 70%); display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 310px; }
+.brain-stage { border: 1px solid var(--rule); background: var(--brain-stage); background-image: repeating-linear-gradient(transparent 0 23px, color-mix(in srgb, var(--rule) 55%, transparent) 23px 24px); display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 310px; }
 #hemisphereBrain { width: 100%; height: auto; max-height: 470px; display: block; }
+#hemisphereBrain .hemi.left { fill: var(--brain-left-fill); stroke: var(--brain-left); }
+#hemisphereBrain .hemi.right { fill: var(--brain-right-fill); stroke: var(--brain-right); }
+#hemisphereBrain .veins { opacity: .32; }
+#hemisphereBrain .veins.left { stroke: var(--brain-left); }
+#hemisphereBrain .veins.right { stroke: var(--brain-right); }
+#hemisphereBrain .label { font-family: var(--serif); font-style: italic; }
+#hemisphereBrain .label.left { fill: var(--brain-left); }
+#hemisphereBrain .label.right { fill: var(--brain-right); }
+#bridgeFibers path { stroke: var(--brain-bridge); opacity: .3; }
+#bridgeFibers.live path { stroke: var(--brain-bridge-live); }
 #leftActivity circle, #rightActivity circle { cursor: crosshair; transition: opacity .2s; }
-.brain-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; color: var(--ink-soft); font-size: 11px; }
-.legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-.legend-dot.language { background: #49aafa; } .legend-dot.association { background: #bc8aff; } .legend-dot.bridge { background: #4de0bc; }
+.brain-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; color: var(--ink-soft); font-size: 12px; }
+.legend-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+.legend-dot.language { background: var(--brain-left); } .legend-dot.association { background: var(--brain-right); } .legend-dot.bridge { background: var(--brain-bridge); }
 .readings select { width: 100%; margin-bottom: 8px; }
 .readings label { font-size: 13px; color: var(--ink-soft); }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }

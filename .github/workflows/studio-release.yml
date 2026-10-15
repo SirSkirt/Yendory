@@ -3,7 +3,7 @@ name: studio-release
 # Builds Yendory Studio installers on GitHub's machines:
 #   Windows  : NSIS setup .exe
 #   Linux    : .deb and .AppImage
-#   Android  : signed .apk (arm64 + armv7 phones)
+#   Android  : .apk for arm64 + armv7 phones, signed with the committed debug key
 # Push a tag like `studio-v0.1.0` to publish a GitHub Release with all of them. Branch pushes that
 # change the app, and manual runs from the Actions tab, attach the installers to the run as
 # artifacts; a manual run creates a release only if you enter a tag.
@@ -139,30 +139,21 @@ jobs:
       - name: Build release APK
         working-directory: apps/studio
         run: npx tauri android build --apk --ci --target aarch64 --target armv7
-      - name: Sign
+      - name: Sign with the Yendory debug key
         shell: bash
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -n "${KEYSTORE_BASE64:-}" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            KS="$RUNNER_TEMP/release.jks"; PASS="$KEYSTORE_PASSWORD"; ALIAS="$KEY_ALIAS"; KPASS="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
-            echo "Signing with the repository's private key."
-          else
-            KS=apps/studio/keys/yendory-dev.jks; PASS=yendory-dev; ALIAS=yendory-dev; KPASS=yendory-dev
-            echo "::warning::Signing with the PUBLIC development key (apps/studio/keys/README.md). Fine for your own phone, not for public distribution."
-          fi
+          # Every build is signed with the one committed debug key (apps/studio/keys/README.md),
+          # so a new APK installs over the previous one and keeps the app's models.
+          KS=apps/studio/keys/yendory-debug.jks
           UNSIGNED="$(find apps/studio/src-tauri/gen/android -name '*release-unsigned.apk' | head -n 1)"
           test -n "$UNSIGNED"
           VERSION="$(node -p "require('./apps/studio/package.json').version")"
           OUT="Yendory-Studio-$VERSION-android.apk"
           "$BUILD_TOOLS/zipalign" -f -p 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
-          "$BUILD_TOOLS/apksigner" sign --ks "$KS" --ks-pass "pass:$PASS" --ks-key-alias "$ALIAS" --key-pass "pass:$KPASS" --out "$OUT" "$RUNNER_TEMP/aligned.apk"
-          "$BUILD_TOOLS/apksigner" verify --print-certs "$OUT" | grep -E "Verified|SHA-256"
+          "$BUILD_TOOLS/apksigner" sign --ks "$KS" --ks-pass pass:yendory-debug --ks-key-alias yendory-debug --key-pass pass:yendory-debug --out "$OUT" "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$OUT" | tee "$RUNNER_TEMP/certs.txt"
+          grep -qi "SHA-256 digest: 323c7c506fd8a16012f49660af71cacfa9889a024add1cec8411dc45c69324e1" "$RUNNER_TEMP/certs.txt"
           for abi in arm64-v8a armeabi-v7a; do unzip -Z1 "$OUT" | grep -q "^lib/$abi/" || { echo "::error::missing $abi"; exit 1; }; done
       - uses: actions/upload-artifact@v4
         with:

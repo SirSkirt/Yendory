@@ -333,7 +333,7 @@ function renderMeasure() {
   const top = Math.max(1e-9, ...attention);
   $("attentionTiles").replaceChildren(...attention.map((w, i) => {
     const s = el("span", { class: "tok", title: `token ${i} · ${(w * 100).toFixed(2)}%` }, m.tokens[i]);
-    s.style.background = `rgba(50,188,150,${(.11 + .8 * w / top).toFixed(3)})`;
+    s.style.background = `color-mix(in srgb, var(--brain-left) ${Math.round(8 + 60 * w / top)}%, transparent)`;
     return s;
   }));
 }
