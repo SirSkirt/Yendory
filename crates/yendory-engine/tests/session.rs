@@ -1,7 +1,7 @@
 //! Teaching-session behaviour: Foundation candidates, selection, rollback, stop, records.
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use yendory_engine::learn::session::{teach, Event, SessionConfig};
+use yendory_engine::learn::session::{teach, Event, Rejection, SessionConfig};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::Bicameral;
 
@@ -51,7 +51,7 @@ fn foundation_candidates_start_equal_and_records_are_complete() {
         assert!(e.candidates.iter().filter(|c| c.selected).count() <= 1);
         assert_eq!(e.selected.is_some(), e.candidates.iter().any(|c| c.selected));
         for c in &e.candidates {
-            assert_eq!(c.eligible, c.reasons.iter().all(|x| x == "no improvement over the accepted model"));
+            assert_eq!(c.eligible, c.rejections.iter().all(|x| *x == Rejection::NoImprovement));
             assert!(!c.selected || (c.eligible && c.reasons.is_empty()));
         }
         previous_step = e.accepted_step;

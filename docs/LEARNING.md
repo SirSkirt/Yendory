@@ -86,31 +86,47 @@ epoch in progress is discarded.
 | Early stopping | `patience` epochs without selection (default 2) |
 | Rehearsal of archived earlier lessons | ~10% of batch rows from the archive |
 | Autonomous probes: first character, 12-character prefix, self-conditioned likelihood (0.35 weight) | **not ported**: these were character-level measures of the v1 brain. The Engine scores full greedy replies and teacher-forced loss on word-unit tokens. |
-| Foundation V2 retries: gentler rate, then a changed strategy with 12 epochs, then both with 6 extra epochs | **ported** (`RetryPolicy`, `attempt_config`), plus the lesson moves to the end of the queue if still not learned (see Courses) |
+| Foundation V2 retries: gentler rate, then a changed strategy with 12 epochs, then both with 6 extra epochs | **replaced** by diagnosed retries: the remedy follows the cause (see Courses), and the rate is lowered only for unstable training; a lesson still not passed moves to the end of the queue |
 | "First five lessons" foundation counter | **not ported**; Studio lets the teacher switch Foundation on or off. |
 | Optional user benchmark (Test & Corrections) as a guard | **not ported** yet (Studio Exams, Phase 3) |
 | Synthetic-curriculum rehearsal in `train_lessons.py` | replaced by rehearsal of the owner's own archived lessons |
 
 ## Courses (`learn::course::teach_course`)
 
-**A lesson is never simply skipped.** When no candidate qualifies, the lesson is retried
-(`RetryPolicy`, on by default; Neural Nova's Foundation V2 plan):
+**Passed is not the same as improved.** Each lesson has a **pass mark** (default 50%): the share
+of its held-out questions the model must answer exactly right. Within an attempt, a checkpoint is
+accepted only if it answers more questions exactly right, or lowers the held-out loss by at least
+0.01 (`min_loss_improvement`; smaller changes are noise). Accepted improvements are always kept,
+but the lesson's outcome is:
 
-| Attempt | Learning rate | Study strategy | Epochs |
-|---|---|---|---|
-| Initial | chosen (e.g. 0.001) | standard: every unit, new random order each epoch | chosen |
-| Retry 1 | chosen × 0.5 (gentler) | standard | chosen |
-| Retry 2 | chosen (restored) | **focused**: question/answer units only, easiest first, new order | 12 |
-| Retry 3 | chosen × 0.25 (gentler again) | focused | chosen + 6 |
+- `passed`: the pass mark was reached (if the model already met it, no change is needed);
+- `progressed`: improvements were kept, but the pass mark was not reached;
+- `kept_previous`: nothing qualified; the model is unchanged.
 
-Rates below 0.00002 are allowed (floor 0.000001). Every attempt starts from the same accepted
-model and keeps all the session guards; each one is recorded (`AttemptRecord`).
+**A lesson that does not pass is diagnosed, not blindly retried.** After each attempt below the
+pass mark the trainer works out why, from the rejected candidates and from re-asking the
+lesson's own *training* questions, and the next attempt applies the remedy for that cause
+(up to 3 retries, `RetryPolicy`):
 
-If all attempts fail, the lesson **moves to the end of the queue** (outcome `deferred`) and the
-course continues: a later lesson may teach the skill this one needs. The deferred lesson is
-tried again, with all attempts, once the rest of the queue is done, but only if at least one
-other lesson was learned after it was deferred (otherwise the model is unchanged and the retry
-would repeat the same result). If it is still not learned, the outcome is `kept_previous`.
+| Diagnosis | How it is recognised | Next attempt |
+|---|---|---|
+| unstable | at least half the rejected candidates made held-out loss worse | half the learning rate (the only case that lowers it; floor 0.000001) |
+| forgetting | at least half were rejected for harming earlier lessons | more rehearsal of earlier lessons (25–40% of each batch) |
+| interference | at least half were rejected for losing answers of this lesson the model already gave | balanced practice: questions it gets wrong twice and every question it knows once, half the learning rate |
+| not learned yet | it answers fewer of its own training questions than the pass mark | practise exactly the training questions it gets wrong (twice; weak kinds three times) plus a quarter of the ones it knows, easiest first, 12 epochs |
+| memorised, not generalised | training questions right, held-out ones wrong | once: broader study (all units and explanations, new order, +6 epochs); a second time: stop retrying, other lessons are needed |
+
+A remedy that failed without any change is never run again unchanged: if the same diagnosis
+returns and the next attempt would be set up identically, retries stop and the lesson waits for
+other lessons. Every attempt keeps all the session guards and is recorded (`AttemptRecord`, with
+the diagnosis that led to it).
+
+Example (step 15,000, sample course, pass mark 95% to force retries): exact 3/19 → targeted
+practice ("not learned yet") 5/19 → balanced practice ("interference") 5/19 → gentler balanced
+practice 7/19. The lesson is reported as *progressed*, not passed. If the lesson still does not pass, it **moves to the end of the queue**
+(outcome `deferred`) and the course continues: a later lesson may teach the skill it needs. It
+is tried again once the rest of the queue is done, but only if the model changed in the meantime
+(otherwise the result would be the same); then its final outcome is recorded.
 
 A course is several lesson files taught in order (for example the files of a ZIP; reading the
 ZIP is the frontend's job, `sort_files` orders by name). For every file the Engine records a
@@ -119,8 +135,9 @@ ZIP is the frontend's job, `sort_files` orders by name). For every file the Engi
 - `sha256` of the exact text taught, and its size, so it is provable which content was taught
   (Nova issue B: "ZIP training repeated the pasted lesson");
 - training and held-out unit counts, `start_step` and `end_step`;
-- the attempts, and `pass` (2 when it is the retry after being moved to the end of the queue);
-- the outcome: `learned`, `deferred`, `kept_previous` (not learned after every try), `duplicate` (same content
+- the pass mark, the attempts (each with its diagnosis), and `pass` (2 when it is the retry after
+  being moved to the end of the queue);
+- the outcome: `passed`, `progressed`, `deferred`, `kept_previous`, `duplicate` (same content
   as an earlier file; not taught again), `failed` (with the reason, e.g. no held-out units or
   non-ASCII text; the course continues), or `stopped`;
 - the baseline and final scores.

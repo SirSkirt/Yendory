@@ -305,7 +305,8 @@ struct LessonPreview {
 
 fn preview(file: &CourseFile, taught: &[TaughtFile]) -> LessonPreview {
     let sha256 = sha256_hex(file.text.as_bytes());
-    let already_taught = taught.iter().any(|t| t.sha256 == sha256 && t.outcome == FileOutcome::Learned);
+    // Only a pass counts: older "learned" records meant "a change was accepted", not mastery.
+    let already_taught = taught.iter().any(|t| t.sha256 == sha256 && t.outcome == FileOutcome::Passed);
     let mut p = LessonPreview {
         name: file.name.clone(),
         sha256,
@@ -434,6 +435,9 @@ struct TeachOptions {
     foundation: bool,
     rehearsal: bool,
     protect_answers: bool,
+    /// Pass mark in percent of held-out questions answered exactly right.
+    #[serde(default = "default_pass_percent")]
+    pass_percent: f32,
     #[serde(default = "yes")]
     retries: bool,
     #[serde(default = "yes")]
@@ -441,6 +445,9 @@ struct TeachOptions {
 }
 fn yes() -> bool {
     true
+}
+fn default_pass_percent() -> f32 {
+    50.
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -477,6 +484,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         foundation: options.foundation,
         rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
         protect_correct_answers: options.protect_answers,
+        pass_mark: (options.pass_percent / 100.).clamp(0., 1.),
         retry: RetryPolicy {
             retries: if options.retries { 3 } else { 0 },
             requeue: options.requeue,

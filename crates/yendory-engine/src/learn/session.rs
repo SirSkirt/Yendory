@@ -45,9 +45,23 @@ pub struct SessionConfig {
     /// How training units are scheduled into batches.
     #[serde(default)]
     pub strategy: Strategy,
-    /// What a course does when a lesson is not learned (retries, then later in the queue).
+    /// What a course does when a lesson is not passed (diagnosed retries, then later in the queue).
     #[serde(default)]
     pub retry: RetryPolicy,
+    /// A lesson PASSES when this share of its held-out questions is answered exactly right.
+    /// Below it, accepted improvements count as progress, not as mastery.
+    #[serde(default = "default_pass_mark")]
+    pub pass_mark: f32,
+    /// A candidate that answers no more questions correctly must lower the held-out loss by at
+    /// least this much to be accepted: smaller changes are noise, not learning.
+    #[serde(default = "default_min_loss_improvement")]
+    pub min_loss_improvement: f32,
+}
+fn default_pass_mark() -> f32 {
+    0.5
+}
+fn default_min_loss_improvement() -> f32 {
+    0.01
 }
 
 /// How a lesson's training units are scheduled.
@@ -62,23 +76,14 @@ pub enum Strategy {
     Focused,
 }
 
-/// Neural Nova's Foundation V2 retry plan, applied by `teach_course` when a lesson is not learned:
-///
-/// | attempt | learning rate | strategy | epochs |
-/// |---|---|---|---|
-/// | initial | chosen rate | standard | chosen |
-/// | retry 1 | rate x 0.5 (gentler) | standard | chosen |
-/// | retry 2 | chosen rate | focused, new order | 12 |
-/// | retry 3 | rate x 0.25 (gentler again) | focused | chosen + 6 |
-///
-/// After the retries, the lesson moves to the end of the queue; it is tried again (all attempts)
-/// once at least one other lesson has been learned since, because a different lesson may teach
-/// the skill it needs.
+/// What a course does when a lesson is not passed. Each retry is chosen from a diagnosis of the
+/// previous attempt (see `course::diagnose`); the learning rate is lowered only when training
+/// was diagnosed as unstable. After the retries, the lesson moves to the end of the queue.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     /// Retries after the initial attempt (0 to 3).
     pub retries: u32,
-    /// Move a lesson that is still not learned to the end of the queue.
+    /// Move a lesson that is still not passed to the end of the queue.
     pub requeue: bool,
     /// Lowest learning rate a retry may use.
     pub min_learning_rate: f32,
@@ -86,24 +91,6 @@ pub struct RetryPolicy {
 impl Default for RetryPolicy {
     fn default() -> Self {
         RetryPolicy { retries: 3, requeue: true, min_learning_rate: 1e-6 }
-    }
-}
-
-/// The settings of attempt `attempt` (0 = initial) under the retry plan.
-pub fn attempt_config(base: &SessionConfig, attempt: u32) -> SessionConfig {
-    let floor = base.retry.min_learning_rate;
-    let (rate, strategy, epochs) = match attempt {
-        0 => (base.learning_rate, base.strategy, base.epochs),
-        1 => (base.learning_rate * 0.5, base.strategy, base.epochs),
-        2 => (base.learning_rate, Strategy::Focused, 12),
-        _ => (base.learning_rate * 0.25, Strategy::Focused, base.epochs + 6),
-    };
-    SessionConfig {
-        learning_rate: rate.max(floor).min(base.learning_rate),
-        strategy,
-        epochs,
-        seed: base.seed.wrapping_add(attempt as u64 * 7919),
-        ..base.clone()
     }
 }
 
@@ -126,6 +113,8 @@ impl Default for SessionConfig {
             seed: 1,
             strategy: Strategy::Standard,
             retry: RetryPolicy::default(),
+            pass_mark: default_pass_mark(),
+            min_loss_improvement: default_min_loss_improvement(),
         }
     }
 }
@@ -155,6 +144,35 @@ pub struct Score {
     /// Earlier-lesson panel answers produced correctly.
     pub panel_correct: usize,
     pub panel_total: usize,
+    /// Exact matches per kind of question: (correct, total).
+    #[serde(default)]
+    pub by_kind: std::collections::BTreeMap<String, (usize, usize)>,
+}
+impl Score {
+    /// Share of held-out questions answered exactly right.
+    pub fn exact_rate(&self) -> f32 {
+        if self.exact_total == 0 {
+            0.
+        } else {
+            self.exact_correct as f32 / self.exact_total as f32
+        }
+    }
+}
+
+/// Why a candidate was not accepted (the readable text is in `CandidateRecord::reasons`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rejection {
+    /// Held-out loss not finite or rose beyond the tolerance: training was unstable.
+    HeldoutLossRose,
+    /// Earlier lessons' held-out loss rose beyond the tolerance.
+    EarlierLessonsLoss,
+    /// An earlier-lesson answer the baseline produced was lost.
+    EarlierAnswersLost,
+    /// A held-out answer of this lesson that the accepted model produced was lost.
+    AnswersLost,
+    /// Eligible, but not better than the accepted model by a meaningful amount.
+    NoImprovement,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,6 +184,8 @@ pub struct CandidateRecord {
     pub eligible: bool,
     /// Why the candidate was not eligible, or did not improve.
     pub reasons: Vec<String>,
+    #[serde(default)]
+    pub rejections: Vec<Rejection>,
     pub selected: bool,
     pub step: u64,
 }
@@ -256,6 +276,7 @@ fn score(model: &Bicameral, p: &Probes) -> Result<(Score, Report, Report), Strin
             retention_loss,
             panel_correct: panel.overall().correct,
             panel_total: panel.overall().total,
+            by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
         },
         report,
         panel,
@@ -293,10 +314,26 @@ pub fn teach(
     observer: &mut dyn FnMut(&Event),
     stop: &AtomicBool,
 ) -> Result<SessionResult, String> {
+    teach_with(model, lesson, None, archive, cfg, observer, stop)
+}
+
+/// Like [`teach`], but trains on `practice` (a chosen selection of the lesson's training units,
+/// repeats allowed) instead of all of them. Held-out probes and vocabulary still come from the
+/// whole lesson, so scores stay comparable between attempts.
+pub fn teach_with(
+    model: &Bicameral,
+    lesson: &[Item],
+    practice: Option<&[Item]>,
+    archive: &[Item],
+    cfg: &SessionConfig,
+    observer: &mut dyn FnMut(&Event),
+    stop: &AtomicBool,
+) -> Result<SessionResult, String> {
     if cfg.epochs == 0 || cfg.batch_size == 0 || !(cfg.learning_rate > 0. && cfg.learning_rate.is_finite()) {
         return Err("Choose at least one epoch, a batch size and a positive learning rate".into());
     }
-    let train: Vec<&Item> = lesson
+    let train: Vec<&Item> = practice
+        .unwrap_or(lesson)
         .iter()
         .filter(|it| !it.held_out && (cfg.strategy == Strategy::Standard || it.kind != Kind::Prose))
         .collect();
@@ -435,7 +472,14 @@ pub fn teach(
             }
             let (s, report, panel) = score(&cand, &probes)?;
             let mut reasons = Vec::new();
+            let mut rejections = Vec::new();
             let tol = cfg.heldout_loss_tolerance;
+            if !s.heldout_loss.is_finite()
+                || s.heldout_loss > baseline.heldout_loss + tol
+                || s.heldout_loss > accepted_score.heldout_loss + tol
+            {
+                rejections.push(Rejection::HeldoutLossRose);
+            }
             if !s.heldout_loss.is_finite() {
                 reasons.push("held-out loss is not finite".to_string());
             }
@@ -453,6 +497,7 @@ pub fn teach(
             }
             if let (Some(now), Some(before)) = (s.retention_loss, baseline.retention_loss) {
                 if now > before + cfg.retention_loss_tolerance {
+                    rejections.push(Rejection::EarlierLessonsLoss);
                     reasons.push(format!(
                         "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {}",
                         cfg.retention_loss_tolerance
@@ -462,21 +507,27 @@ pub fn teach(
             let lost_panel =
                 base_panel_correct.iter().zip(correct_set(&panel)).filter(|(b, n)| **b && !*n).count();
             if lost_panel > 0 {
+                rejections.push(Rejection::EarlierAnswersLost);
                 reasons.push(format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced"));
             }
             let now_correct = correct_set(&report);
             if cfg.protect_correct_answers {
                 let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
                 if lost > 0 {
+                    rejections.push(Rejection::AnswersLost);
                     reasons.push(format!("lost {lost} held-out answer(s) the accepted model produced"));
                 }
             }
             let eligible = reasons.is_empty();
             let improves = s.exact_correct > accepted_score.exact_correct
                 || (s.exact_correct == accepted_score.exact_correct
-                    && s.heldout_loss < accepted_score.heldout_loss);
+                    && s.heldout_loss < accepted_score.heldout_loss - cfg.min_loss_improvement);
             if eligible && !improves {
-                reasons.push("no improvement over the accepted model".into());
+                rejections.push(Rejection::NoImprovement);
+                reasons.push(format!(
+                    "no meaningful improvement (same or fewer exact answers, held-out loss not {} lower)",
+                    cfg.min_loss_improvement
+                ));
             }
             let better_than_best = best.as_ref().map_or(true, |(_, _, b, _, _)| {
                 s.exact_correct > b.exact_correct
@@ -489,6 +540,7 @@ pub fn teach(
                 score: s.clone(),
                 eligible,
                 reasons,
+                rejections,
                 selected: false,
                 step: cand.step,
             };

@@ -63,7 +63,11 @@ function showActive(meta) {
   $("activeRight").textContent = fmt(meta.groups[1]);
   $("activeInter").textContent = fmt(meta.groups[2]);
   $("activeTotal").textContent = fmt(meta.parameters);
-  $("activeLessons").textContent = fmt(meta.taught.filter(t => t.outcome === "learned").length);
+  const latest = new Map(meta.taught.map(t => [t.sha256, t.outcome]));
+  const outcomes = [...latest.values()];
+  const older = outcomes.filter(o => o === "learned").length;
+  $("activeLessons").textContent = `${fmt(outcomes.filter(o => o === "passed").length)} passed · ${fmt(outcomes.filter(o => o === "progressed").length)} progressed` +
+    (older ? ` · ${fmt(older)} taught before pass marks` : "");
   $("activeOrigin").textContent = meta.origin === "new" ? "created in Studio" : meta.origin || "—";
 }
 
@@ -137,7 +141,7 @@ function lessonStatus(l, i) {
   if (fileState[i]) return fileState[i];
   if (l.error) return el("span", { class: "bad" }, l.error);
   if (!l.heldOut) return el("span", { class: "warn" }, "no held-out units: cannot be judged");
-  if (l.alreadyTaught) return el("span", { class: "warn" }, "already learned by this model");
+  if (l.alreadyTaught) return el("span", { class: "warn" }, "already passed by this model");
   return el("span", { class: "ok" }, "ready");
 }
 function renderLessons() {
@@ -188,6 +192,7 @@ $("teach").addEventListener("click", safe(async () => {
     foundation: $("optFoundation").checked,
     rehearsal: $("optRehearsal").checked,
     protectAnswers: $("optProtect").checked,
+    passPercent: Number($("optPass").value),
     retries: $("optRetries").checked,
     requeue: $("optRequeue").checked,
   };
@@ -217,9 +222,14 @@ function onTeachEvent(e) {
     $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("b", {}, `Lesson ${e.index + 1}: ${e.name}`))));
   } else if (e.type === "attempt_started") {
     progress.epochs = e.epochs;
-    const what = e.attempt === 0 ? "first attempt" : `retry ${e.attempt} of ${e.attempts - 1}`;
+    const what = e.attempt === 0 ? "first attempt" : `retry ${e.attempt} of ${e.attempts - 1}${e.remedy ? ": " + e.remedy : ""}`;
     progress.attempt = `${what} · rate ${e.learning_rate.toExponential(1)} · ${e.strategy} study · ${e.epochs} epochs`;
     $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note" }, progress.attempt)));
+  } else if (e.type === "diagnosed") {
+    const d = e.diagnosis;
+    const cause = { unstable: "unstable training", forgetting: "harming earlier lessons", interference: "new learning overwrites known answers", not_learned: "not learned yet", not_generalising: "memorised, not generalised" }[d.cause] || d.cause;
+    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("span", { class: "warn" },
+      `Not passed (held-out ${(100 * d.heldout_rate).toFixed(0)}%, training questions ${(100 * d.train_rate).toFixed(0)}%) → diagnosis: ${cause}. Next: ${d.remedy}`))));
   } else if (e.type === "session") {
     const s = e.event;
     if (s.type === "started") {
@@ -251,8 +261,8 @@ function onTeachEvent(e) {
       log("INFO", `Epoch ${s.epoch}: ${s.selected ? "selected " + s.selected : "no candidate selected"}`);
     }
   } else if (e.type === "file_finished") {
-    const cls = { learned: "ok", deferred: "warn", kept_previous: "warn", duplicate: "warn", failed: "bad", stopped: "warn" }[e.outcome] || "";
-    const label = { learned: "learned", deferred: "moved to the end of the queue", kept_previous: "not learned; previous model kept", duplicate: "duplicate", failed: "not taught", stopped: "stopped" }[e.outcome] || e.outcome;
+    const cls = { passed: "ok", learned: "ok", progressed: "warn", deferred: "warn", kept_previous: "bad", duplicate: "warn", failed: "bad", stopped: "warn" }[e.outcome] || "";
+    const label = { passed: "passed", learned: "learned", progressed: "progressed, not passed", deferred: "not passed yet: moved to the end of the queue", kept_previous: "not learned; previous model kept", duplicate: "duplicate", failed: "not taught", stopped: "stopped" }[e.outcome] || e.outcome;
     if (e.outcome !== "deferred") progress.done += 1;
     fileState[e.index] = el("span", { class: cls }, label);
     renderLessons();
@@ -260,7 +270,7 @@ function onTeachEvent(e) {
     body.append(el("tr", {},
       el("td", {}, e.name),
       el("td", {}, el("span", { class: cls }, label),
-        e.attempts?.length ? el("div", { class: "note" }, `${e.attempts.length} attempt(s)${e.pass > 1 ? ", second pass" : ""}: ` + e.attempts.map(a => `${a.learned ? "✓" : "✗"} ${a.strategy} ${a.learning_rate.toExponential(1)} × ${a.epochs_run} ep`).join(" · ")) : "",
+        e.attempts?.length ? el("div", { class: "note" }, `Pass mark ${Math.round(100 * (e.pass_mark ?? 0))}% · ${e.attempts.length} attempt(s)${e.pass > 1 ? ", second pass" : ""}: ` + e.attempts.map(a => `${a.passed ? "passed" : a.learned ? "improved" : "no change"}${a.because ? " after " + a.because.cause.replace("_", " ") : ""} (${(100 * a.final_score.exact_correct / Math.max(1, a.final_score.exact_total)).toFixed(0)}%)`).join(" → ")) : "",
         e.error ? el("div", { class: "note" }, e.error) : ""),
       el("td", { class: "num" }, `${fmt(e.start_step)} → ${fmt(e.end_step)}`),
       el("td", { class: "num" }, `${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}`),
@@ -271,9 +281,10 @@ function onTeachFinished(f) {
   setTeaching(false);
   if (f.model) showActive(f.model);
   $("progressBar").style.width = "100%";
-  const learned = f.files.filter(x => x.outcome === "learned").length;
+  const passed = f.files.filter(x => x.outcome === "passed").length;
+  const progressed = f.files.filter(x => x.outcome === "progressed").length;
   const text = f.error ? `Teaching ended with an error: ${f.error}`
-    : `${f.stopped ? "Stopped" : "Finished"}: ${learned} of ${f.files.length} lesson file(s) learned. Progress is saved after every learned file.`;
+    : `${f.stopped ? "Stopped" : "Finished"}: ${passed} of ${f.files.length} lesson file(s) passed, ${progressed} progressed without passing. Every accepted improvement is saved.`;
   $("progressTitle").textContent = text;
   if (f.error) log("ERROR", f.error); else say(text);
   refreshModels();
