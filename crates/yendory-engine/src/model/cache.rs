@@ -30,6 +30,37 @@ pub struct KvCache {
     model_signature: u64,
     abl: Ablation,
     stats: CacheStats,
+    trace: Option<Trace>,
+}
+
+/// Attention weights of one transformer block execution for the newest token.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StageTrace {
+    pub block: usize,
+    /// 0 for the lower stage; 1.. for each thinking round of the upper stage.
+    pub round: usize,
+    /// `[head][position]`: how much the newest token attends to each token in the window.
+    pub attention: Vec<Vec<f32>>,
+}
+/// One right->left injection: `h + gate * A z`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GateTrace {
+    /// Sigmoid gate per left-state dimension (0 closed, 1 open).
+    pub gate: Vec<f32>,
+    /// Length of the injected vector and of the left state it was added to.
+    pub injection_norm: f32,
+    pub state_norm: f32,
+}
+/// Internal activity of the newest token's forward pass, measured, never estimated.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Trace {
+    pub stages: Vec<StageTrace>,
+    /// Right hemisphere bottom layer (SiLU outputs, r1 values).
+    pub right_trunk: Vec<f32>,
+    /// Right hemisphere upper layer for each thinking round (r2 values).
+    pub right_upper: Vec<Vec<f32>>,
+    /// Afferent injections in order: exchange 1, then one per thinking round.
+    pub gates: Vec<GateTrace>,
 }
 impl KvCache {
     pub fn new(model: &Bicameral, abl: Ablation) -> Self {
@@ -46,7 +77,16 @@ impl KvCache {
             model_signature: signature(model),
             abl,
             stats: CacheStats::default(),
+            trace: None,
         }
+    }
+    /// A cache that also records a [`Trace`] of every token's forward pass (the latest one is
+    /// kept). Tracing does not change any computed value.
+    pub fn with_trace(model: &Bicameral, abl: Ablation) -> Self {
+        Self { trace: Some(Trace::default()), ..Self::new(model, abl) }
+    }
+    pub fn trace(&self) -> Option<&Trace> {
+        self.trace.as_ref()
     }
     pub fn stats(&self) -> CacheStats {
         self.stats
@@ -55,7 +95,11 @@ impl KvCache {
         self.appended
     }
     pub fn reset(&mut self, model: &Bicameral) {
+        let tracing = self.trace.is_some();
         *self = Self::new(model, self.abl);
+        if tracing {
+            self.trace = Some(Trace::default());
+        }
     }
     pub fn prefill(&mut self, model: &Bicameral, ids: &[u16]) -> Result<Vec<f32>, String> {
         let mut last = Vec::new();
@@ -108,19 +152,25 @@ impl KvCache {
             self.chars.drain(..self.chars.len() - c.window_chars);
         }
         let f = right_features(&self.chars, c.window_chars);
+        let tracing = self.trace.is_some();
+        let mut trace = Trace::default();
         let mut h = model.val("embed")[id * c.d..(id + 1) * c.d].to_vec();
         let mut stage = 0;
         for i in 0..c.split {
+            let mut heads = Vec::new();
             h = block(
                 model,
                 &mut self.stages[stage],
                 &h,
                 i,
                 self.sequence,
-                self.abl,
+                tracing.then_some(&mut heads),
                 &mut self.stats,
                 c.max_tokens,
             );
+            if tracing {
+                trace.stages.push(StageTrace { block: i, round: 0, attention: heads });
+            }
             stage += 1;
         }
         // Bias before SiLU, matching the reference's r.w1 + r.b1.
@@ -132,25 +182,35 @@ impl KvCache {
         if self.abl.no_right {
             z1.fill(0.);
         }
+        trace.right_trunk = z1.clone();
         if !self.abl.no_afferent {
-            h = inject(model, &h, &z1, "c.n1", "c.g1w", "c.g1b", "c.a1");
+            let gate;
+            (h, gate) = inject(model, &h, &z1, "c.n1", "c.g1w", "c.g1b", "c.a1");
+            trace.gates.push(gate);
         }
         let mut z2 = efferent(model, &z1, &h, self.abl);
         for round in 0..c.loops {
+            trace.right_upper.push(z2.clone());
             if !self.abl.no_afferent {
-                h = inject(model, &h, &z2, "c.n2", "c.g2w", "c.g2b", "c.a2");
+                let gate;
+                (h, gate) = inject(model, &h, &z2, "c.n2", "c.g2w", "c.g2b", "c.a2");
+                trace.gates.push(gate);
             }
             for i in c.split..c.blocks {
+                let mut heads = Vec::new();
                 h = block(
                     model,
                     &mut self.stages[stage],
                     &h,
                     i,
                     self.sequence,
-                    self.abl,
+                    tracing.then_some(&mut heads),
                     &mut self.stats,
                     c.max_tokens,
                 );
+                if tracing {
+                    trace.stages.push(StageTrace { block: i, round: round + 1, attention: heads });
+                }
                 stage += 1;
             }
             if round + 1 < c.loops {
@@ -166,6 +226,9 @@ impl KvCache {
         self.tokens.push(token);
         self.sequence += 1;
         self.stats.cached_tokens = self.tokens.len();
+        if tracing {
+            self.trace = Some(trace);
+        }
         logits
     }
 }
@@ -220,14 +283,17 @@ fn inject(
     gate_w: &str,
     gate_b: &str,
     a: &str,
-) -> Vec<f32> {
+) -> (Vec<f32>, GateTrace) {
     let d = model.config.d;
     let hn = norm(h, model.val(ln));
     let gate = mat(model.val(gate_w), d, d, &hn);
     let gate = gate.iter().zip(model.val(gate_b)).map(|(x, b)| x + b).collect::<Vec<f32>>();
     let gate = sigmoid(&gate);
     let injected = mat(model.val(a), d, z.len(), z);
-    h.iter().zip(gate.iter().zip(&injected)).map(|(h, (g, x))| h + g * x).collect()
+    let delta: Vec<f32> = gate.iter().zip(&injected).map(|(g, x)| g * x).collect();
+    let l2 = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let measured = GateTrace { injection_norm: l2(&delta), state_norm: l2(h), gate };
+    (h.iter().zip(&delta).map(|(h, x)| h + x).collect(), measured)
 }
 fn efferent(model: &Bicameral, z1: &[f32], h: &[f32], abl: Ablation) -> Vec<f32> {
     let c = &model.config;
@@ -274,7 +340,7 @@ fn block(
     h: &[f32],
     i: usize,
     pos: usize,
-    _abl: Ablation,
+    mut attention: Option<&mut Vec<Vec<f32>>>,
     stats: &mut CacheStats,
     max_context: usize,
 ) -> Vec<f32> {
@@ -334,6 +400,9 @@ fn block(
             for j in 0..hd {
                 att[head * hd + j] += weight * stage.values[t * d + head * hd + j];
             }
+        }
+        if let Some(out) = attention.as_deref_mut() {
+            out.push(scores.iter().map(|s| s / total).collect());
         }
     }
     stats.attention_keys_read += n * c.heads;

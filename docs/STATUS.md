@@ -1,6 +1,6 @@
 # Engine status
 
-Phase 1 (one shared Rust Engine with compatibility tests) is done; Phase 2 (learning in the Engine) is under way. This page says what
+Phase 1 (one shared Rust Engine with compatibility tests) is done; Phase 2 (learning in the Engine) is done for the scope in docs/LEARNING.md. This page says what
 has been checked, how, and what has not.
 
 ## Verified (by `cargo test --release` and `reference/selftest.py`)
@@ -20,6 +20,8 @@ has been checked, how, and what has not.
 | **Owner's 27 lessons**: parsing and split (6,015 units, 666 held out); vocabulary growth from step 15,000 | identical; reproduces the step-19,000 word list exactly (local only) |
 | **Step 19,000 held-out re-score**, all 666 units | dialogue 155/324, understanding 30/54, reasoning 166/264, conversation turns 65/72, prefers supported 77.3%, overall 58.3%: equal to the published report (local only; 24 s in Rust) |
 | Teaching session: four whole-model candidates per epoch from the same accepted model, deterministic for a seed, rollback leaves the model bit-identical, stop discards the epoch in progress | pass |
+| Courses: per-file SHA-256, steps, outcomes; duplicates not re-taught; a failing file does not end the course | pass |
+| Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 
 ## Not verified
@@ -31,7 +33,7 @@ has been checked, how, and what has not.
 - A full teaching session on the owner's lessons has not been run end to end (only the
   synthetic course in tests). Whether Foundation candidates beat Joint-only training on real
   lessons is an experiment still to run, not a verified claim.
-- Pathway measurements for the visualizer and ZIP course records — not built yet (Phase 2.4/2.5).
+- ZIP reading itself is Studio's job (Phase 3); the Engine receives the files.
 
 ## Findings while porting
 

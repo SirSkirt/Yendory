@@ -89,3 +89,38 @@ epoch in progress is discarded.
 | "First five lessons" foundation counter, adaptive learning rate per attempt (halved rate / extra epochs on retry) | **not ported** yet; Studio can decide when to switch Foundation on or off. The learning rate follows warmup + cosine decay within a session. |
 | Optional user benchmark (Test & Corrections) as a guard | **not ported** yet (Studio Exams, Phase 3) |
 | Synthetic-curriculum rehearsal in `train_lessons.py` | replaced by rehearsal of the owner's own archived lessons |
+
+## Courses (`learn::course::teach_course`)
+
+A course is several lesson files taught in order (for example the files of a ZIP; reading the
+ZIP is the frontend's job, `sort_files` orders by name). For every file the Engine records a
+`FileRecord`:
+
+- `sha256` of the exact text taught, and its size, so it is provable which content was taught
+  (Nova issue B: "ZIP training repeated the pasted lesson");
+- training and held-out unit counts, `start_step` and `end_step`;
+- the outcome: `learned`, `kept_previous` (no candidate qualified), `duplicate` (same content
+  as an earlier file; not taught again), `failed` (with the reason, e.g. no held-out units or
+  non-ASCII text; the course continues), or `stopped`;
+- the baseline and final scores.
+
+Learned files join the archive, so later files rehearse them and are guarded against forgetting them.
+
+## Measurements (`Bicameral::measure`)
+
+For the brain visualizer and diagnostics, measured from a real forward pass of the last prompt
+token (the KV cache records it when created with `KvCache::with_trace`; tracing does not change
+any value):
+
+- attention weights of every block execution (lower stage, and each thinking round of the upper
+  stage), per head, over the context window;
+- every right→left injection: the gate opening per dimension, the size of the injected vector
+  and of the left state it joins;
+- right-hemisphere activations (bottom layer and upper layer per round);
+- the five most likely next tokens;
+- ablation effects as total-variation distance of the next-token distribution: right→left cut
+  (silencing the right hemisphere is the same operation for the output) and left→right cut.
+
+Example on step 15,000, "Where is the key?": gates 0.42 / 0.18 / 0.18, right→left cut 0.996,
+left→right cut 0.000 — matching the earlier finding that the efferent path has no measurable
+effect in that model.

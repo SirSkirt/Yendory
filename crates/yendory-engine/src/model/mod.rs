@@ -5,9 +5,11 @@ mod cache;
 mod checkpoint;
 #[cfg(test)]
 mod golden;
+mod measure;
 mod tape;
 use crate::tokenizer::Tokenizer;
-pub use cache::{CacheStats, KvCache};
+pub use cache::{CacheStats, GateTrace, KvCache, StageTrace, Trace};
+pub use measure::{AblationEffects, Measurements};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
