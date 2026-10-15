@@ -1,0 +1,515 @@
+[Dialogue Lesson]
+A greeting opens a conversation. A reply should answer what was asked.
+Polite words like please and thank you show respect.
+[examples]
+hello  Hello!
+Hello  Hello!
+hello!  Hello!
+hello there  Hello!
+Hello?  Hello!
+hi  Hi!
+Hi  Hi!
+hi!  Hi!
+hi there  Hi!
+Hi?  Hi!
+good morning  Good morning!
+Good morning  Good morning!
+good morning!  Good morning!
+good morning there  Good morning!
+Good morning?  Good morning!
+good night  Good night!
+Good night  Good night!
+good night!  Good night!
+good night there  Good night!
+Good night?  Good night!
+thank you  You are welcome.
+Thank you  You are welcome.
+thank you!  You are welcome.
+thank you there  You are welcome.
+Thank you?  You are welcome.
+how are you  I am well, thank you.
+How are you  I am well, thank you.
+how are you!  I am well, thank you.
+how are you there  I am well, thank you.
+How are you?  I am well, thank you.
+bye  Goodbye!
+Bye  Goodbye!
+bye!  Goodbye!
+bye there  Goodbye!
+Bye?  Goodbye!
+this line has no double space and is ignored
+   spaced question   Spaced answer.   
+[/examples]
+[/Dialogue Lesson]
+
+[Understanding Lesson]
+A color describes how a thing looks. A place tells where a thing is.
+[examples]
+Fay has a yellow book. What color is the book?  Yellow.
+Kai has a red key. What color is the key?  Red.
+Ivo has a green cup. What color is the cup?  Green.
+Jun has a white key. What color is the key?  White.
+Dov has a red key. What color is the key?  Red.
+Gus has a red coin. What color is the coin?  Red.
+Dov has a white cup. What color is the cup?  White.
+Gus has a white key. What color is the key?  White.
+Ben has a black lamp. What color is the lamp?  Black.
+Kai has a white key. What color is the key?  White.
+Jun has a red coin. What color is the coin?  Red.
+Dov has a white key. What color is the key?  White.
+Cleo has a yellow ball. What color is the ball?  Yellow.
+Cleo has a white cup. What color is the cup?  White.
+Eli has a red book. What color is the book?  Red.
+Jun has a green lamp. What color is the lamp?  Green.
+Ben has a white cup. What color is the cup?  White.
+Ada has a yellow lamp. What color is the lamp?  Yellow.
+Kai has a green coin. What color is the coin?  Green.
+Hana has a green hat. What color is the hat?  Green.
+Eli has a blue lamp. What color is the lamp?  Blue.
+Lia has a red lamp. What color is the lamp?  Red.
+Jun has a white ball. What color is the ball?  White.
+Hana has a black map. What color is the map?  Black.
+Hana has a white ball. What color is the ball?  White.
+Ben has a white cup. What color is the cup?  White.
+Gus has a green book. What color is the book?  Green.
+Cleo has a yellow hat. What color is the hat?  Yellow.
+Ada has a white cup. What color is the cup?  White.
+Jun has a green map. What color is the map?  Green.
+Lia has a white map. What color is the map?  White.
+Hana has a red hat. What color is the hat?  Red.
+Ben has a yellow ball. What color is the ball?  Yellow.
+Lia has a red cup. What color is the cup?  Red.
+Lia has a black ball. What color is the ball?  Black.
+Jun has a green hat. What color is the hat?  Green.
+Lia has a black coin. What color is the coin?  Black.
+Fay has a yellow key. What color is the key?  Yellow.
+Fay has a white book. What color is the book?  White.
+Ben has a red hat. What color is the hat?  Red.
+[/examples]
+[/Understanding Lesson]
+
+[Reasoning Lesson]
+Use the facts you are given. Prefer the answer the facts support.
+[examples]
+Premise: The book is in the car. Dov looks in the bag.   Question: Is the book in the bag?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The hat is in the box. Gus looks in the bag.   Question: Is the hat in the bag?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The ball is in the bag. Hana looks in the kitchen.   Question: Is the ball in the kitchen?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The coin is in the drawer. Ivo looks in the kitchen.   Question: Is the coin in the kitchen?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The cup is in the bag. Dov looks in the car.   Question: Is the cup in the car?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The lamp is in the box. Dov looks in the kitchen.   Question: Is the lamp in the kitchen?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The ball is in the drawer. Jun looks in the box.   Question: Is the ball in the box?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The map is in the garden. Cleo looks in the car.   Question: Is the map in the car?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The key is in the kitchen. Fay looks in the garden.   Question: Is the key in the garden?  Supported:  No, it is in the kitchen.  Contradicted: Yes.
+Premise: The coin is in the kitchen. Gus looks in the box.   Question: Is the coin in the box?  Supported:  No, it is in the kitchen.  Contradicted: Yes.
+Premise: The coin is in the box. Hana looks in the bag.   Question: Is the coin in the bag?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The hat is in the bag. Ben looks in the box.   Question: Is the hat in the box?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The key is in the box. Fay looks in the car.   Question: Is the key in the car?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The cup is in the drawer. Jun looks in the garden.   Question: Is the cup in the garden?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The lamp is in the garden. Ada looks in the kitchen.   Question: Is the lamp in the kitchen?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The ball is in the drawer. Cleo looks in the garden.   Question: Is the ball in the garden?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The cup is in the box. Fay looks in the kitchen.   Question: Is the cup in the kitchen?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The hat is in the drawer. Hana looks in the box.   Question: Is the hat in the box?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The map is in the car. Cleo looks in the drawer.   Question: Is the map in the drawer?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The key is in the bag. Hana looks in the garden.   Question: Is the key in the garden?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The key is in the garden. Fay looks in the drawer.   Question: Is the key in the drawer?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The ball is in the garden. Kai looks in the drawer.   Question: Is the ball in the drawer?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The lamp is in the garden. Cleo looks in the car.   Question: Is the lamp in the car?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The lamp is in the garden. Ivo looks in the bag.   Question: Is the lamp in the bag?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The lamp is in the bag. Dov looks in the garden.   Question: Is the lamp in the garden?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The key is in the box. Hana looks in the drawer.   Question: Is the key in the drawer?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The lamp is in the car. Hana looks in the garden.   Question: Is the lamp in the garden?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The map is in the drawer. Fay looks in the box.   Question: Is the map in the box?  Supported:  No, it is in the drawer.  Contradicted: Yes.
+Premise: The lamp is in the kitchen. Dov looks in the bag.   Question: Is the lamp in the bag?  Supported:  No, it is in the kitchen.  Contradicted: Yes.
+Premise: The hat is in the garden. Fay looks in the car.   Question: Is the hat in the car?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The map is in the car. Ada looks in the box.   Question: Is the map in the box?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The coin is in the car. Kai looks in the bag.   Question: Is the coin in the bag?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The coin is in the car. Hana looks in the drawer.   Question: Is the coin in the drawer?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The hat is in the kitchen. Ben looks in the box.   Question: Is the hat in the box?  Supported:  No, it is in the kitchen.  Contradicted: Yes.
+Premise: The book is in the bag. Lia looks in the box.   Question: Is the book in the box?  Supported:  No, it is in the bag.  Contradicted: Yes.
+Premise: The hat is in the car. Cleo looks in the bag.   Question: Is the hat in the bag?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The hat is in the car. Jun looks in the drawer.   Question: Is the hat in the drawer?  Supported:  No, it is in the car.  Contradicted: Yes.
+Premise: The book is in the box. Cleo looks in the car.   Question: Is the book in the car?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise: The cup is in the garden. Lia looks in the bag.   Question: Is the cup in the bag?  Supported:  No, it is in the garden.  Contradicted: Yes.
+Premise: The lamp is in the box. Gus looks in the drawer.   Question: Is the lamp in the drawer?  Supported:  No, it is in the box.  Contradicted: Yes.
+Premise without the other fields is skipped.
+[/examples]
+[/Reasoning Lesson]
+
+[Multi-Turn Conversation Lesson]
+Remember what was said earlier in the conversation.
+[examples]
+[session]
+User: My name is Dov.
+Nova: Nice to meet you, Dov.
+User: I have a ball.
+Nova: A ball is useful.
+User: What is my name?
+Nova: Your name is Dov.
+[/session]
+[session]
+User: My name is Ivo.
+Nova: Nice to meet you, Ivo.
+User: I have a lamp.
+Nova: A lamp is useful.
+User: What is my name?
+Nova: Your name is Ivo.
+[/session]
+[session]
+User: My name is Jun.
+Nova: Nice to meet you, Jun.
+User: I have a map.
+Nova: A map is useful.
+User: What is my name?
+Nova: Your name is Jun.
+[/session]
+[session]
+User: My name is Eli.
+Nova: Nice to meet you, Eli.
+User: I have a coin.
+Nova: A coin is useful.
+User: What is my name?
+Nova: Your name is Eli.
+[/session]
+[session]
+User: My name is Cleo.
+Nova: Nice to meet you, Cleo.
+User: I have a key.
+Nova: A key is useful.
+User: What is my name?
+Nova: Your name is Cleo.
+[/session]
+[session]
+User: My name is Lia.
+Nova: Nice to meet you, Lia.
+User: I have a map.
+Nova: A map is useful.
+User: What is my name?
+Nova: Your name is Lia.
+[/session]
+[session]
+User: My name is Hana.
+Nova: Nice to meet you, Hana.
+User: I have a coin.
+Nova: A coin is useful.
+User: What is my name?
+Nova: Your name is Hana.
+[/session]
+[session]
+User: My name is Ivo.
+Nova: Nice to meet you, Ivo.
+User: I have a book.
+Nova: A book is useful.
+User: What is my name?
+Nova: Your name is Ivo.
+[/session]
+[session]
+User: My name is Ivo.
+Nova: Nice to meet you, Ivo.
+User: I have a book.
+Nova: A book is useful.
+User: What is my name?
+Nova: Your name is Ivo.
+[/session]
+[session]
+User: My name is Ivo.
+Nova: Nice to meet you, Ivo.
+User: I have a key.
+Nova: A key is useful.
+User: What is my name?
+Nova: Your name is Ivo.
+[/session]
+[session]
+User: My name is Hana.
+Nova: Nice to meet you, Hana.
+User: I have a book.
+Nova: A book is useful.
+User: What is my name?
+Nova: Your name is Hana.
+[/session]
+[session]
+User: My name is Jun.
+Nova: Nice to meet you, Jun.
+User: I have a key.
+Nova: A key is useful.
+User: What is my name?
+Nova: Your name is Jun.
+[/session]
+[session]
+User: My name is Cleo.
+Nova: Nice to meet you, Cleo.
+User: I have a book.
+Nova: A book is useful.
+User: What is my name?
+Nova: Your name is Cleo.
+[/session]
+[session]
+User: My name is Cleo.
+Nova: Nice to meet you, Cleo.
+User: I have a hat.
+Nova: A hat is useful.
+User: What is my name?
+Nova: Your name is Cleo.
+[/session]
+[session]
+User: My name is Jun.
+Nova: Nice to meet you, Jun.
+User: I have a cup.
+Nova: A cup is useful.
+User: What is my name?
+Nova: Your name is Jun.
+[/session]
+[session]
+User: My name is Ivo.
+Nova: Nice to meet you, Ivo.
+User: I have a key.
+Nova: A key is useful.
+User: What is my name?
+Nova: Your name is Ivo.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my hat.
+Nova: I hope you find your hat.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my lamp.
+Nova: I hope you find your lamp.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Cleo.
+Nova: Hello, Cleo.
+User: I lost my hat.
+Nova: I hope you find your hat.
+User: Who am I?
+Nova: You are Cleo.
+[/session]
+[session]
+User: Hi, I am Kai.
+Nova: Hello, Kai.
+User: I lost my book.
+Nova: I hope you find your book.
+User: Who am I?
+Nova: You are Kai.
+[/session]
+[session]
+User: Hi, I am Ben.
+Nova: Hello, Ben.
+User: I lost my hat.
+Nova: I hope you find your hat.
+User: Who am I?
+Nova: You are Ben.
+[/session]
+[session]
+User: Hi, I am Eli.
+Nova: Hello, Eli.
+User: I lost my book.
+Nova: I hope you find your book.
+User: Who am I?
+Nova: You are Eli.
+[/session]
+[session]
+User: Hi, I am Ben.
+Nova: Hello, Ben.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Ben.
+[/session]
+[session]
+User: Hi, I am Jun.
+Nova: Hello, Jun.
+User: I lost my coin.
+Nova: I hope you find your coin.
+User: Who am I?
+Nova: You are Jun.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my book.
+Nova: I hope you find your book.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Jun.
+Nova: Hello, Jun.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Jun.
+[/session]
+[session]
+User: Hi, I am Ivo.
+Nova: Hello, Ivo.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Ivo.
+[/session]
+[session]
+User: Hi, I am Ada.
+Nova: Hello, Ada.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Ada.
+[/session]
+[session]
+User: Hi, I am Dov.
+Nova: Hello, Dov.
+User: I lost my lamp.
+Nova: I hope you find your lamp.
+User: Who am I?
+Nova: You are Dov.
+[/session]
+[session]
+User: Hi, I am Jun.
+Nova: Hello, Jun.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Jun.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my map.
+Nova: I hope you find your map.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my lamp.
+Nova: I hope you find your lamp.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Ivo.
+Nova: Hello, Ivo.
+User: I lost my lamp.
+Nova: I hope you find your lamp.
+User: Who am I?
+Nova: You are Ivo.
+[/session]
+[session]
+User: Hi, I am Kai.
+Nova: Hello, Kai.
+User: I lost my ball.
+Nova: I hope you find your ball.
+User: Who am I?
+Nova: You are Kai.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Kai.
+Nova: Hello, Kai.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Kai.
+[/session]
+[session]
+User: Hi, I am Hana.
+Nova: Hello, Hana.
+User: I lost my ball.
+Nova: I hope you find your ball.
+User: Who am I?
+Nova: You are Hana.
+[/session]
+[session]
+User: Hi, I am Gus.
+Nova: Hello, Gus.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Gus.
+[/session]
+[session]
+User: Hi, I am Lia.
+Nova: Hello, Lia.
+User: I lost my ball.
+Nova: I hope you find your ball.
+User: Who am I?
+Nova: You are Lia.
+[/session]
+[session]
+User: Hi, I am Fay.
+Nova: Hello, Fay.
+User: I lost my lamp.
+Nova: I hope you find your lamp.
+User: Who am I?
+Nova: You are Fay.
+[/session]
+[session]
+User: Hi, I am Ivo.
+Nova: Hello, Ivo.
+User: I lost my ball.
+Nova: I hope you find your ball.
+User: Who am I?
+Nova: You are Ivo.
+[/session]
+[session]
+User: Hi, I am Ada.
+Nova: Hello, Ada.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Ada.
+[/session]
+[session]
+User: Hi, I am Jun.
+Nova: Hello, Jun.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Jun.
+[/session]
+[session]
+User: Hi, I am Gus.
+Nova: Hello, Gus.
+User: I lost my cup.
+Nova: I hope you find your cup.
+User: Who am I?
+Nova: You are Gus.
+[/session]
+[session]
+User: Hi, I am Eli.
+Nova: Hello, Eli.
+User: I lost my coin.
+Nova: I hope you find your coin.
+User: Who am I?
+Nova: You are Eli.
+[/session]
+[session]
+User: Hi, I am Ben.
+Nova: Hello, Ben.
+User: I lost my key.
+Nova: I hope you find your key.
+User: Who am I?
+Nova: You are Ben.
+[/session]
+[/examples]
+[/Multi-Turn Conversation Lesson]
+
+[Unknown Block]
+ignored text
+[/Unknown Block]
+

@@ -1,0 +1,6150 @@
+{
+"files": [
+"sample_course_a.txt",
+"sample_course_b.txt"
+],
+"items": [
+{
+"kind": "prose",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"T: A greeting opens a conversation. A reply should answer what was asked.\nPolite words like please and thank you show respect.\n",
+0.3
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hello\nN: ",
+0.15
+],
+[
+"Hello!\n",
+1.0
+]
+],
+"prompt": "hello",
+"answer": "Hello!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hello\nN: ",
+0.15
+],
+[
+"Hello!\n",
+1.0
+]
+],
+"prompt": "Hello",
+"answer": "Hello!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hello!\nN: ",
+0.15
+],
+[
+"Hello!\n",
+1.0
+]
+],
+"prompt": "hello!",
+"answer": "Hello!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hello there\nN: ",
+0.15
+],
+[
+"Hello!\n",
+1.0
+]
+],
+"prompt": "hello there",
+"answer": "Hello!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hello?\nN: ",
+0.15
+],
+[
+"Hello!\n",
+1.0
+]
+],
+"prompt": "Hello?",
+"answer": "Hello!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hi\nN: ",
+0.15
+],
+[
+"Hi!\n",
+1.0
+]
+],
+"prompt": "hi",
+"answer": "Hi!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi\nN: ",
+0.15
+],
+[
+"Hi!\n",
+1.0
+]
+],
+"prompt": "Hi",
+"answer": "Hi!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hi!\nN: ",
+0.15
+],
+[
+"Hi!\n",
+1.0
+]
+],
+"prompt": "hi!",
+"answer": "Hi!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: hi there\nN: ",
+0.15
+],
+[
+"Hi!\n",
+1.0
+]
+],
+"prompt": "hi there",
+"answer": "Hi!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi?\nN: ",
+0.15
+],
+[
+"Hi!\n",
+1.0
+]
+],
+"prompt": "Hi?",
+"answer": "Hi!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good morning\nN: ",
+0.15
+],
+[
+"Good morning!\n",
+1.0
+]
+],
+"prompt": "good morning",
+"answer": "Good morning!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Good morning\nN: ",
+0.15
+],
+[
+"Good morning!\n",
+1.0
+]
+],
+"prompt": "Good morning",
+"answer": "Good morning!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good morning!\nN: ",
+0.15
+],
+[
+"Good morning!\n",
+1.0
+]
+],
+"prompt": "good morning!",
+"answer": "Good morning!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good morning there\nN: ",
+0.15
+],
+[
+"Good morning!\n",
+1.0
+]
+],
+"prompt": "good morning there",
+"answer": "Good morning!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Good morning?\nN: ",
+0.15
+],
+[
+"Good morning!\n",
+1.0
+]
+],
+"prompt": "Good morning?",
+"answer": "Good morning!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good night\nN: ",
+0.15
+],
+[
+"Good night!\n",
+1.0
+]
+],
+"prompt": "good night",
+"answer": "Good night!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Good night\nN: ",
+0.15
+],
+[
+"Good night!\n",
+1.0
+]
+],
+"prompt": "Good night",
+"answer": "Good night!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good night!\nN: ",
+0.15
+],
+[
+"Good night!\n",
+1.0
+]
+],
+"prompt": "good night!",
+"answer": "Good night!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: good night there\nN: ",
+0.15
+],
+[
+"Good night!\n",
+1.0
+]
+],
+"prompt": "good night there",
+"answer": "Good night!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Good night?\nN: ",
+0.15
+],
+[
+"Good night!\n",
+1.0
+]
+],
+"prompt": "Good night?",
+"answer": "Good night!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: thank you\nN: ",
+0.15
+],
+[
+"You are welcome.\n",
+1.0
+]
+],
+"prompt": "thank you",
+"answer": "You are welcome.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Thank you\nN: ",
+0.15
+],
+[
+"You are welcome.\n",
+1.0
+]
+],
+"prompt": "Thank you",
+"answer": "You are welcome.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: thank you!\nN: ",
+0.15
+],
+[
+"You are welcome.\n",
+1.0
+]
+],
+"prompt": "thank you!",
+"answer": "You are welcome.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: thank you there\nN: ",
+0.15
+],
+[
+"You are welcome.\n",
+1.0
+]
+],
+"prompt": "thank you there",
+"answer": "You are welcome.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Thank you?\nN: ",
+0.15
+],
+[
+"You are welcome.\n",
+1.0
+]
+],
+"prompt": "Thank you?",
+"answer": "You are welcome.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: how are you\nN: ",
+0.15
+],
+[
+"I am well, thank you.\n",
+1.0
+]
+],
+"prompt": "how are you",
+"answer": "I am well, thank you.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: How are you\nN: ",
+0.15
+],
+[
+"I am well, thank you.\n",
+1.0
+]
+],
+"prompt": "How are you",
+"answer": "I am well, thank you.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: how are you!\nN: ",
+0.15
+],
+[
+"I am well, thank you.\n",
+1.0
+]
+],
+"prompt": "how are you!",
+"answer": "I am well, thank you.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: how are you there\nN: ",
+0.15
+],
+[
+"I am well, thank you.\n",
+1.0
+]
+],
+"prompt": "how are you there",
+"answer": "I am well, thank you.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: How are you?\nN: ",
+0.15
+],
+[
+"I am well, thank you.\n",
+1.0
+]
+],
+"prompt": "How are you?",
+"answer": "I am well, thank you.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: bye\nN: ",
+0.15
+],
+[
+"Goodbye!\n",
+1.0
+]
+],
+"prompt": "bye",
+"answer": "Goodbye!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Bye\nN: ",
+0.15
+],
+[
+"Goodbye!\n",
+1.0
+]
+],
+"prompt": "Bye",
+"answer": "Goodbye!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: bye!\nN: ",
+0.15
+],
+[
+"Goodbye!\n",
+1.0
+]
+],
+"prompt": "bye!",
+"answer": "Goodbye!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: bye there\nN: ",
+0.15
+],
+[
+"Goodbye!\n",
+1.0
+]
+],
+"prompt": "bye there",
+"answer": "Goodbye!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Bye?\nN: ",
+0.15
+],
+[
+"Goodbye!\n",
+1.0
+]
+],
+"prompt": "Bye?",
+"answer": "Goodbye!",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: \nN: ",
+0.15
+],
+[
+"spaced question   Spaced answer.\n",
+1.0
+]
+],
+"prompt": "",
+"answer": "spaced question   Spaced answer.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "prose",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"T: A color describes how a thing looks. A place tells where a thing is.\n",
+0.3
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Fay has a yellow book. What color is the book?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Fay has a yellow book. What color is the book?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Kai has a red key. What color is the key?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Kai has a red key. What color is the key?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ivo has a green cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Ivo has a green cup. What color is the cup?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a white key. What color is the key?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Jun has a white key. What color is the key?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Dov has a red key. What color is the key?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Dov has a red key. What color is the key?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Gus has a red coin. What color is the coin?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Gus has a red coin. What color is the coin?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Dov has a white cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Dov has a white cup. What color is the cup?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Gus has a white key. What color is the key?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Gus has a white key. What color is the key?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ben has a black lamp. What color is the lamp?\nN: ",
+0.15
+],
+[
+"Black.\n",
+1.0
+]
+],
+"prompt": "Ben has a black lamp. What color is the lamp?",
+"answer": "Black.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Kai has a white key. What color is the key?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Kai has a white key. What color is the key?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a red coin. What color is the coin?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Jun has a red coin. What color is the coin?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Dov has a white key. What color is the key?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Dov has a white key. What color is the key?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Cleo has a yellow ball. What color is the ball?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Cleo has a yellow ball. What color is the ball?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Cleo has a white cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Cleo has a white cup. What color is the cup?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Eli has a red book. What color is the book?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Eli has a red book. What color is the book?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a green lamp. What color is the lamp?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Jun has a green lamp. What color is the lamp?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ben has a white cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Ben has a white cup. What color is the cup?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ada has a yellow lamp. What color is the lamp?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Ada has a yellow lamp. What color is the lamp?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Kai has a green coin. What color is the coin?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Kai has a green coin. What color is the coin?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hana has a green hat. What color is the hat?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Hana has a green hat. What color is the hat?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Eli has a blue lamp. What color is the lamp?\nN: ",
+0.15
+],
+[
+"Blue.\n",
+1.0
+]
+],
+"prompt": "Eli has a blue lamp. What color is the lamp?",
+"answer": "Blue.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Lia has a red lamp. What color is the lamp?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Lia has a red lamp. What color is the lamp?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a white ball. What color is the ball?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Jun has a white ball. What color is the ball?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hana has a black map. What color is the map?\nN: ",
+0.15
+],
+[
+"Black.\n",
+1.0
+]
+],
+"prompt": "Hana has a black map. What color is the map?",
+"answer": "Black.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hana has a white ball. What color is the ball?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Hana has a white ball. What color is the ball?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ben has a white cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Ben has a white cup. What color is the cup?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Gus has a green book. What color is the book?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Gus has a green book. What color is the book?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Cleo has a yellow hat. What color is the hat?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Cleo has a yellow hat. What color is the hat?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ada has a white cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Ada has a white cup. What color is the cup?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a green map. What color is the map?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Jun has a green map. What color is the map?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Lia has a white map. What color is the map?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Lia has a white map. What color is the map?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Hana has a red hat. What color is the hat?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Hana has a red hat. What color is the hat?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ben has a yellow ball. What color is the ball?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Ben has a yellow ball. What color is the ball?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Lia has a red cup. What color is the cup?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Lia has a red cup. What color is the cup?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Lia has a black ball. What color is the ball?\nN: ",
+0.15
+],
+[
+"Black.\n",
+1.0
+]
+],
+"prompt": "Lia has a black ball. What color is the ball?",
+"answer": "Black.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Jun has a green hat. What color is the hat?\nN: ",
+0.15
+],
+[
+"Green.\n",
+1.0
+]
+],
+"prompt": "Jun has a green hat. What color is the hat?",
+"answer": "Green.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Lia has a black coin. What color is the coin?\nN: ",
+0.15
+],
+[
+"Black.\n",
+1.0
+]
+],
+"prompt": "Lia has a black coin. What color is the coin?",
+"answer": "Black.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Fay has a yellow key. What color is the key?\nN: ",
+0.15
+],
+[
+"Yellow.\n",
+1.0
+]
+],
+"prompt": "Fay has a yellow key. What color is the key?",
+"answer": "Yellow.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Fay has a white book. What color is the book?\nN: ",
+0.15
+],
+[
+"White.\n",
+1.0
+]
+],
+"prompt": "Fay has a white book. What color is the book?",
+"answer": "White.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "understanding",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Ben has a red hat. What color is the hat?\nN: ",
+0.15
+],
+[
+"Red.\n",
+1.0
+]
+],
+"prompt": "Ben has a red hat. What color is the hat?",
+"answer": "Red.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "prose",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"T: Use the facts you are given. Prefer the answer the facts support.\n",
+0.3
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The book is in the car. Dov looks in the bag. Is the book in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The book is in the car. Dov looks in the bag. Is the book in the bag?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: The hat is in the box. Gus looks in the bag. Is the hat in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The hat is in the box. Gus looks in the bag. Is the hat in the bag?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The ball is in the bag. Hana looks in the kitchen. Is the ball in the kitchen?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The ball is in the bag. Hana looks in the kitchen. Is the ball in the kitchen?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The coin is in the drawer. Ivo looks in the kitchen. Is the coin in the kitchen?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The coin is in the drawer. Ivo looks in the kitchen. Is the coin in the kitchen?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The cup is in the bag. Dov looks in the car. Is the cup in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The cup is in the bag. Dov looks in the car. Is the cup in the car?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: The lamp is in the box. Dov looks in the kitchen. Is the lamp in the kitchen?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the box. Dov looks in the kitchen. Is the lamp in the kitchen?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: The ball is in the drawer. Jun looks in the box. Is the ball in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The ball is in the drawer. Jun looks in the box. Is the ball in the box?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The map is in the garden. Cleo looks in the car. Is the map in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The map is in the garden. Cleo looks in the car. Is the map in the car?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The key is in the kitchen. Fay looks in the garden. Is the key in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the kitchen.\n",
+1.0
+]
+],
+"prompt": "The key is in the kitchen. Fay looks in the garden. Is the key in the garden?",
+"answer": "No, it is in the kitchen.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The coin is in the kitchen. Gus looks in the box. Is the coin in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the kitchen.\n",
+1.0
+]
+],
+"prompt": "The coin is in the kitchen. Gus looks in the box. Is the coin in the box?",
+"answer": "No, it is in the kitchen.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The coin is in the box. Hana looks in the bag. Is the coin in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The coin is in the box. Hana looks in the bag. Is the coin in the bag?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the bag. Ben looks in the box. Is the hat in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The hat is in the bag. Ben looks in the box. Is the hat in the box?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The key is in the box. Fay looks in the car. Is the key in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The key is in the box. Fay looks in the car. Is the key in the car?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The cup is in the drawer. Jun looks in the garden. Is the cup in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The cup is in the drawer. Jun looks in the garden. Is the cup in the garden?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the garden. Ada looks in the kitchen. Is the lamp in the kitchen?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the garden. Ada looks in the kitchen. Is the lamp in the kitchen?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The ball is in the drawer. Cleo looks in the garden. Is the ball in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The ball is in the drawer. Cleo looks in the garden. Is the ball in the garden?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The cup is in the box. Fay looks in the kitchen. Is the cup in the kitchen?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The cup is in the box. Fay looks in the kitchen. Is the cup in the kitchen?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the drawer. Hana looks in the box. Is the hat in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The hat is in the drawer. Hana looks in the box. Is the hat in the box?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The map is in the car. Cleo looks in the drawer. Is the map in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The map is in the car. Cleo looks in the drawer. Is the map in the drawer?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The key is in the bag. Hana looks in the garden. Is the key in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The key is in the bag. Hana looks in the garden. Is the key in the garden?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The key is in the garden. Fay looks in the drawer. Is the key in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The key is in the garden. Fay looks in the drawer. Is the key in the drawer?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The ball is in the garden. Kai looks in the drawer. Is the ball in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The ball is in the garden. Kai looks in the drawer. Is the ball in the drawer?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the garden. Cleo looks in the car. Is the lamp in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the garden. Cleo looks in the car. Is the lamp in the car?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the garden. Ivo looks in the bag. Is the lamp in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the garden. Ivo looks in the bag. Is the lamp in the bag?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the bag. Dov looks in the garden. Is the lamp in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the bag. Dov looks in the garden. Is the lamp in the garden?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The key is in the box. Hana looks in the drawer. Is the key in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The key is in the box. Hana looks in the drawer. Is the key in the drawer?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the car. Hana looks in the garden. Is the lamp in the garden?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the car. Hana looks in the garden. Is the lamp in the garden?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The map is in the drawer. Fay looks in the box. Is the map in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the drawer.\n",
+1.0
+]
+],
+"prompt": "The map is in the drawer. Fay looks in the box. Is the map in the box?",
+"answer": "No, it is in the drawer.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The lamp is in the kitchen. Dov looks in the bag. Is the lamp in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the kitchen.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the kitchen. Dov looks in the bag. Is the lamp in the bag?",
+"answer": "No, it is in the kitchen.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the garden. Fay looks in the car. Is the hat in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The hat is in the garden. Fay looks in the car. Is the hat in the car?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The map is in the car. Ada looks in the box. Is the map in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The map is in the car. Ada looks in the box. Is the map in the box?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The coin is in the car. Kai looks in the bag. Is the coin in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The coin is in the car. Kai looks in the bag. Is the coin in the bag?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The coin is in the car. Hana looks in the drawer. Is the coin in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The coin is in the car. Hana looks in the drawer. Is the coin in the drawer?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the kitchen. Ben looks in the box. Is the hat in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the kitchen.\n",
+1.0
+]
+],
+"prompt": "The hat is in the kitchen. Ben looks in the box. Is the hat in the box?",
+"answer": "No, it is in the kitchen.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The book is in the bag. Lia looks in the box. Is the book in the box?\nN: ",
+0.15
+],
+[
+"No, it is in the bag.\n",
+1.0
+]
+],
+"prompt": "The book is in the bag. Lia looks in the box. Is the book in the box?",
+"answer": "No, it is in the bag.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the car. Cleo looks in the bag. Is the hat in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The hat is in the car. Cleo looks in the bag. Is the hat in the bag?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The hat is in the car. Jun looks in the drawer. Is the hat in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the car.\n",
+1.0
+]
+],
+"prompt": "The hat is in the car. Jun looks in the drawer. Is the hat in the drawer?",
+"answer": "No, it is in the car.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The book is in the box. Cleo looks in the car. Is the book in the car?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The book is in the box. Cleo looks in the car. Is the book in the car?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: The cup is in the garden. Lia looks in the bag. Is the cup in the bag?\nN: ",
+0.15
+],
+[
+"No, it is in the garden.\n",
+1.0
+]
+],
+"prompt": "The cup is in the garden. Lia looks in the bag. Is the cup in the bag?",
+"answer": "No, it is in the garden.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "reasoning",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: The lamp is in the box. Gus looks in the drawer. Is the lamp in the drawer?\nN: ",
+0.15
+],
+[
+"No, it is in the box.\n",
+1.0
+]
+],
+"prompt": "The lamp is in the box. Gus looks in the drawer. Is the lamp in the drawer?",
+"answer": "No, it is in the box.",
+"contradicted": "Yes.",
+"users": [],
+"replies": []
+},
+{
+"kind": "prose",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"T: Remember what was said earlier in the conversation.\n",
+0.3
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Dov.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Dov.\n",
+1.0
+],
+[
+"U: I have a ball.\nN: ",
+0.15
+],
+[
+"A ball is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Dov.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Dov.",
+"I have a ball.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Dov.",
+"A ball is useful.",
+"Your name is Dov."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Ivo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Ivo.\n",
+1.0
+],
+[
+"U: I have a lamp.\nN: ",
+0.15
+],
+[
+"A lamp is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Ivo.",
+"I have a lamp.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Ivo.",
+"A lamp is useful.",
+"Your name is Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Jun.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Jun.\n",
+1.0
+],
+[
+"U: I have a map.\nN: ",
+0.15
+],
+[
+"A map is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Jun.",
+"I have a map.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Jun.",
+"A map is useful.",
+"Your name is Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Eli.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Eli.\n",
+1.0
+],
+[
+"U: I have a coin.\nN: ",
+0.15
+],
+[
+"A coin is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Eli.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Eli.",
+"I have a coin.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Eli.",
+"A coin is useful.",
+"Your name is Eli."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Cleo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Cleo.\n",
+1.0
+],
+[
+"U: I have a key.\nN: ",
+0.15
+],
+[
+"A key is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Cleo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Cleo.",
+"I have a key.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Cleo.",
+"A key is useful.",
+"Your name is Cleo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Lia.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Lia.\n",
+1.0
+],
+[
+"U: I have a map.\nN: ",
+0.15
+],
+[
+"A map is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Lia.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Lia.",
+"I have a map.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Lia.",
+"A map is useful.",
+"Your name is Lia."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Hana.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Hana.\n",
+1.0
+],
+[
+"U: I have a coin.\nN: ",
+0.15
+],
+[
+"A coin is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Hana.",
+"I have a coin.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Hana.",
+"A coin is useful.",
+"Your name is Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Ivo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Ivo.\n",
+1.0
+],
+[
+"U: I have a book.\nN: ",
+0.15
+],
+[
+"A book is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Ivo.",
+"I have a book.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Ivo.",
+"A book is useful.",
+"Your name is Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Ivo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Ivo.\n",
+1.0
+],
+[
+"U: I have a book.\nN: ",
+0.15
+],
+[
+"A book is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Ivo.",
+"I have a book.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Ivo.",
+"A book is useful.",
+"Your name is Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Ivo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Ivo.\n",
+1.0
+],
+[
+"U: I have a key.\nN: ",
+0.15
+],
+[
+"A key is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Ivo.",
+"I have a key.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Ivo.",
+"A key is useful.",
+"Your name is Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Hana.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Hana.\n",
+1.0
+],
+[
+"U: I have a book.\nN: ",
+0.15
+],
+[
+"A book is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Hana.",
+"I have a book.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Hana.",
+"A book is useful.",
+"Your name is Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Jun.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Jun.\n",
+1.0
+],
+[
+"U: I have a key.\nN: ",
+0.15
+],
+[
+"A key is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Jun.",
+"I have a key.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Jun.",
+"A key is useful.",
+"Your name is Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Cleo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Cleo.\n",
+1.0
+],
+[
+"U: I have a book.\nN: ",
+0.15
+],
+[
+"A book is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Cleo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Cleo.",
+"I have a book.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Cleo.",
+"A book is useful.",
+"Your name is Cleo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Cleo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Cleo.\n",
+1.0
+],
+[
+"U: I have a hat.\nN: ",
+0.15
+],
+[
+"A hat is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Cleo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Cleo.",
+"I have a hat.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Cleo.",
+"A hat is useful.",
+"Your name is Cleo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Jun.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Jun.\n",
+1.0
+],
+[
+"U: I have a cup.\nN: ",
+0.15
+],
+[
+"A cup is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Jun.",
+"I have a cup.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Jun.",
+"A cup is useful.",
+"Your name is Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: My name is Ivo.\nN: ",
+0.15
+],
+[
+"Nice to meet you, Ivo.\n",
+1.0
+],
+[
+"U: I have a key.\nN: ",
+0.15
+],
+[
+"A key is useful.\n",
+1.0
+],
+[
+"U: What is my name?\nN: ",
+0.15
+],
+[
+"Your name is Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"My name is Ivo.",
+"I have a key.",
+"What is my name?"
+],
+"replies": [
+"Nice to meet you, Ivo.",
+"A key is useful.",
+"Your name is Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my hat.\nN: ",
+0.15
+],
+[
+"I hope you find your hat.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my hat.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your hat.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my lamp.\nN: ",
+0.15
+],
+[
+"I hope you find your lamp.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my lamp.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your lamp.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Cleo.\nN: ",
+0.15
+],
+[
+"Hello, Cleo.\n",
+1.0
+],
+[
+"U: I lost my hat.\nN: ",
+0.15
+],
+[
+"I hope you find your hat.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Cleo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Cleo.",
+"I lost my hat.",
+"Who am I?"
+],
+"replies": [
+"Hello, Cleo.",
+"I hope you find your hat.",
+"You are Cleo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Kai.\nN: ",
+0.15
+],
+[
+"Hello, Kai.\n",
+1.0
+],
+[
+"U: I lost my book.\nN: ",
+0.15
+],
+[
+"I hope you find your book.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Kai.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Kai.",
+"I lost my book.",
+"Who am I?"
+],
+"replies": [
+"Hello, Kai.",
+"I hope you find your book.",
+"You are Kai."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ben.\nN: ",
+0.15
+],
+[
+"Hello, Ben.\n",
+1.0
+],
+[
+"U: I lost my hat.\nN: ",
+0.15
+],
+[
+"I hope you find your hat.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ben.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ben.",
+"I lost my hat.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ben.",
+"I hope you find your hat.",
+"You are Ben."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Eli.\nN: ",
+0.15
+],
+[
+"Hello, Eli.\n",
+1.0
+],
+[
+"U: I lost my book.\nN: ",
+0.15
+],
+[
+"I hope you find your book.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Eli.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Eli.",
+"I lost my book.",
+"Who am I?"
+],
+"replies": [
+"Hello, Eli.",
+"I hope you find your book.",
+"You are Eli."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Hi, I am Ben.\nN: ",
+0.15
+],
+[
+"Hello, Ben.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ben.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ben.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ben.",
+"I hope you find your key.",
+"You are Ben."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Jun.\nN: ",
+0.15
+],
+[
+"Hello, Jun.\n",
+1.0
+],
+[
+"U: I lost my coin.\nN: ",
+0.15
+],
+[
+"I hope you find your coin.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Jun.",
+"I lost my coin.",
+"Who am I?"
+],
+"replies": [
+"Hello, Jun.",
+"I hope you find your coin.",
+"You are Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my book.\nN: ",
+0.15
+],
+[
+"I hope you find your book.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my book.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your book.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Jun.\nN: ",
+0.15
+],
+[
+"Hello, Jun.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Jun.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Jun.",
+"I hope you find your key.",
+"You are Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ivo.\nN: ",
+0.15
+],
+[
+"Hello, Ivo.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ivo.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ivo.",
+"I hope you find your cup.",
+"You are Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ada.\nN: ",
+0.15
+],
+[
+"Hello, Ada.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ada.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ada.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ada.",
+"I hope you find your key.",
+"You are Ada."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Dov.\nN: ",
+0.15
+],
+[
+"Hello, Dov.\n",
+1.0
+],
+[
+"U: I lost my lamp.\nN: ",
+0.15
+],
+[
+"I hope you find your lamp.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Dov.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Dov.",
+"I lost my lamp.",
+"Who am I?"
+],
+"replies": [
+"Hello, Dov.",
+"I hope you find your lamp.",
+"You are Dov."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Jun.\nN: ",
+0.15
+],
+[
+"Hello, Jun.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Jun.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Jun.",
+"I hope you find your key.",
+"You are Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my map.\nN: ",
+0.15
+],
+[
+"I hope you find your map.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my map.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your map.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my lamp.\nN: ",
+0.15
+],
+[
+"I hope you find your lamp.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my lamp.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your lamp.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ivo.\nN: ",
+0.15
+],
+[
+"Hello, Ivo.\n",
+1.0
+],
+[
+"U: I lost my lamp.\nN: ",
+0.15
+],
+[
+"I hope you find your lamp.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ivo.",
+"I lost my lamp.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ivo.",
+"I hope you find your lamp.",
+"You are Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Kai.\nN: ",
+0.15
+],
+[
+"Hello, Kai.\n",
+1.0
+],
+[
+"U: I lost my ball.\nN: ",
+0.15
+],
+[
+"I hope you find your ball.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Kai.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Kai.",
+"I lost my ball.",
+"Who am I?"
+],
+"replies": [
+"Hello, Kai.",
+"I hope you find your ball.",
+"You are Kai."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your key.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Kai.\nN: ",
+0.15
+],
+[
+"Hello, Kai.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Kai.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Kai.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Kai.",
+"I hope you find your cup.",
+"You are Kai."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Hana.\nN: ",
+0.15
+],
+[
+"Hello, Hana.\n",
+1.0
+],
+[
+"U: I lost my ball.\nN: ",
+0.15
+],
+[
+"I hope you find your ball.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Hana.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Hana.",
+"I lost my ball.",
+"Who am I?"
+],
+"replies": [
+"Hello, Hana.",
+"I hope you find your ball.",
+"You are Hana."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Gus.\nN: ",
+0.15
+],
+[
+"Hello, Gus.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Gus.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Gus.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Gus.",
+"I hope you find your cup.",
+"You are Gus."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Lia.\nN: ",
+0.15
+],
+[
+"Hello, Lia.\n",
+1.0
+],
+[
+"U: I lost my ball.\nN: ",
+0.15
+],
+[
+"I hope you find your ball.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Lia.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Lia.",
+"I lost my ball.",
+"Who am I?"
+],
+"replies": [
+"Hello, Lia.",
+"I hope you find your ball.",
+"You are Lia."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Fay.\nN: ",
+0.15
+],
+[
+"Hello, Fay.\n",
+1.0
+],
+[
+"U: I lost my lamp.\nN: ",
+0.15
+],
+[
+"I hope you find your lamp.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Fay.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Fay.",
+"I lost my lamp.",
+"Who am I?"
+],
+"replies": [
+"Hello, Fay.",
+"I hope you find your lamp.",
+"You are Fay."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ivo.\nN: ",
+0.15
+],
+[
+"Hello, Ivo.\n",
+1.0
+],
+[
+"U: I lost my ball.\nN: ",
+0.15
+],
+[
+"I hope you find your ball.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ivo.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ivo.",
+"I lost my ball.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ivo.",
+"I hope you find your ball.",
+"You are Ivo."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Ada.\nN: ",
+0.15
+],
+[
+"Hello, Ada.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ada.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ada.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ada.",
+"I hope you find your cup.",
+"You are Ada."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Jun.\nN: ",
+0.15
+],
+[
+"Hello, Jun.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Jun.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Jun.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Jun.",
+"I hope you find your cup.",
+"You are Jun."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Gus.\nN: ",
+0.15
+],
+[
+"Hello, Gus.\n",
+1.0
+],
+[
+"U: I lost my cup.\nN: ",
+0.15
+],
+[
+"I hope you find your cup.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Gus.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Gus.",
+"I lost my cup.",
+"Who am I?"
+],
+"replies": [
+"Hello, Gus.",
+"I hope you find your cup.",
+"You are Gus."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": false,
+"segments": [
+[
+"U: Hi, I am Eli.\nN: ",
+0.15
+],
+[
+"Hello, Eli.\n",
+1.0
+],
+[
+"U: I lost my coin.\nN: ",
+0.15
+],
+[
+"I hope you find your coin.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Eli.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Eli.",
+"I lost my coin.",
+"Who am I?"
+],
+"replies": [
+"Hello, Eli.",
+"I hope you find your coin.",
+"You are Eli."
+]
+},
+{
+"kind": "conversation",
+"source": "sample_course_a.txt",
+"held_out": true,
+"segments": [
+[
+"U: Hi, I am Ben.\nN: ",
+0.15
+],
+[
+"Hello, Ben.\n",
+1.0
+],
+[
+"U: I lost my key.\nN: ",
+0.15
+],
+[
+"I hope you find your key.\n",
+1.0
+],
+[
+"U: Who am I?\nN: ",
+0.15
+],
+[
+"You are Ben.\n",
+1.0
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [
+"Hi, I am Ben.",
+"I lost my key.",
+"Who am I?"
+],
+"replies": [
+"Hello, Ben.",
+"I hope you find your key.",
+"You are Ben."
+]
+},
+{
+"kind": "prose",
+"source": "sample_course_b.txt",
+"held_out": false,
+"segments": [
+[
+"T: Only explanation text here.\n",
+0.3
+]
+],
+"prompt": null,
+"answer": null,
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_b.txt",
+"held_out": false,
+"segments": [
+[
+"U: where is the key\nN: ",
+0.15
+],
+[
+"In the box.\n",
+1.0
+]
+],
+"prompt": "where is the key",
+"answer": "In the box.",
+"contradicted": null,
+"users": [],
+"replies": []
+},
+{
+"kind": "dialogue",
+"source": "sample_course_b.txt",
+"held_out": false,
+"segments": [
+[
+"U: where is the cup\nN: ",
+0.15
+],
+[
+"On the table.\n",
+1.0
+]
+],
+"prompt": "where is the cup",
+"answer": "On the table.",
+"contradicted": null,
+"users": [],
+"replies": []
+}
+],
+"min_count": 3,
+"words_before": 136,
+"words": [
+"Apples",
+"Bag",
+"Bags",
+"Ball",
+"Balls",
+"Basket",
+"Bell",
+"Black",
+"Blue",
+"Book",
+"Books",
+"Box",
+"Brown",
+"Car",
+"Card",
+"Cards",
+"Coin",
+"Coins",
+"Cup",
+"Cups",
+"Does",
+"Drawer",
+"Flag",
+"Garden",
+"Good",
+"Goodbye",
+"Green",
+"Hat",
+"Hello",
+"House",
+"How",
+"Jar",
+"Key",
+"Keys",
+"Kitchen",
+"Lamp",
+"Map",
+"Nova",
+"Orange",
+"Pen",
+"Pens",
+"Pink",
+"Plate",
+"Plates",
+"Purple",
+"Red",
+"Ring",
+"Shell",
+"Shells",
+"Stone",
+"Stones",
+"Thank",
+"The",
+"Toy",
+"What",
+"Where",
+"White",
+"Who",
+"Yellow",
+"Yes",
+"You're",
+"apples",
+"are",
+"bag",
+"bags",
+"ball",
+"balls",
+"basket",
+"bell",
+"black",
+"blue",
+"book",
+"books",
+"box",
+"brown",
+"car",
+"card",
+"cards",
+"coin",
+"coins",
+"color",
+"cup",
+"cups",
+"drawer",
+"evening",
+"fewer",
+"flag",
+"garden",
+"good",
+"goodbye",
+"green",
+"has",
+"hat",
+"have",
+"hello",
+"house",
+"how",
+"jar",
+"key",
+"keys",
+"kitchen",
+"lamp",
+"map",
+"meet",
+"more",
+"morning",
+"name",
+"nice",
+"night",
+"nova",
+"orange",
+"pen",
+"pens",
+"pink",
+"plate",
+"plates",
+"purple",
+"red",
+"ring",
+"shell",
+"shells",
+"stone",
+"stones",
+"thank",
+"thanks",
+"the",
+"too",
+"toy",
+"welcome",
+"well",
+"what",
+"white",
+"who",
+"yellow",
+"you",
+"your",
+"looks",
+"You",
+"find",
+"hope",
+"lost",
+"Your",
+"useful",
+"there",
+"bye",
+"where"
+],
+"rows": [
+{
+"ids": [
+84,
+58,
+32,
+65,
+32,
+103,
+114,
+101,
+101,
+116,
+105,
+110,
+103,
+32,
+111,
+112,
+101,
+110,
+115,
+32,
+97,
+32,
+99,
+111,
+110,
+118,
+101,
+114,
+115,
+97,
+116,
+105,
+111,
+110,
+46,
+32,
+65,
+32,
+114,
+101,
+112,
+108,
+121,
+32,
+115,
+104,
+111,
+117,
+108,
+100,
+32,
+97,
+110,
+115,
+119,
+101,
+114,
+32,
+258,
+32,
+119,
+97,
+115,
+32,
+97,
+115,
+107,
+101,
+100,
+46,
+10,
+80,
+111,
+108,
+105,
+116,
+101,
+32,
+119,
+111,
+114,
+100,
+115,
+32,
+108,
+105,
+107,
+101,
+32,
+112,
+108,
+101,
+97,
+115,
+101,
+32,
+97,
+110,
+100,
+32,
+251,
+32,
+262,
+32,
+115,
+104,
+111,
+119,
+32,
+114,
+101,
+115,
+112,
+101,
+99,
+116,
+46
+],
+"targets": [
+58,
+32,
+65,
+32,
+103,
+114,
+101,
+101,
+116,
+105,
+110,
+103,
+32,
+111,
+112,
+101,
+110,
+115,
+32,
+97,
+32,
+99,
+111,
+110,
+118,
+101,
+114,
+115,
+97,
+116,
+105,
+111,
+110,
+46,
+32,
+65,
+32,
+114,
+101,
+112,
+108,
+121,
+32,
+115,
+104,
+111,
+117,
+108,
+100,
+32,
+97,
+110,
+115,
+119,
+101,
+114,
+32,
+258,
+32,
+119,
+97,
+115,
+32,
+97,
+115,
+107,
+101,
+100,
+46,
+10,
+80,
+111,
+108,
+105,
+116,
+101,
+32,
+119,
+111,
+114,
+100,
+115,
+32,
+108,
+105,
+107,
+101,
+32,
+112,
+108,
+101,
+97,
+115,
+101,
+32,
+97,
+110,
+100,
+32,
+251,
+32,
+262,
+32,
+115,
+104,
+111,
+119,
+32,
+114,
+101,
+115,
+112,
+101,
+99,
+116,
+46,
+10
+],
+"mask": [
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3,
+0.3
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+72,
+105,
+10,
+78,
+58,
+32,
+72,
+105,
+33
+],
+"targets": [
+58,
+32,
+72,
+105,
+10,
+78,
+58,
+32,
+72,
+105,
+33,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+216,
+32,
+233,
+32,
+271,
+10,
+78,
+58,
+32,
+152,
+32,
+233,
+33
+],
+"targets": [
+58,
+32,
+216,
+32,
+233,
+32,
+271,
+10,
+78,
+58,
+32,
+152,
+32,
+233,
+33,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+251,
+32,
+262,
+10,
+78,
+58,
+32,
+265,
+32,
+190,
+32,
+256,
+46
+],
+"targets": [
+58,
+32,
+251,
+32,
+262,
+10,
+78,
+58,
+32,
+265,
+32,
+190,
+32,
+256,
+46,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0,
+1.0,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+66,
+121,
+101,
+10,
+78,
+58,
+32,
+153,
+33
+],
+"targets": [
+58,
+32,
+66,
+121,
+101,
+10,
+78,
+58,
+32,
+153,
+33,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+73,
+118,
+111,
+32,
+219,
+32,
+97,
+32,
+218,
+32,
+209,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+209,
+63,
+10,
+78,
+58,
+32,
+154,
+46
+],
+"targets": [
+58,
+32,
+73,
+118,
+111,
+32,
+219,
+32,
+97,
+32,
+218,
+32,
+209,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+209,
+63,
+10,
+78,
+58,
+32,
+154,
+46,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+75,
+97,
+105,
+32,
+219,
+32,
+97,
+32,
+259,
+32,
+226,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+226,
+63,
+10,
+78,
+58,
+32,
+184,
+46
+],
+"targets": [
+58,
+32,
+75,
+97,
+105,
+32,
+219,
+32,
+97,
+32,
+259,
+32,
+226,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+226,
+63,
+10,
+78,
+58,
+32,
+184,
+46,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0
+]
+},
+{
+"ids": [
+85,
+58,
+32,
+66,
+101,
+110,
+32,
+219,
+32,
+97,
+32,
+259,
+32,
+209,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+209,
+63,
+10,
+78,
+58,
+32,
+184,
+46
+],
+"targets": [
+58,
+32,
+66,
+101,
+110,
+32,
+219,
+32,
+97,
+32,
+259,
+32,
+209,
+46,
+32,
+182,
+32,
+208,
+32,
+105,
+115,
+32,
+253,
+32,
+209,
+63,
+10,
+78,
+58,
+32,
+184,
+46,
+10
+],
+"mask": [
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+0.15,
+1.0,
+1.0,
+1.0
+]
+}
+],
+"batch": {
+"loss": 5.845320138778593,
+"grad_norm": 8.09835353116052,
+"grads": [
+[
+0,
+5.7307368340558507e-08
+],
+[
+4107,
+0.32332773242849555
+],
+[
+4128,
+0.30772036240541595
+],
+[
+4136,
+0.44339671353567833
+],
+[
+4148,
+0.3681471658502228
+],
+[
+4181,
+0.30349024190930096
+],
+[
+4184,
+0.2792060488374128
+],
+[
+4198,
+-0.3639207083969652
+],
+[
+4199,
+0.3080969045140881
+],
+[
+4206,
+-0.33838172452824367
+],
+[
+4211,
+-0.35420371295522013
+],
+[
+7476,
+0.28272646814297964
+],
+[
+7548,
+-0.3186904564936375
+],
+[
+9368,
+0.33795489130021616
+],
+[
+9372,
+-0.31324889503607356
+],
+[
+9424,
+0.3466468251748099
+],
+[
+9428,
+-0.2833684250800105
+],
+[
+9430,
+0.33112726314909713
+],
+[
+10763,
+-0.31646697279296465
+],
+[
+10780,
+-0.4680290181920838
+],
+[
+10785,
+-0.29565515286868554
+],
+[
+10805,
+-0.29525314075020687
+],
+[
+10812,
+0.2834804523187931
+],
+[
+10832,
+0.38386893986187187
+],
+[
+10833,
+0.4110776050473785
+],
+[
+10850,
+0.34465999909770473
+],
+[
+10852,
+-0.33335329667051905
+],
+[
+10867,
+0.4180472697962612
+],
+[
+10932,
+-0.28090256065927444
+],
+[
+12187,
+3.3974601811515036e-08
+],
+[
+24374,
+-0.006094043017835458
+],
+[
+32131,
+0.28999970953730425
+],
+[
+32139,
+-0.2943419689662826
+],
+[
+32180,
+-0.33653816404206777
+],
+[
+32213,
+0.30186090466110965
+],
+[
+36561,
+2.360400276785199e-07
+],
+[
+48748,
+6.862307234810552e-08
+],
+[
+60935,
+-0.0026342879387164218
+],
+[
+73122,
+0.031171058191408425
+],
+[
+85309,
+0.00777250850773337
+],
+[
+97496,
+-0.0016948317760634803
+],
+[
+109683,
+0.0013018849048991718
+],
+[
+121870,
+0.0027627925022622127
+],
+[
+134057,
+-0.004864807418867902
+],
+[
+146244,
+-0.004472331553581588
+],
+[
+158431,
+-0.0006291014425749646
+],
+[
+170618,
+-0.0002184569251129998
+],
+[
+182805,
+-0.0006934738512434716
+],
+[
+194992,
+-0.0058942674970881275
+],
+[
+207179,
+-0.0012743527420583487
+],
+[
+219366,
+-0.0009609943598025926
+],
+[
+231553,
+-0.00750923165598953
+],
+[
+243740,
+0.00021666612198403308
+],
+[
+255927,
+-0.0019893603928612846
+],
+[
+268114,
+-0.0011431673113387586
+],
+[
+280301,
+-0.003007191917595186
+],
+[
+292488,
+0.001024144868878995
+],
+[
+304675,
+-0.0017612389153126584
+],
+[
+316862,
+0.00033717980313025225
+],
+[
+329049,
+0.00024149153888171148
+],
+[
+341236,
+-0.00032352954918848497
+],
+[
+353423,
+0.0008188729420241294
+],
+[
+365610,
+0.0004172666663862009
+],
+[
+377797,
+-0.0015587755145471775
+],
+[
+389984,
+0.0003021515982063966
+],
+[
+402171,
+0.00048791710307336905
+],
+[
+414358,
+0.00443955624043175
+],
+[
+426545,
+0.005044416703380387
+],
+[
+438732,
+-0.0006938326226143114
+],
+[
+450919,
+0.0025669025967682995
+],
+[
+463106,
+0.0005757914685608008
+],
+[
+475293,
+6.83373363954405e-05
+],
+[
+487480,
+-0.0001096556362064527
+],
+[
+499667,
+-0.0008643094874666688
+],
+[
+511854,
+-0.0005885633507228187
+],
+[
+524041,
+0.0008409680126928458
+],
+[
+536228,
+0.00027926877034687526
+],
+[
+548415,
+0.0019460902082732972
+],
+[
+560602,
+0.0038904540689681895
+],
+[
+572789,
+-0.0016778388342127944
+],
+[
+584976,
+-0.005094958372459494
+],
+[
+597163,
+-0.000492701858451617
+],
+[
+609350,
+0.001928775472556289
+],
+[
+621537,
+0.010366455880832515
+],
+[
+633724,
+0.0012771053446788893
+],
+[
+645911,
+-0.0034997615106300553
+],
+[
+658098,
+0.006747536137473182
+],
+[
+670285,
+-0.0010739577930995426
+],
+[
+682472,
+0.002637537694349938
+],
+[
+694659,
+-0.00042919099708551406
+],
+[
+706846,
+0.005669325821485307
+],
+[
+719033,
+-0.003163213457861278
+],
+[
+731220,
+-0.0002999768316925854
+],
+[
+743407,
+3.539530065797776e-05
+],
+[
+755594,
+-0.000839108576435525
+],
+[
+767781,
+-0.0017122295498510959
+],
+[
+779968,
+0.0010081498799525768
+],
+[
+792155,
+-1.3473771450817804e-06
+],
+[
+804342,
+9.152579394215246e-07
+],
+[
+816529,
+0.0010206785072092097
+],
+[
+828716,
+0.00014110003251092788
+],
+[
+840903,
+7.479042884994488e-05
+],
+[
+853090,
+0.002254196181529961
+],
+[
+865277,
+-1.2128935057777912e-05
+],
+[
+877464,
+-5.03017956293373e-07
+],
+[
+889651,
+-0.0012480248742016012
+],
+[
+901838,
+-0.00023581742184416234
+],
+[
+914025,
+0.0
+],
+[
+926212,
+0.004401857253374088
+],
+[
+938399,
+0.0013111783023168119
+],
+[
+950586,
+0.000622424710966719
+],
+[
+962773,
+0.0015659588189250089
+],
+[
+974960,
+0.0007314288292084902
+],
+[
+987147,
+0.0005391157990194153
+],
+[
+999334,
+0.001699520020234606
+],
+[
+1011521,
+-0.0007456415076129903
+],
+[
+1023708,
+0.0029682649059378993
+],
+[
+1035895,
+-7.032812853622331e-06
+],
+[
+1048082,
+0.0007012768002120283
+],
+[
+1060269,
+-0.003934862880463562
+],
+[
+1072456,
+0.00020159586003306283
+],
+[
+1084643,
+-0.0014753131539116237
+],
+[
+1096830,
+0.00018205909562587008
+],
+[
+1109017,
+-0.001478609053139798
+],
+[
+1121204,
+1.6142819891967777e-05
+],
+[
+1133391,
+-0.005312686034241273
+],
+[
+1145578,
+0.001184252577781632
+],
+[
+1157765,
+0.006884618282503067
+],
+[
+1169952,
+-0.003531341302182103
+],
+[
+1182139,
+0.005236534689160452
+]
+]
+},
+"eval": [
+{
+"kind": "dialogue",
+"prompt": "U: how are you\nN: ",
+"expected": "I am well, thank you.",
+"reply": "I am well, thank you."
+},
+{
+"kind": "dialogue",
+"prompt": "U: How are you\nN: ",
+"expected": "I am well, thank you.",
+"reply": "I am Nova."
+},
+{
+"kind": "dialogue",
+"prompt": "U: how are you!\nN: ",
+"expected": "I am well, thank you.",
+"reply": "I am well, thank you."
+},
+{
+"kind": "dialogue",
+"prompt": "U: How are you?\nN: ",
+"expected": "I am well, thank you.",
+"reply": "I am well, thank you."
+},
+{
+"kind": "dialogue",
+"prompt": "U: \nN: ",
+"expected": "spaced question   Spaced answer.",
+"reply": "Hello!"
+},
+{
+"kind": "understanding",
+"prompt": "U: Kai has a green coin. What color is the coin?\nN: ",
+"expected": "Green.",
+"reply": "I stones?"
+},
+{
+"kind": "understanding",
+"prompt": "U: Eli has a blue lamp. What color is the lamp?\nN: ",
+"expected": "Blue.",
+"reply": "What color is the ring?"
+},
+{
+"kind": "understanding",
+"prompt": "U: Hana has a red hat. What color is the hat?\nN: ",
+"expected": "Red.",
+"reply": "I a."
+},
+{
+"kind": "understanding",
+"prompt": "U: Lia has a red cup. What color is the cup?\nN: ",
+"expected": "Red.",
+"reply": "I am has   books."
+},
+{
+"kind": "reasoning",
+"prompt": "U: The hat is in the box. Gus looks in the bag. Is the hat in the bag?\nN: ",
+"expected": "No, it is in the box.",
+"reply": "bag.",
+"prefers_supported": false
+},
+{
+"kind": "reasoning",
+"prompt": "U: The lamp is in the box. Dov looks in the kitchen. Is the lamp in the kitchen?\nN: ",
+"expected": "No, it is in the box.",
+"reply": "Dovil.",
+"prefers_supported": false
+},
+{
+"kind": "reasoning",
+"prompt": "U: The ball is in the drawer. Jun looks in the box. Is the ball in the box?\nN: ",
+"expected": "No, it is in the drawer.",
+"reply": "Junun.",
+"prefers_supported": false
+},
+{
+"kind": "reasoning",
+"prompt": "U: The lamp is in the box. Gus looks in the drawer. Is the lamp in the drawer?\nN: ",
+"expected": "No, it is in the box.",
+"reply": "Gusis the toy?",
+"prefers_supported": false
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: ",
+"expected": "Hello, Ben.",
+"reply": "I am Nova."
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: Hello, Ben.\nU: I lost my key.\nN: ",
+"expected": "I hope you find your key.",
+"reply": "Noven."
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: Hello, Ben.\nU: I lost my key.\nN: I hope you find your key.\nU: Who am I?\nN: ",
+"expected": "You are Ben.",
+"reply": "Genus."
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: ",
+"expected": "Hello, Ben.",
+"reply": "I am Nova."
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: Hello, Ben.\nU: I lost my key.\nN: ",
+"expected": "I hope you find your key.",
+"reply": "Noven."
+},
+{
+"kind": "conversation",
+"prompt": "U: Hi, I am Ben.\nN: Hello, Ben.\nU: I lost my key.\nN: I hope you find your key.\nU: Who am I?\nN: ",
+"expected": "You are Ben.",
+"reply": "Genus."
+}
+]
+}

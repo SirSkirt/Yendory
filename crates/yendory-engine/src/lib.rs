@@ -17,6 +17,7 @@
     clippy::field_reassign_with_default,
     clippy::excessive_precision
 )]
+pub mod learn;
 pub mod model;
 pub mod tokenizer;
 

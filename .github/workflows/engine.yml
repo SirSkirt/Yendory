@@ -24,7 +24,8 @@ jobs:
       - run: cargo test --release --all-targets
       - name: Fixture integrity
         shell: bash
-        run: sha256sum -c tests/compat/fixtures/SHA256SUMS
+        working-directory: tests/compat/fixtures
+        run: sha256sum -c SHA256SUMS
 
   reference:
     name: numpy reference selftest

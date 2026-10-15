@@ -1,0 +1,9 @@
+[Dialogue Lesson]
+Only explanation text here.
+[/Dialogue Lesson]
+[Dialogue Lesson]
+[examples]
+where is the key  In the box.
+where is the cup  On the table.
+[/examples]
+[/Dialogue Lesson]

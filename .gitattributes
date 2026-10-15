@@ -3,3 +3,5 @@
 *.json text eol=lf
 *.rs text eol=lf
 *.py text eol=lf
+# Deliberately has Windows line endings (parser test); keep bytes exactly.
+tests/compat/fixtures/lessons/sample_course_b.txt -text
