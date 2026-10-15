@@ -33,8 +33,20 @@ fn course_records_every_file() {
         ..SessionConfig::default()
     };
     let mut events = Vec::new();
-    let r = teach_course(&model, &files, &[], &cfg, &mut |e| events.push(e.clone()), &AtomicBool::new(false))
-        .unwrap();
+    let mut saved = 0;
+    let r = teach_course(
+        &model,
+        &files,
+        &[],
+        &cfg,
+        &mut |e| events.push(e.clone()),
+        &mut |_, _| {
+            saved += 1;
+            Ok(())
+        },
+        &AtomicBool::new(false),
+    )
+    .unwrap();
 
     let names: Vec<&str> = r.files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["01_sample.txt", "02_tiny.txt", "03_copy_of_01.txt", "04_not_ascii.txt"]);
@@ -55,6 +67,7 @@ fn course_records_every_file() {
     // The archive holds exactly the learned files' items.
     let learned = first.outcome == FileOutcome::Learned;
     assert_eq!(r.archive.is_empty(), !learned);
+    assert_eq!(saved, usize::from(learned));
     assert_eq!(r.model.step, first.end_step);
     let finished = events.iter().filter(|e| matches!(e, CourseEvent::FileFinished(_))).count();
     assert_eq!(finished, 4);

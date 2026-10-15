@@ -38,3 +38,26 @@ jobs:
       - run: pip install numpy
       - working-directory: reference
         run: python selftest.py
+
+  studio:
+    name: Studio app (Linux build, tests, lint)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux GUI libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/studio/src-tauri -> target"
+      - run: node --check apps/studio/web/js/app.js && node --check apps/studio/web/js/brain.js
+      - run: cargo fmt --check
+        working-directory: apps/studio/src-tauri
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: apps/studio/src-tauri
+      - run: cargo test
+        working-directory: apps/studio/src-tauri

@@ -7,7 +7,7 @@ Bicameral neural architecture first developed for Neural Nova. A model can have 
 is the first student, not the engine.
 
 - **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (this repo, `crates/yendory-engine`).
-- **Yendory Studio** — the training app (planned; Phase 3).
+- **Yendory Studio** — the training app for Windows, Linux and Android (`apps/studio`, Tauri).
 - **Yendory Nexus** — tools, apps and games for trained models (later).
 
 *Studio teaches. Engine thinks. Nexus connects.*
@@ -26,6 +26,7 @@ It is deliberately not a Llama-style network. See [docs/ARCHITECTURE.md](docs/AR
 
 ```
 crates/yendory-engine/   the Engine library (no UI, no Tauri)
+apps/studio/             Yendory Studio, the GUI app (Tauri 2: Rust backend + HTML/JS)
 reference/               numpy reference = the specification, plus golden/compat generators
 tests/compat/            golden vectors, a real trained checkpoint, expected reference outputs
 docs/                    architecture, checkpoint format, verification status

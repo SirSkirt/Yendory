@@ -64,6 +64,9 @@ pub struct CourseResult {
     pub stopped: bool,
 }
 
+/// Called with the new model and archive after each learned file.
+pub type OnLearned<'a> = dyn FnMut(&Bicameral, &[Item]) -> Result<(), String> + 'a;
+
 /// Orders files by name, like the reference's `sorted(glob(...))` (lesson files are numbered).
 pub fn sort_files(files: &mut [CourseFile]) {
     files.sort_by(|a, b| a.name.cmp(&b.name));
@@ -71,12 +74,15 @@ pub fn sort_files(files: &mut [CourseFile]) {
 
 /// Teaches each file in order. A file that cannot be taught is recorded and skipped; it does not
 /// end the course. Learned files join the archive, so later files rehearse and protect them.
+/// `on_learned` receives the new model and archive right after each learned file, so a frontend
+/// can save progress immediately; an error from it ends the course.
 pub fn teach_course(
     model: &Bicameral,
     files: &[CourseFile],
     archive: &[Item],
     cfg: &SessionConfig,
     observer: &mut dyn FnMut(&CourseEvent),
+    on_learned: &mut OnLearned,
     stop: &AtomicBool,
 ) -> Result<CourseResult, String> {
     let mut current = model.clone();
@@ -137,6 +143,7 @@ pub fn teach_course(
                             if r.learned {
                                 current = r.model;
                                 archive.extend(items);
+                                on_learned(&current, &archive)?;
                             }
                         }
                     }

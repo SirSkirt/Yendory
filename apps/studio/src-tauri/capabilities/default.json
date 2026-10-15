@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Studio window: core APIs and events. File access happens in Rust after a user picks a file.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

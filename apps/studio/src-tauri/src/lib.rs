@@ -1,0 +1,718 @@
+//! Yendory Studio backend: thin Tauri commands over the Yendory Engine. All neural work
+//! (teaching, replies, exams, measurements) is done by `yendory_engine`; this file only manages
+//! files, the models library and the teaching thread.
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, FilePath};
+use tauri_plugin_fs::{FsExt, OpenOptions};
+use yendory_engine::fingerprint::sha256_hex;
+use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileOutcome, FileRecord};
+use yendory_engine::learn::eval::{evaluate, reply, Report};
+use yendory_engine::learn::session::{Event, SessionConfig};
+use yendory_engine::learn::{parse_lesson, Item, Kind};
+use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements};
+
+const MAX_LESSON_BYTES: usize = 8 << 20;
+const MAX_CHECKPOINT_BYTES: usize = 64 << 20;
+
+type Res<T> = Result<T, String>;
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Models library: <app data>/models/<id>/{model.nnova2, meta.json, archive.json, history.jsonl}
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaughtFile {
+    name: String,
+    sha256: String,
+    outcome: FileOutcome,
+    end_step: u64,
+    time: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Meta {
+    id: String,
+    name: String,
+    created: u64,
+    updated: u64,
+    step: u64,
+    parameters: usize,
+    /// Transformer (left), dense (right), interconnect.
+    groups: [usize; 3],
+    words: usize,
+    #[serde(default)]
+    taught: Vec<TaughtFile>,
+    /// Where the model came from: "new", or the imported file's name.
+    #[serde(default)]
+    origin: String,
+}
+
+struct Active {
+    meta: Meta,
+    model: Bicameral,
+    archive: Vec<Item>,
+}
+
+#[derive(Default)]
+struct Studio {
+    active: Mutex<Option<Active>>,
+    lessons: Mutex<Vec<CourseFile>>,
+    teaching: AtomicBool,
+    stop: Arc<AtomicBool>,
+}
+
+fn models_dir(app: &AppHandle) -> Res<PathBuf> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("models");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn model_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Invalid model id".into());
+    }
+    Ok(models_dir(app)?.join(id))
+}
+
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Res<()> {
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
+    meta.step = model.step;
+    meta.parameters = model.parameter_count();
+    meta.groups = [
+        model.group_parameters(Focus::Left),
+        model.group_parameters(Focus::Right),
+        model.group_parameters(Focus::Interconnect),
+    ];
+    meta.words = model.tokenizer.words.len();
+    meta.updated = now();
+}
+
+fn save_all(app: &AppHandle, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
+    let dir = model_dir(app, &meta.id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_atomic(&dir.join("model.nnova2"), &model.to_bytes()?)?;
+    write_atomic(&dir.join("archive.json"), &serde_json::to_vec(archive).map_err(|e| e.to_string())?)?;
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?)
+}
+
+fn load_meta(app: &AppHandle, id: &str) -> Res<Meta> {
+    let bytes = std::fs::read(model_dir(app, id)?.join("meta.json")).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+fn append_history(app: &AppHandle, id: &str, value: serde_json::Value) {
+    if let Ok(dir) = model_dir(app, id) {
+        let _ = yendory_engine::learn::append_jsonl(&dir.join("history.jsonl"), &value);
+    }
+}
+
+fn check_name(name: &str) -> Res<String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Give the model a name of 1 to 60 characters".into());
+    }
+    Ok(name.to_string())
+}
+
+fn new_id() -> String {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("m{nanos:x}")
+}
+
+fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origin: &str) -> Res<Meta> {
+    let mut meta = Meta {
+        id: new_id(),
+        name: check_name(name)?,
+        created: now(),
+        updated: now(),
+        step: 0,
+        parameters: 0,
+        groups: [0; 3],
+        words: 0,
+        taught: Vec::new(),
+        origin: origin.into(),
+    };
+    refresh_meta(&mut meta, &model);
+    save_all(app, &meta, &model, &[])?;
+    *studio.active.lock().unwrap() = Some(Active { meta: meta.clone(), model, archive: Vec::new() });
+    Ok(meta)
+}
+
+fn not_teaching(studio: &Studio) -> Res<()> {
+    if studio.teaching.load(Ordering::Acquire) {
+        return Err("Wait until teaching has finished (or stop it) first".into());
+    }
+    Ok(())
+}
+
+fn with_active<T>(studio: &Studio, f: impl FnOnce(&Active) -> Res<T>) -> Res<T> {
+    let guard = studio.active.lock().unwrap();
+    f(guard.as_ref().ok_or("Open or create a model first")?)
+}
+
+#[tauri::command]
+fn list_models(app: AppHandle) -> Res<Vec<Meta>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(models_dir(&app)?).map_err(|e| e.to_string())? {
+        let id = entry.map_err(|e| e.to_string())?.file_name().to_string_lossy().to_string();
+        if let Ok(meta) = load_meta(&app, &id) {
+            out.push(meta);
+        }
+    }
+    out.sort_by_key(|m| std::cmp::Reverse(m.updated));
+    Ok(out)
+}
+
+#[tauri::command]
+fn create_model(app: AppHandle, studio: State<Studio>, name: String) -> Res<Meta> {
+    not_teaching(&studio)?;
+    let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+    install(&app, &studio, &name, Bicameral::with_config(Config::default(), seed), "new")
+}
+
+#[tauri::command]
+fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
+    not_teaching(&studio)?;
+    let dir = model_dir(&app, &id)?;
+    let meta = load_meta(&app, &id)?;
+    let model = Bicameral::load(dir.join("model.nnova2"))?;
+    let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(_) => Vec::new(),
+    };
+    *studio.active.lock().unwrap() = Some(Active { meta: meta.clone(), model, archive });
+    Ok(meta)
+}
+
+#[tauri::command]
+fn rename_model(app: AppHandle, studio: State<Studio>, id: String, name: String) -> Res<Meta> {
+    let mut meta = load_meta(&app, &id)?;
+    meta.name = check_name(&name)?;
+    let dir = model_dir(&app, &id)?;
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)?;
+    if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == id) {
+        a.meta.name = meta.name.clone();
+    }
+    Ok(meta)
+}
+
+#[tauri::command]
+fn delete_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<()> {
+    not_teaching(&studio)?;
+    let dir = model_dir(&app, &id)?;
+    let mut active = studio.active.lock().unwrap();
+    if active.as_ref().is_some_and(|a| a.meta.id == id) {
+        *active = None;
+    }
+    std::fs::remove_dir_all(dir).map_err(|e| e.to_string())
+}
+
+fn display_name(path: &FilePath) -> String {
+    let raw = path.to_string();
+    let last = raw.rsplit(['/', '\\']).next().unwrap_or(&raw).to_string();
+    // Android content URIs encode the document path ("primary%3ALessons%2F01.txt").
+    let decoded = last.replace("%2F", "/").replace("%3A", ":").replace("%20", " ");
+    decoded.rsplit(['/', ':']).next().unwrap_or(&decoded).to_string()
+}
+
+fn read_picked(app: &AppHandle, path: &FilePath, limit: usize) -> Res<Vec<u8>> {
+    let bytes = app.fs().read(path.clone()).map_err(|e| format!("{}: {e}", display_name(path)))?;
+    if bytes.len() > limit {
+        return Err(format!("{} is larger than {} MB", display_name(path), limit >> 20));
+    }
+    Ok(bytes)
+}
+
+#[tauri::command]
+async fn import_model(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<Meta>> {
+    not_teaching(&studio)?;
+    let Some(path) = app.dialog().file().add_filter("Bicameral checkpoint", &["nnova2"]).blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let bytes = read_picked(&app, &path, MAX_CHECKPOINT_BYTES)?;
+    let model = Bicameral::from_bytes(&bytes)?;
+    let file = display_name(&path);
+    let name = file.trim_end_matches(".nnova2").to_string();
+    install(&app, &studio, if name.trim().is_empty() { "Imported model" } else { &name }, model, &file)
+        .map(Some)
+}
+
+#[tauri::command]
+async fn export_model(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<String>> {
+    let (name, step, bytes) =
+        with_active(&studio, |a| Ok((a.meta.name.clone(), a.model.step, a.model.to_bytes()?)))?;
+    let safe: String =
+        name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("Bicameral checkpoint", &["nnova2"])
+        .set_file_name(format!("{safe}-step{step}.nnova2"))
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    let mut file = app.fs().open(path.clone(), opts).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    // Verify what was written can be read back as the same checkpoint.
+    let written = app.fs().read(path.clone()).map_err(|e| e.to_string())?;
+    if written != bytes {
+        return Err("The exported file does not match the model; try another location".into());
+    }
+    Ok(Some(display_name(&path)))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lessons and teaching
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LessonPreview {
+    name: String,
+    sha256: String,
+    bytes: usize,
+    train: usize,
+    held_out: usize,
+    kinds: Vec<(String, usize)>,
+    error: Option<String>,
+    already_taught: bool,
+}
+
+fn preview(file: &CourseFile, taught: &[TaughtFile]) -> LessonPreview {
+    let sha256 = sha256_hex(file.text.as_bytes());
+    let already_taught = taught.iter().any(|t| t.sha256 == sha256 && t.outcome == FileOutcome::Learned);
+    let mut p = LessonPreview {
+        name: file.name.clone(),
+        sha256,
+        bytes: file.text.len(),
+        train: 0,
+        held_out: 0,
+        kinds: Vec::new(),
+        error: None,
+        already_taught,
+    };
+    match parse_lesson(&file.text, &file.name) {
+        Err(e) => p.error = Some(e),
+        Ok(items) => {
+            p.train = items.iter().filter(|i| !i.held_out).count();
+            p.held_out = items.iter().filter(|i| i.held_out).count();
+            for kind in
+                [Kind::Dialogue, Kind::Understanding, Kind::Conversation, Kind::Reasoning, Kind::Prose]
+            {
+                let n = items.iter().filter(|i| i.kind == kind).count();
+                if n > 0 {
+                    p.kinds.push((kind.name().into(), n));
+                }
+            }
+            if items.iter().all(|i| i.kind == Kind::Prose) {
+                p.error = Some("No lesson blocks with examples were found".into());
+            }
+        }
+    }
+    p
+}
+
+fn text_of(name: &str, bytes: Vec<u8>) -> Res<String> {
+    String::from_utf8(bytes).map_err(|_| format!("{name}: not a text file (lessons must be ASCII text)"))
+}
+
+fn files_from(name: &str, bytes: Vec<u8>) -> Res<Vec<CourseFile>> {
+    if !name.to_ascii_lowercase().ends_with(".zip") {
+        return Ok(vec![CourseFile { name: name.into(), text: text_of(name, bytes)? }]);
+    }
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("{name}: {e}"))?;
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("{name}: {e}"))?;
+        let path = entry.name().to_string();
+        let base = path.rsplit('/').next().unwrap_or(&path).to_string();
+        if entry.is_dir()
+            || path.starts_with("__MACOSX/")
+            || base.starts_with('.')
+            || !base.to_ascii_lowercase().ends_with(".txt")
+        {
+            continue;
+        }
+        if entry.size() as usize > MAX_LESSON_BYTES {
+            return Err(format!("{base} inside {name} is too large"));
+        }
+        let mut data = Vec::new();
+        entry.by_ref().take(MAX_LESSON_BYTES as u64 + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
+        total += data.len();
+        if total > 64 << 20 {
+            return Err(format!("{name} unpacks to more than 64 MB of lessons"));
+        }
+        out.push(CourseFile { name: base.clone(), text: text_of(&base, data)? });
+    }
+    if out.is_empty() {
+        return Err(format!("{name} contains no .txt lesson files"));
+    }
+    Ok(out)
+}
+
+fn lesson_previews(studio: &Studio) -> Vec<LessonPreview> {
+    let taught = studio.active.lock().unwrap().as_ref().map(|a| a.meta.taught.clone()).unwrap_or_default();
+    studio.lessons.lock().unwrap().iter().map(|f| preview(f, &taught)).collect()
+}
+
+#[tauri::command]
+async fn add_lessons(app: AppHandle, studio: State<'_, Studio>) -> Res<Vec<LessonPreview>> {
+    not_teaching(&studio)?;
+    let Some(paths) = app
+        .dialog()
+        .file()
+        .add_filter("Lessons (.txt) or a course (.zip)", &["txt", "zip"])
+        .blocking_pick_files()
+    else {
+        return Ok(lesson_previews(&studio));
+    };
+    let mut added = Vec::new();
+    for path in &paths {
+        let name = display_name(path);
+        let limit = if name.to_ascii_lowercase().ends_with(".zip") { 64 << 20 } else { MAX_LESSON_BYTES };
+        added.extend(files_from(&name, read_picked(&app, path, limit)?)?);
+    }
+    let mut lessons = studio.lessons.lock().unwrap();
+    lessons.extend(added);
+    yendory_engine::learn::course::sort_files(&mut lessons);
+    drop(lessons);
+    Ok(lesson_previews(&studio))
+}
+
+#[tauri::command]
+fn lessons(studio: State<Studio>) -> Vec<LessonPreview> {
+    lesson_previews(&studio)
+}
+
+#[tauri::command]
+fn remove_lesson(studio: State<Studio>, index: Option<usize>) -> Res<Vec<LessonPreview>> {
+    not_teaching(&studio)?;
+    let mut lessons = studio.lessons.lock().unwrap();
+    match index {
+        Some(i) if i < lessons.len() => {
+            lessons.remove(i);
+        }
+        Some(_) => return Err("No such lesson".into()),
+        None => lessons.clear(),
+    }
+    drop(lessons);
+    Ok(lesson_previews(&studio))
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeachOptions {
+    epochs: u32,
+    batch_size: usize,
+    learning_rate: f32,
+    foundation: bool,
+    rehearsal: bool,
+    protect_answers: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeachFinished {
+    files: Vec<FileRecord>,
+    stopped: bool,
+    error: Option<String>,
+    model: Option<Meta>,
+}
+
+#[tauri::command]
+fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()> {
+    if !(1..=50).contains(&options.epochs)
+        || !(1..=128).contains(&options.batch_size)
+        || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
+    {
+        return Err("Choose 1-50 epochs, a batch size of 1-128 and a learning rate up to 0.01".into());
+    }
+    let files = studio.lessons.lock().unwrap().clone();
+    if files.is_empty() {
+        return Err("Add lesson files first".into());
+    }
+    let (meta, model, archive) =
+        with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
+    if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("Already teaching".into());
+    }
+    studio.stop.store(false, Ordering::Release);
+    let cfg = SessionConfig {
+        epochs: options.epochs,
+        batch_size: options.batch_size,
+        learning_rate: options.learning_rate,
+        foundation: options.foundation,
+        rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
+        protect_correct_answers: options.protect_answers,
+        seed: now(),
+        ..SessionConfig::default()
+    };
+    append_history(
+        &app,
+        &meta.id,
+        serde_json::json!({"type": "course_started", "time": now(), "files": files.len(), "options": cfg}),
+    );
+    let stop = studio.stop.clone();
+    std::thread::spawn(move || {
+        let studio = app.state::<Studio>();
+        let id = meta.id.clone();
+        let mut meta_now = meta.clone();
+        let mut observer = |e: &CourseEvent| {
+            let _ = app.emit("teach-event", e);
+            match e {
+                CourseEvent::Session { event: Event::Batch { .. }, .. } => {}
+                CourseEvent::FileFinished(r) => {
+                    meta_now.taught.push(TaughtFile {
+                        name: r.name.clone(),
+                        sha256: r.sha256.clone(),
+                        outcome: r.outcome,
+                        end_step: r.end_step,
+                        time: now(),
+                    });
+                    append_history(&app, &id, serde_json::json!({"time": now(), "event": e}));
+                }
+                _ => append_history(&app, &id, serde_json::json!({"time": now(), "event": e})),
+            }
+        };
+        let saved_meta = Arc::new(Mutex::new(meta.clone()));
+        let saved_for_hook = saved_meta.clone();
+        let mut on_learned = |model: &Bicameral, archive: &[Item]| -> Res<()> {
+            let mut m = saved_for_hook.lock().unwrap();
+            refresh_meta(&mut m, model);
+            save_all(&app, &m, model, archive)?;
+            if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == m.id) {
+                a.model = model.clone();
+                a.archive = archive.to_vec();
+                a.meta = m.clone();
+            }
+            Ok(())
+        };
+        let result = teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop);
+        // Persist the per-file records (learned or not) and the final metadata.
+        let finished = match result {
+            Ok(r) => {
+                let mut m = saved_meta.lock().unwrap().clone();
+                m.taught = meta_now.taught.clone();
+                refresh_meta(&mut m, &r.model);
+                let saved = write_atomic(
+                    &model_dir(&app, &m.id).map(|d| d.join("meta.json")).unwrap_or_default(),
+                    &serde_json::to_vec_pretty(&m).unwrap_or_default(),
+                );
+                if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == m.id) {
+                    a.meta = m.clone();
+                }
+                TeachFinished { files: r.files, stopped: r.stopped, error: saved.err(), model: Some(m) }
+            }
+            Err(e) => TeachFinished { files: Vec::new(), stopped: false, error: Some(e), model: None },
+        };
+        append_history(
+            &app,
+            &id,
+            serde_json::json!({"type": "course_finished", "time": now(), "stopped": finished.stopped, "error": finished.error}),
+        );
+        studio.teaching.store(false, Ordering::Release);
+        let _ = app.emit("teach-finished", &finished);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_teaching(studio: State<Studio>) -> bool {
+    let active = studio.teaching.load(Ordering::Acquire);
+    if active {
+        studio.stop.store(true, Ordering::Release);
+    }
+    active
+}
+
+// ---------------------------------------------------------------------------------------------
+// Talking, exams, brain measurements, history
+// ---------------------------------------------------------------------------------------------
+
+fn clean_message(s: &str) -> Res<String> {
+    let s = s.trim();
+    if s.is_empty() || s.len() > 300 || !s.is_ascii() || s.contains(['\n', '\r']) {
+        return Err("Write a message of 1-300 ASCII characters on one line".into());
+    }
+    Ok(s.to_string())
+}
+
+/// The model's greedy reply. `history` holds earlier (user, model) turns of this conversation.
+#[tauri::command]
+async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message: String) -> Res<String> {
+    let message = clean_message(&message)?;
+    let model = with_active(&studio, |a| Ok(a.model.clone()))?;
+    let mut prompt = String::new();
+    for (user, said) in history.iter().rev().take(6).rev() {
+        prompt.push_str(&format!("U: {}\nN: {}\n", clean_message(user)?, said.replace(['\n', '\r'], " ")));
+    }
+    prompt.push_str(&format!("U: {message}\nN: "));
+    reply(&model, &prompt, 48, Ablation::default())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExamResult {
+    name: String,
+    sha256: String,
+    report: Report,
+    /// Exam questions whose prompt also appears in material this model was taught.
+    seen_before: usize,
+    file_was_taught: bool,
+}
+
+/// Grades every unit of a lesson file (training and held-out alike) as an exam. The file should
+/// be material the model was NOT taught; overlap with taught material is reported.
+#[tauri::command]
+async fn exam(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<ExamResult>> {
+    let Some(path) = app.dialog().file().add_filter("Exam lesson file", &["txt"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    let name = display_name(&path);
+    let text = text_of(&name, read_picked(&app, &path, MAX_LESSON_BYTES)?)?;
+    let items = parse_lesson(&text, &name)?;
+    let (model, archive, taught) =
+        with_active(&studio, |a| Ok((a.model.clone(), a.archive.clone(), a.meta.taught.clone())))?;
+    let questions: Vec<&Item> = items.iter().filter(|i| i.kind != Kind::Prose).collect();
+    if questions.is_empty() {
+        return Err("The exam file has no questions".into());
+    }
+    let known: std::collections::HashSet<&str> = archive.iter().filter_map(|i| i.prompt.as_deref()).collect();
+    let seen_before =
+        questions.iter().filter(|q| q.prompt.as_deref().is_some_and(|p| known.contains(p))).count();
+    let sha256 = sha256_hex(text.as_bytes());
+    let file_was_taught = taught.iter().any(|t| t.sha256 == sha256);
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&Item> = items.iter().filter(|i| i.kind != Kind::Prose).collect();
+        evaluate(&model, &refs, Ablation::default())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(Some(ExamResult { name, sha256, report, seen_before, file_was_taught }))
+}
+
+#[tauri::command]
+async fn measure(studio: State<'_, Studio>, prompt: String) -> Res<Measurements> {
+    let message = clean_message(&prompt)?;
+    let model = with_active(&studio, |a| Ok(a.model.clone()))?;
+    model.measure(&format!("U: {message}\nN: "))
+}
+
+#[tauri::command]
+fn history(app: AppHandle, id: String) -> Res<Vec<serde_json::Value>> {
+    let path = model_dir(&app, &id)?.join("history.jsonl");
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(Vec::new()) };
+    let lines: Vec<&str> = text.lines().collect();
+    Ok(lines[lines.len().saturating_sub(2000)..]
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Status {
+    active: Option<Meta>,
+    teaching: bool,
+    engine: &'static str,
+}
+
+#[tauri::command]
+fn status(studio: State<Studio>) -> Status {
+    Status {
+        active: studio.active.lock().unwrap().as_ref().map(|a| a.meta.clone()),
+        teaching: studio.teaching.load(Ordering::Acquire),
+        engine: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .manage(Studio::default())
+        .invoke_handler(tauri::generate_handler![
+            status,
+            list_models,
+            create_model,
+            open_model,
+            rename_model,
+            delete_model,
+            import_model,
+            export_model,
+            add_lessons,
+            lessons,
+            remove_lesson,
+            teach,
+            stop_teaching,
+            ask,
+            exam,
+            measure,
+            history
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Yendory Studio");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zip_courses_unpack_txt_files_only() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            let opts: zip::write::SimpleFileOptions = Default::default();
+            w.start_file("course/01_a.txt", opts).unwrap();
+            w.write_all(b"[Dialogue Lesson]\n[examples]\nhi  Hello!\n[/examples]\n[/Dialogue Lesson]\n")
+                .unwrap();
+            w.start_file("__MACOSX/course/._01_a.txt", opts).unwrap();
+            w.write_all(b"junk").unwrap();
+            w.start_file("course/readme.md", opts).unwrap();
+            w.write_all(b"not a lesson").unwrap();
+            w.finish().unwrap();
+        }
+        let files = files_from("course.zip", buf.into_inner()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "01_a.txt");
+        let p = preview(&files[0], &[]);
+        assert_eq!(p.kinds, vec![("dialogue".to_string(), 1)]);
+    }
+
+    #[test]
+    fn names_and_messages_are_checked() {
+        assert!(check_name("  ").is_err());
+        assert_eq!(check_name(" Echo ").unwrap(), "Echo");
+        assert!(clean_message("two\nlines").is_err());
+        assert!(clean_message("caf\u{e9}").is_err());
+        assert_eq!(display_name(&FilePath::Path(PathBuf::from("/x/y/01_Basics.txt"))), "01_Basics.txt");
+    }
+}

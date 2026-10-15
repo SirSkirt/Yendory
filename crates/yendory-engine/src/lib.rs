@@ -22,5 +22,7 @@ pub mod learn;
 pub mod model;
 pub mod tokenizer;
 
-pub use model::{Ablation, Bicameral, CacheStats, Config, Focus, KvCache};
+pub use model::{
+    Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, Trace,
+};
 pub use tokenizer::Tokenizer;

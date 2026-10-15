@@ -1,0 +1,185 @@
+/* Yendory Studio — "lab notebook" design. Warm paper, ink, ruled lines, tables over tiles.
+   The brain visualizer keeps Neural Nova's original look inside a framed specimen plate. */
+:root {
+  --paper: #f4eee1;
+  --sheet: #fbf8f0;
+  --ink: #1f1c17;
+  --ink-soft: #5f5749;
+  --rule: #ddd2bd;
+  --rule-strong: #bfae90;
+  --accent: #284a7e;
+  --accent-ink: #fbf8f0;
+  --accent-soft: #e2e7ef;
+  --margin: #b2483d;
+  --good: #2e6a3e;
+  --warn: #8a5a10;
+  --bad: #9a2e28;
+  --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #15130f;
+    --sheet: #1d1a15;
+    --ink: #ece4d2;
+    --ink-soft: #a89e8a;
+    --rule: #342e25;
+    --rule-strong: #4d4436;
+    --accent: #93b2e4;
+    --accent-ink: #15130f;
+    --accent-soft: #232a36;
+    --margin: #c46c60;
+    --good: #7fbf8c;
+    --warn: #d6a45a;
+    --bad: #e08077;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 var(--sans);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+button, input, select { font: inherit; color: inherit; }
+
+/* Masthead */
+.masthead {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 24px;
+  align-items: end;
+  padding: 22px max(16px, calc((100% - 1080px) / 2)) 0;
+  border-bottom: 3px double var(--rule-strong);
+  background: var(--sheet);
+}
+.wordmark { display: flex; align-items: center; gap: 12px; }
+.mark {
+  font: 700 30px/1 var(--serif);
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: 6px;
+}
+.wordmark h1 { margin: 0; font: 600 26px/1.1 var(--serif); letter-spacing: .01em; }
+.motto { margin: 2px 0 0; font: italic 14px var(--serif); color: var(--ink-soft); }
+.current { justify-self: end; text-align: right; font: 14px var(--serif); color: var(--ink-soft); }
+.current b { color: var(--ink); font-weight: 600; }
+.contents { grid-column: 1 / -1; display: flex; gap: 4px; overflow-x: auto; margin-top: 10px; }
+.contents button {
+  background: none; border: 0; border-bottom: 3px solid transparent;
+  padding: 8px 12px 9px; cursor: pointer; font: 16px var(--serif); color: var(--ink-soft);
+  white-space: nowrap;
+}
+.contents button span { font: 12px var(--mono); margin-right: 6px; color: var(--margin); }
+.contents button.active { color: var(--ink); border-bottom-color: var(--accent); }
+.contents button:hover { color: var(--ink); }
+
+/* Pages */
+main { flex: 1; width: 100%; max-width: 1112px; margin: 0 auto; padding: 8px 16px 40px; }
+.page { padding-left: 22px; border-left: 1.5px solid color-mix(in srgb, var(--margin) 55%, transparent); margin-top: 18px; }
+h2 { font: 600 28px/1.2 var(--serif); margin: 10px 0 4px; }
+h2 .sec { color: var(--margin); font-weight: 400; margin-right: 6px; }
+h3 { font: 600 19px var(--serif); margin: 30px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
+h4 { font: 600 15px var(--serif); margin: 18px 0 6px; }
+.lede { font: 17px/1.5 var(--serif); color: var(--ink-soft); max-width: 70ch; margin: 0 0 12px; }
+.note { color: var(--ink-soft); font-size: 13.5px; max-width: 75ch; }
+.empty { color: var(--ink-soft); font-style: italic; }
+.mono, td.num, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Controls */
+button {
+  border: 1px solid var(--rule-strong); background: var(--sheet); color: var(--ink);
+  padding: 7px 14px; border-radius: 4px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.quiet { background: none; border-color: transparent; text-decoration: underline; text-underline-offset: 3px; color: var(--ink-soft); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input, select {
+  border: 0; border-bottom: 1.5px solid var(--rule-strong); background: transparent;
+  padding: 6px 2px; min-width: 0;
+}
+input:focus { border-bottom-color: var(--accent); outline: none; }
+.actions, .line-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+.line-form input { flex: 1 1 200px; }
+.line-form.stacked { flex-direction: column; align-items: stretch; }
+.line-form.stacked input { flex: none; }
+.or { font: italic 14px var(--serif); color: var(--ink-soft); }
+.settings { display: grid; grid-template-columns: repeat(3, minmax(0, 180px)); gap: 10px 24px; align-items: end; }
+.settings label { display: flex; flex-direction: column; font-size: 13px; color: var(--ink-soft); }
+.settings input[type=number] { color: var(--ink); font-family: var(--mono); }
+.settings .check { grid-column: 1 / -1; flex-direction: row; gap: 8px; align-items: baseline; font-size: 14.5px; color: var(--ink); }
+
+/* Tables — the notebook's main device */
+table { border-collapse: collapse; width: 100%; }
+.ledger { margin: 8px 0; font-size: 14px; }
+.ledger th { text-align: left; font: 600 12.5px var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); border-bottom: 1.5px solid var(--rule-strong); padding: 6px 8px; }
+.ledger td { border-bottom: 1px solid var(--rule); padding: 7px 8px; vertical-align: top; }
+.ledger .num { text-align: right; }
+.ledger tr.current-row td { background: var(--accent-soft); }
+.ledger.compact td { padding: 4px 8px; font-size: 13px; }
+.ledger td button { padding: 3px 10px; font-size: 13px; }
+.figures { margin: 6px 0 12px; font-size: 14px; }
+.figures th { text-align: left; font-weight: 400; color: var(--ink-soft); padding: 5px 12px 5px 0; border-bottom: 1px dotted var(--rule); }
+.figures td { font-family: var(--mono); padding: 5px 16px 5px 0; border-bottom: 1px dotted var(--rule); }
+.figures.narrow th { width: 62%; }
+.entry { background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--accent); padding: 4px 18px 12px; margin: 14px 0; }
+.entry h3 { border: 0; margin-top: 12px; }
+.ok { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+.tag { font: 12px var(--mono); padding: 1px 6px; border: 1px solid currentColor; border-radius: 3px; white-space: nowrap; }
+
+.meter { height: 8px; background: var(--rule); border-radius: 0; overflow: hidden; margin: 6px 0; }
+.meter div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+
+/* Conversation */
+.transcript { background: var(--sheet); border: 1px solid var(--rule); min-height: 168px; max-height: 52vh; overflow: auto; padding: 0 16px 28px;
+  background-image: repeating-linear-gradient(transparent 0 27px, var(--rule) 27px 28px); line-height: 28px; }
+.transcript p { margin: 0; }
+.transcript .who { font: 600 13px var(--mono); color: var(--margin); margin-right: 8px; }
+.transcript .model .who { color: var(--accent); }
+
+/* Brain specimen plate (visualizer keeps Neural Nova's original look) */
+.plate-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
+.plate { margin: 0; padding: 14px; background: var(--sheet); border: 1px solid var(--rule-strong); box-shadow: 0 0 0 6px var(--sheet), 0 0 0 7px var(--rule-strong); }
+.plate figcaption { font: italic 14px var(--serif); color: var(--ink-soft); margin-top: 10px; }
+.brain-stage { border: 1px solid #2d3e59; border-radius: 14px; background: radial-gradient(ellipse at center, #192b3f, #0c1423 70%); display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 310px; }
+#hemisphereBrain { width: 100%; height: auto; max-height: 470px; display: block; }
+#leftActivity circle, #rightActivity circle { cursor: crosshair; transition: opacity .2s; }
+.brain-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; color: var(--ink-soft); font-size: 11px; }
+.legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.legend-dot.language { background: #49aafa; } .legend-dot.association { background: #bc8aff; } .legend-dot.bridge { background: #4de0bc; }
+.readings select { width: 100%; margin-bottom: 8px; }
+.readings label { font-size: 13px; color: var(--ink-soft); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chips span.tok { font: 13px var(--mono); padding: 2px 6px; border: 1px solid var(--rule-strong); border-radius: 3px; }
+
+/* Library */
+.record { border-bottom: 1px solid var(--rule); padding: 8px 0; }
+.record summary { cursor: pointer; }
+.record .when { font: 12px var(--mono); color: var(--ink-soft); margin-right: 8px; }
+.record .mono { overflow-wrap: anywhere; }
+
+/* Colophon */
+.colophon { border-top: 3px double var(--rule-strong); background: var(--sheet); padding: 8px max(16px, calc((100% - 1080px) / 2)); font-size: 13px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: space-between; }
+.colophon pre { max-height: 220px; overflow: auto; white-space: pre-wrap; font: 12px var(--mono); }
+#diagnostics.has-errors summary { color: var(--bad); }
+
+@media (max-width: 820px) {
+  .masthead { grid-template-columns: 1fr; }
+  .current { justify-self: start; text-align: left; }
+  .page { padding-left: 12px; }
+  .plate-wrap { grid-template-columns: 1fr; }
+  .settings { grid-template-columns: 1fr 1fr; }
+  .ledger { font-size: 13px; display: block; overflow-x: auto; }
+  .brain-stage { min-height: 205px; }
+  h2 { font-size: 24px; }
+}

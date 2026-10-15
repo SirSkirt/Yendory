@@ -24,6 +24,14 @@ has been checked, how, and what has not.
 | Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 
+## Yendory Studio (apps/studio)
+
+Checked in this development container on Linux (real app under a virtual display): create and
+open models, import a ZIP course through the native file dialog, teach with Foundation candidates
+and live progress, per-file saving and records, conversation, exam grading with taught-material
+warnings, the brain visualizer with live measurements, the Library record; a `.deb` package
+builds. Not checked: the Windows installer and Android APK on real devices (CI builds them).
+
 ## Not verified
 
 - Nothing here has run on Android or in a Windows app. CI builds and tests the library on
