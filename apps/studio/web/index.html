@@ -80,11 +80,13 @@
       <label class="check"><input type="checkbox" id="optFoundation" checked> Foundation: try Dense, Transformer, Interconnect and Joint each epoch and keep the best</label>
       <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
       <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses a held-out answer the model already gives</label>
+      <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson is not learned, retry it 3 times: gentler learning rate, then focused study with 12 epochs, then both with 6 extra epochs</label>
+      <label class="check"><input type="checkbox" id="optRequeue" checked> If it is still not learned, move it to the end of the queue and try again after other lessons</label>
     </div>
     <div class="actions">
       <button type="button" id="teach" class="primary">Teach</button>
       <button type="button" id="stopTeach" disabled>Stop</button>
-      <span class="note" id="teachNote">Foundation training takes about four times as long as Joint-only.</span>
+      <span class="note" id="teachNote">Foundation training takes about four times as long as Joint-only; retries add more time only for lessons that are not learned.</span>
     </div>
 
     <div class="entry" id="progressEntry" hidden>

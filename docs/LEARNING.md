@@ -86,11 +86,31 @@ epoch in progress is discarded.
 | Early stopping | `patience` epochs without selection (default 2) |
 | Rehearsal of archived earlier lessons | ~10% of batch rows from the archive |
 | Autonomous probes: first character, 12-character prefix, self-conditioned likelihood (0.35 weight) | **not ported**: these were character-level measures of the v1 brain. The Engine scores full greedy replies and teacher-forced loss on word-unit tokens. |
-| "First five lessons" foundation counter, adaptive learning rate per attempt (halved rate / extra epochs on retry) | **not ported** yet; Studio can decide when to switch Foundation on or off. The learning rate follows warmup + cosine decay within a session. |
+| Foundation V2 retries: gentler rate, then a changed strategy with 12 epochs, then both with 6 extra epochs | **ported** (`RetryPolicy`, `attempt_config`), plus the lesson moves to the end of the queue if still not learned (see Courses) |
+| "First five lessons" foundation counter | **not ported**; Studio lets the teacher switch Foundation on or off. |
 | Optional user benchmark (Test & Corrections) as a guard | **not ported** yet (Studio Exams, Phase 3) |
 | Synthetic-curriculum rehearsal in `train_lessons.py` | replaced by rehearsal of the owner's own archived lessons |
 
 ## Courses (`learn::course::teach_course`)
+
+**A lesson is never simply skipped.** When no candidate qualifies, the lesson is retried
+(`RetryPolicy`, on by default; Neural Nova's Foundation V2 plan):
+
+| Attempt | Learning rate | Study strategy | Epochs |
+|---|---|---|---|
+| Initial | chosen (e.g. 0.001) | standard: every unit, new random order each epoch | chosen |
+| Retry 1 | chosen × 0.5 (gentler) | standard | chosen |
+| Retry 2 | chosen (restored) | **focused**: question/answer units only, easiest first, new order | 12 |
+| Retry 3 | chosen × 0.25 (gentler again) | focused | chosen + 6 |
+
+Rates below 0.00002 are allowed (floor 0.000001). Every attempt starts from the same accepted
+model and keeps all the session guards; each one is recorded (`AttemptRecord`).
+
+If all attempts fail, the lesson **moves to the end of the queue** (outcome `deferred`) and the
+course continues: a later lesson may teach the skill this one needs. The deferred lesson is
+tried again, with all attempts, once the rest of the queue is done, but only if at least one
+other lesson was learned after it was deferred (otherwise the model is unchanged and the retry
+would repeat the same result). If it is still not learned, the outcome is `kept_previous`.
 
 A course is several lesson files taught in order (for example the files of a ZIP; reading the
 ZIP is the frontend's job, `sort_files` orders by name). For every file the Engine records a
@@ -99,7 +119,8 @@ ZIP is the frontend's job, `sort_files` orders by name). For every file the Engi
 - `sha256` of the exact text taught, and its size, so it is provable which content was taught
   (Nova issue B: "ZIP training repeated the pasted lesson");
 - training and held-out unit counts, `start_step` and `end_step`;
-- the outcome: `learned`, `kept_previous` (no candidate qualified), `duplicate` (same content
+- the attempts, and `pass` (2 when it is the retry after being moved to the end of the queue);
+- the outcome: `learned`, `deferred`, `kept_previous` (not learned after every try), `duplicate` (same content
   as an earlier file; not taught again), `failed` (with the reason, e.g. no held-out units or
   non-ASCII text; the course continues), or `stopped`;
 - the baseline and final scores.

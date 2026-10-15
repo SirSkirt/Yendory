@@ -13,7 +13,7 @@ use tauri_plugin_fs::{FsExt, OpenOptions};
 use yendory_engine::fingerprint::sha256_hex;
 use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileOutcome, FileRecord};
 use yendory_engine::learn::eval::{evaluate, reply, Report};
-use yendory_engine::learn::session::{Event, SessionConfig};
+use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements};
 
@@ -434,6 +434,13 @@ struct TeachOptions {
     foundation: bool,
     rehearsal: bool,
     protect_answers: bool,
+    #[serde(default = "yes")]
+    retries: bool,
+    #[serde(default = "yes")]
+    requeue: bool,
+}
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -470,6 +477,11 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         foundation: options.foundation,
         rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
         protect_correct_answers: options.protect_answers,
+        retry: RetryPolicy {
+            retries: if options.retries { 3 } else { 0 },
+            requeue: options.requeue,
+            ..RetryPolicy::default()
+        },
         seed: now(),
         ..SessionConfig::default()
     };

@@ -73,3 +73,54 @@ fn course_records_every_file() {
     assert_eq!(finished, 4);
     assert!(events.iter().any(|e| matches!(e, CourseEvent::Session { index: 0, .. })));
 }
+
+/// A lesson that cannot be learned gets the initial attempt and three retries (gentler rate,
+/// focused strategy, more epochs), moves to the end of the queue, and finishes as not learned
+/// because nothing else was learned in the meantime. The model is unchanged.
+#[test]
+fn unlearnable_lesson_is_retried_then_deferred() {
+    let model = Bicameral::load(root().join("fixtures/nova2-step15000.nnova2")).unwrap();
+    let text = std::fs::read_to_string(root().join("fixtures/lessons/sample_course_a.txt")).unwrap();
+    let files = vec![CourseFile { name: "01.txt".into(), text }];
+    // An absurd learning rate wrecks every candidate, so every attempt is rejected.
+    let cfg = SessionConfig {
+        epochs: 1,
+        batch_size: 16,
+        learning_rate: 5.0,
+        foundation: false,
+        eval_limit: Some(4),
+        ..SessionConfig::default()
+    };
+    let mut events = Vec::new();
+    let r = teach_course(
+        &model,
+        &files,
+        &[],
+        &cfg,
+        &mut |e| events.push(e.clone()),
+        &mut |_, _| Ok(()),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let attempts: Vec<(u32, f32, u32)> = events
+        .iter()
+        .filter_map(|e| match e {
+            CourseEvent::AttemptStarted { attempt, learning_rate, epochs, .. } => {
+                Some((*attempt, *learning_rate, *epochs))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(attempts, [(0, 5.0, 1), (1, 2.5, 1), (2, 5.0, 12), (3, 1.25, 7)]);
+    let finished: Vec<FileOutcome> = events
+        .iter()
+        .filter_map(|e| if let CourseEvent::FileFinished(f) = e { Some(f.outcome) } else { None })
+        .collect();
+    assert_eq!(finished, [FileOutcome::Deferred, FileOutcome::KeptPrevious]);
+    assert_eq!(r.files.len(), 1);
+    assert_eq!(r.files[0].outcome, FileOutcome::KeptPrevious);
+    assert_eq!(r.files[0].attempts.len(), 4);
+    assert!(r.files[0].attempts.iter().all(|a| !a.learned));
+    assert_eq!(r.model.weights, model.weights);
+    assert!(r.archive.is_empty());
+}

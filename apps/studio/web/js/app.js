@@ -188,8 +188,10 @@ $("teach").addEventListener("click", safe(async () => {
     foundation: $("optFoundation").checked,
     rehearsal: $("optRehearsal").checked,
     protectAnswers: $("optProtect").checked,
+    retries: $("optRetries").checked,
+    requeue: $("optRequeue").checked,
   };
-  progress = { files: lessonsList.length, index: 0, epochs: options.epochs, candidates: options.foundation ? 4 : 1, candidate: 0, epoch: 1 };
+  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: options.foundation ? 4 : 1, candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
@@ -209,10 +211,15 @@ function scoreCell(s) { return s ? `${s.exact_correct}/${s.exact_total}` : "—"
 function onTeachEvent(e) {
   if (e.type === "file_started") {
     progress.index = e.index;
-    fileState[e.index] = el("span", { class: "tag" }, "teaching…");
+    fileState[e.index] = el("span", { class: "tag" }, e.pass > 1 ? "trying again…" : "teaching…");
     renderLessons();
-    $("progressTitle").textContent = `Teaching ${active?.name ?? ""} · lesson ${e.index + 1} of ${e.files}: ${e.name}`;
+    $("progressTitle").textContent = `Teaching ${active?.name ?? ""} · lesson ${e.index + 1} of ${e.files}: ${e.name}${e.pass > 1 ? " (second try, after other lessons)" : ""}`;
     $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("b", {}, `Lesson ${e.index + 1}: ${e.name}`))));
+  } else if (e.type === "attempt_started") {
+    progress.epochs = e.epochs;
+    const what = e.attempt === 0 ? "first attempt" : `retry ${e.attempt} of ${e.attempts - 1}`;
+    progress.attempt = `${what} · rate ${e.learning_rate.toExponential(1)} · ${e.strategy} study · ${e.epochs} epochs`;
+    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note" }, progress.attempt)));
   } else if (e.type === "session") {
     const s = e.event;
     if (s.type === "started") {
@@ -222,8 +229,8 @@ function onTeachEvent(e) {
       progress.candidate = Math.max(0, FOCI.indexOf(s.focus));
       if (progress.candidates === 1) progress.candidate = 0;
       const inFile = (((s.epoch - 1) * progress.candidates + progress.candidate) * s.batches + s.batch) / (progress.epochs * progress.candidates * s.batches);
-      $("progressBar").style.width = (100 * (progress.index + Math.min(1, inFile)) / progress.files).toFixed(1) + "%";
-      $("progressLine").textContent = `epoch ${s.epoch}/${progress.epochs} · ${s.focus} candidate · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)} · learning rate ${s.learning_rate.toExponential(2)}`;
+      $("progressBar").style.width = (100 * Math.min(1, (progress.done + Math.min(1, inFile)) / progress.files)).toFixed(1) + "%";
+      $("progressLine").textContent = `${progress.attempt} — epoch ${s.epoch}/${progress.epochs} · ${s.focus} candidate · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)} · learning rate ${s.learning_rate.toExponential(2)}`;
     } else if (s.type === "candidate") {
       const decision = s.eligible
         ? (s.reasons.length ? el("span", { class: "warn" }, s.reasons.join("; ")) : el("span", { class: "ok" }, "eligible"))
@@ -236,7 +243,7 @@ function onTeachEvent(e) {
         el("td", {}, decision)));
     } else if (s.type === "epoch") {
       for (const c of s.candidates) {
-        const row = $(`cand-${e.index}-${s.epoch}-${c.focus}`);
+        const row = [...document.querySelectorAll(`[id="cand-${e.index}-${s.epoch}-${c.focus}"]`)].pop();
         if (!row) continue;
         if (c.selected) { row.classList.add("current-row"); row.lastChild.replaceChildren(el("b", { class: "ok" }, "selected")); }
         else if (c.eligible && !c.reasons.length) row.lastChild.replaceChildren(el("span", {}, "eligible; another candidate was better"));
@@ -244,14 +251,17 @@ function onTeachEvent(e) {
       log("INFO", `Epoch ${s.epoch}: ${s.selected ? "selected " + s.selected : "no candidate selected"}`);
     }
   } else if (e.type === "file_finished") {
-    const cls = { learned: "ok", kept_previous: "warn", duplicate: "warn", failed: "bad", stopped: "warn" }[e.outcome] || "";
-    const label = { learned: "learned", kept_previous: "kept previous model", duplicate: "duplicate", failed: "not taught", stopped: "stopped" }[e.outcome] || e.outcome;
+    const cls = { learned: "ok", deferred: "warn", kept_previous: "warn", duplicate: "warn", failed: "bad", stopped: "warn" }[e.outcome] || "";
+    const label = { learned: "learned", deferred: "moved to the end of the queue", kept_previous: "not learned; previous model kept", duplicate: "duplicate", failed: "not taught", stopped: "stopped" }[e.outcome] || e.outcome;
+    if (e.outcome !== "deferred") progress.done += 1;
     fileState[e.index] = el("span", { class: cls }, label);
     renderLessons();
     const body = $("courseTable").tBodies[0];
     body.append(el("tr", {},
       el("td", {}, e.name),
-      el("td", {}, el("span", { class: cls }, label), e.error ? el("div", { class: "note" }, e.error) : ""),
+      el("td", {}, el("span", { class: cls }, label),
+        e.attempts?.length ? el("div", { class: "note" }, `${e.attempts.length} attempt(s)${e.pass > 1 ? ", second pass" : ""}: ` + e.attempts.map(a => `${a.learned ? "✓" : "✗"} ${a.strategy} ${a.learning_rate.toExponential(1)} × ${a.epochs_run} ep`).join(" · ")) : "",
+        e.error ? el("div", { class: "note" }, e.error) : ""),
       el("td", { class: "num" }, `${fmt(e.start_step)} → ${fmt(e.end_step)}`),
       el("td", { class: "num" }, `${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}`),
       el("td", { class: "mono", title: e.sha256 }, e.sha256.slice(0, 12))));
@@ -362,7 +372,7 @@ async function loadHistory() {
     if (r.type === "course_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Course started: ${r.files} file(s), ${r.options.epochs} epoch(s), ${r.options.foundation ? "Foundation" : "Joint only"}.`);
     if (r.type === "course_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Course ended with an error: " + r.error) : `Course ${r.stopped ? "stopped" : "finished"}.`);
     if (e?.type === "file_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),
-      el("b", {}, e.name), ` — ${e.outcome.replace("_", " ")}, steps ${fmt(e.start_step)} → ${fmt(e.end_step)}, exact ${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}`, e.error ? ` (${e.error})` : "",
+      el("b", {}, e.name), ` — ${e.outcome.replace("_", " ")}${e.pass > 1 ? " (second pass)" : ""}, steps ${fmt(e.start_step)} → ${fmt(e.end_step)}, exact ${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}, ${e.attempts?.length ?? 0} attempt(s)`, e.error ? ` (${e.error})` : "",
       el("div", { class: "note mono" }, "sha256 " + e.sha256));
     if (e?.type === "session" && e.event.type === "epoch") {
       const ep = e.event;

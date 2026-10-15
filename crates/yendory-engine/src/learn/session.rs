@@ -42,7 +42,71 @@ pub struct SessionConfig {
     pub grow_vocabulary: bool,
     pub min_word_count: usize,
     pub seed: u64,
+    /// How training units are scheduled into batches.
+    #[serde(default)]
+    pub strategy: Strategy,
+    /// What a course does when a lesson is not learned (retries, then later in the queue).
+    #[serde(default)]
+    pub retry: RetryPolicy,
 }
+
+/// How a lesson's training units are scheduled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Strategy {
+    /// Every training unit (including explanation prose), in a new random order each epoch.
+    #[default]
+    Standard,
+    /// Question/answer units only (no prose), easiest (shortest) first: neighbouring units are
+    /// shuffled within small groups so the order still varies between epochs.
+    Focused,
+}
+
+/// Neural Nova's Foundation V2 retry plan, applied by `teach_course` when a lesson is not learned:
+///
+/// | attempt | learning rate | strategy | epochs |
+/// |---|---|---|---|
+/// | initial | chosen rate | standard | chosen |
+/// | retry 1 | rate x 0.5 (gentler) | standard | chosen |
+/// | retry 2 | chosen rate | focused, new order | 12 |
+/// | retry 3 | rate x 0.25 (gentler again) | focused | chosen + 6 |
+///
+/// After the retries, the lesson moves to the end of the queue; it is tried again (all attempts)
+/// once at least one other lesson has been learned since, because a different lesson may teach
+/// the skill it needs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Retries after the initial attempt (0 to 3).
+    pub retries: u32,
+    /// Move a lesson that is still not learned to the end of the queue.
+    pub requeue: bool,
+    /// Lowest learning rate a retry may use.
+    pub min_learning_rate: f32,
+}
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        RetryPolicy { retries: 3, requeue: true, min_learning_rate: 1e-6 }
+    }
+}
+
+/// The settings of attempt `attempt` (0 = initial) under the retry plan.
+pub fn attempt_config(base: &SessionConfig, attempt: u32) -> SessionConfig {
+    let floor = base.retry.min_learning_rate;
+    let (rate, strategy, epochs) = match attempt {
+        0 => (base.learning_rate, base.strategy, base.epochs),
+        1 => (base.learning_rate * 0.5, base.strategy, base.epochs),
+        2 => (base.learning_rate, Strategy::Focused, 12),
+        _ => (base.learning_rate * 0.25, Strategy::Focused, base.epochs + 6),
+    };
+    SessionConfig {
+        learning_rate: rate.max(floor).min(base.learning_rate),
+        strategy,
+        epochs,
+        seed: base.seed.wrapping_add(attempt as u64 * 7919),
+        ..base.clone()
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
@@ -60,6 +124,8 @@ impl Default for SessionConfig {
             grow_vocabulary: true,
             min_word_count: 12,
             seed: 1,
+            strategy: Strategy::Standard,
+            retry: RetryPolicy::default(),
         }
     }
 }
@@ -230,7 +296,10 @@ pub fn teach(
     if cfg.epochs == 0 || cfg.batch_size == 0 || !(cfg.learning_rate > 0. && cfg.learning_rate.is_finite()) {
         return Err("Choose at least one epoch, a batch size and a positive learning rate".into());
     }
-    let train: Vec<&Item> = lesson.iter().filter(|it| !it.held_out).collect();
+    let train: Vec<&Item> = lesson
+        .iter()
+        .filter(|it| !it.held_out && (cfg.strategy == Strategy::Standard || it.kind != Kind::Prose))
+        .collect();
     let heldout: Vec<&Item> = lesson.iter().filter(|it| it.held_out && it.kind != Kind::Prose).collect();
     if train.is_empty() || heldout.is_empty() {
         return Err(
@@ -295,8 +364,21 @@ pub fn teach(
         // One batch plan per epoch, shared by every candidate.
         let mut plan_rng = Rng::new(cfg.seed.wrapping_mul(0x9E37_79B9).wrapping_add(epoch as u64));
         let mut order: Vec<&Item> = train.clone();
-        for i in (1..order.len()).rev() {
-            order.swap(i, plan_rng.below(i + 1));
+        match cfg.strategy {
+            Strategy::Standard => {
+                for i in (1..order.len()).rev() {
+                    order.swap(i, plan_rng.below(i + 1));
+                }
+            }
+            Strategy::Focused => {
+                let size = |it: &Item| it.segments.iter().map(|s| s.text.len()).sum::<usize>();
+                order.sort_by_key(|it| size(it));
+                for group in order.chunks_mut(cfg.batch_size * 2) {
+                    for i in (1..group.len()).rev() {
+                        group.swap(i, plan_rng.below(i + 1));
+                    }
+                }
+            }
         }
         let mut plan: Vec<Vec<Row>> = Vec::with_capacity(batches_per_epoch);
         let mut next = order.into_iter();
