@@ -4,13 +4,20 @@ name: studio-release
 #   Windows  : NSIS setup .exe
 #   Linux    : .deb and .AppImage
 #   Android  : signed .apk (arm64 + armv7 phones)
-# Push a tag like `studio-v0.1.0` to publish a GitHub Release with all of them, or run it by hand
-# from the Actions tab (the installers are then attached to the run as artifacts, and a release
-# is created only if you enter a tag).
+# Push a tag like `studio-v0.1.0` to publish a GitHub Release with all of them. Branch pushes that
+# change the app, and manual runs from the Actions tab, attach the installers to the run as
+# artifacts; a manual run creates a release only if you enter a tag.
 
 on:
   push:
     tags: ["studio-v*"]
+    # Pushes that change the app or the Engine build all installers as artifacts (no release),
+    # so every change is proven to package on Windows, Linux and Android.
+    branches: ["**"]
+    paths:
+      - "apps/studio/**"
+      - "crates/yendory-engine/src/**"
+      - ".github/workflows/studio-release.yml"
   workflow_dispatch:
     inputs:
       tag:
@@ -23,7 +30,7 @@ permissions:
 
 concurrency:
   group: studio-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   check:
