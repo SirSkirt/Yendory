@@ -5,3 +5,4 @@
 *.py text eol=lf
 # Deliberately has Windows line endings (parser test); keep bytes exactly.
 tests/compat/fixtures/lessons/sample_course_b.txt -text
+SHA256SUMS text eol=lf
