@@ -1,6 +1,6 @@
 # Engine status
 
-Phase 1 (one shared Rust Engine with compatibility tests) is under way. This page says what
+Phase 1 (one shared Rust Engine with compatibility tests) is done; Phase 2 (learning in the Engine) is under way. This page says what
 has been checked, how, and what has not.
 
 ## Verified (by `cargo test --release` and `reference/selftest.py`)
@@ -16,6 +16,10 @@ has been checked, how, and what has not.
 | Same: one AdamW step from the stored optimizer state, focus Joint and Right | parameter deltas within 1.1e-4 of the learning rate; with Right focus, the count of untouched parameters matches the reference mask (845,824) up to float32 rounding |
 | `.nnova2` load → save | byte-identical to the original file |
 | Malformed checkpoints (truncated, trailing bytes, bad config, absurd sizes) | return errors, no panic |
+| Lesson pipeline on a synthetic course: parsing, held-out split, vocabulary growth, encoded rows, one batch gradient, held-out greedy replies and preferences | identical to `lessons.py` / `train_lessons.py` |
+| **Owner's 27 lessons**: parsing and split (6,015 units, 666 held out); vocabulary growth from step 15,000 | identical; reproduces the step-19,000 word list exactly (local only) |
+| **Step 19,000 held-out re-score**, all 666 units | dialogue 155/324, understanding 30/54, reasoning 166/264, conversation turns 65/72, prefers supported 77.3%, overall 58.3%: equal to the published report (local only; 24 s in Rust) |
+| Teaching session: four whole-model candidates per epoch from the same accepted model, deterministic for a seed, rollback leaves the model bit-identical, stop discards the epoch in progress | pass |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 
 ## Not verified
@@ -24,7 +28,10 @@ has been checked, how, and what has not.
   Ubuntu and Windows only.
 - Training dynamics over many steps (a long Rust run vs a long reference run). One gradient and
   one optimizer step on real weights are checked.
-- Lesson pipeline, Foundation V2, rehearsal, measurements — not ported yet (Phase 2).
+- A full teaching session on the owner's lessons has not been run end to end (only the
+  synthetic course in tests). Whether Foundation candidates beat Joint-only training on real
+  lessons is an experiment still to run, not a verified claim.
+- Pathway measurements for the visualizer and ZIP course records — not built yet (Phase 2.4/2.5).
 
 ## Findings while porting
 
@@ -42,9 +49,11 @@ has been checked, how, and what has not.
    hemisphere zeroes everything it injects into the left, which is exactly what cutting the
    afferent path does. They always produce identical logits; diagnostics should not present
    them as two independent measurements.
-4. **Lesson parser not carried over yet.** Neural Nova's `unified.rs` depends on the old v1
-   `trainer.rs` / `dialogue.rs`. Rather than carry v1 code, Phase 2 ports the lesson pipeline
-   with `lessons.py` / `train_lessons.py` (step-19,000 package) as the reference behaviour.
+4. **Two lesson parsers existed.** Neural Nova's Bicameral lab trains through the v1
+   `trainer::prepare` (character-level examples, a different held-out split), while the
+   step-19,000 checkpoint was trained with `lessons.py`. The Engine implements `lessons.py`
+   only; v1 code is not carried over. Parity with Nova's Foundation Training is listed in
+   docs/LEARNING.md.
 
 ## Decisions still open
 

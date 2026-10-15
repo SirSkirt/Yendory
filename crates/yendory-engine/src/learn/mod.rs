@@ -3,6 +3,7 @@
 //! `reference/train_lessons.py` (the pipeline that trained the step-19,000 checkpoint).
 pub mod eval;
 pub mod lessons;
+pub mod session;
 
 use crate::model::{Ablation, Bicameral};
 use crate::tokenizer::Tokenizer;
@@ -139,4 +140,15 @@ pub fn batch_loss_and_gradients(
         *g = (*g as f64 / denom) as f32;
     }
     Ok(((loss / denom) as f32, grads))
+}
+
+/// Appends one JSON line to a record file (epoch records, events). Records are plain data for
+/// any frontend; they never feed back into training or inference.
+pub fn append_jsonl(path: &std::path::Path, record: &impl serde::Serialize) -> Result<(), String> {
+    use std::io::Write;
+    let mut line = serde_json::to_vec(record).map_err(|e| e.to_string())?;
+    line.push(b'\n');
+    let mut f =
+        std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    f.write_all(&line).map_err(|e| e.to_string())
 }
