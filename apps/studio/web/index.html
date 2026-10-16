@@ -45,6 +45,11 @@
     </div>
 
     <h3>New model</h3>
+    <p class="note">Every size keeps Nova-2's division of the brain (about 64% transformer, 28.5% dense pathway, 7.7% interconnect) and its tokenizer, context and thinking rounds. Memory is computed from the size; speed is measured on this device when you press Measure.</p>
+    <table class="ledger compact" id="sizeTable">
+      <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">Transformer · dense · interconnect</th><th class="num">File</th><th class="num">Memory: talking · reading · teaching</th><th>Speed on this device</th></tr></thead>
+      <tbody></tbody>
+    </table>
     <div class="line-form">
       <label for="newName">Name</label>
       <input id="newName" maxlength="60" placeholder="e.g. Echo" autocomplete="off">
@@ -55,8 +60,8 @@
 
     <h3>Library of models</h3>
     <table class="ledger" id="modelTable">
-      <thead><tr><th>Name</th><th class="num">Step</th><th class="num">Words</th><th>Updated</th><th></th></tr></thead>
-      <tbody><tr><td colspan="5" class="empty">No models yet. Create one or import a checkpoint.</td></tr></tbody>
+      <thead><tr><th>Name</th><th class="num">Size</th><th class="num">Step</th><th class="num">Words</th><th>Updated</th><th></th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">No models yet. Create one or import a checkpoint.</td></tr></tbody>
     </table>
   </section>
 

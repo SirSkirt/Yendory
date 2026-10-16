@@ -6,7 +6,7 @@ computed by the Engine; the window only displays them.
 
 | Section | What it does |
 |---|---|
-| **1 Models** | Create an untrained model with any name, import a `.nnova2` checkpoint (e.g. Nova), open, rename, delete, export (`.nnova2`, verified after writing). |
+| **1 Models** | Choose a size (Nova-2's 1.2M, 4M, 8M or 15M; all keep Nova-2's 64 / 28.5 / 7.7% division) with its file size and estimated memory for talking, reading and teaching, and measure its training and reply speed on this device. Create an untrained model with any name, import a `.nnova2` checkpoint (e.g. Nova), open, rename, delete, export (`.nnova2`, verified after writing). |
 | **2 Reading** | Pre-train on a text corpus before the lessons: download TinyStories (or the first part of its training file) or use any `.txt` file. One document in ten is held out; only checkpoints that lower the held-out loss are kept, and every check shows a sample written by the model. Corpora are stored in `corpora/` with their fingerprint. |
 | **3 Classroom** | Add lesson files (`.txt`) or a course (`.zip`), see each file's taught / held-out units, then teach with Foundation candidates, rehearsal and answer protection. Live progress shows every candidate of every epoch and why it was or was not selected. The model is saved after every learned file. |
 | **4 Exams** | Talk to the model; grade a lesson file as an exam (flags questions the model was taught). |

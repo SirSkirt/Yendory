@@ -80,13 +80,14 @@ async function refreshModels() {
   const body = $("modelTable").tBodies[0];
   body.replaceChildren();
   if (!models.length) {
-    body.append(el("tr", {}, el("td", { colspan: 5, class: "empty" }, "No models yet. Create one or import a checkpoint.")));
+    body.append(el("tr", {}, el("td", { colspan: 6, class: "empty" }, "No models yet. Create one or import a checkpoint.")));
     return;
   }
   for (const m of models) {
     const isOpen = active?.id === m.id;
     const row = el("tr", { class: isOpen ? "current-row" : "" },
       el("td", {}, m.name),
+      el("td", { class: "num" }, millions(m.parameters)),
       el("td", { class: "num" }, fmt(m.step)),
       el("td", { class: "num" }, fmt(m.words)),
       el("td", {}, when(m.updated)),
@@ -110,13 +111,55 @@ async function deleteModel(m) {
   await refreshModels();
   say(`Deleted ${m.name}.`);
 }
+// ---- model sizes ---------------------------------------------------------------------------
+const millions = n => (n / 1e6).toFixed(n < 1e7 ? 2 : 1) + "M";
+const bytes = n => n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + " GB" : Math.round(n / (1 << 20)) + " MB";
+let sizes = [];
+let chosenSize = "nova2";
+function speedCell(s) {
+  const m = s.measured;
+  const button = el("button", { class: "quiet", onclick: safe(async () => {
+    button.disabled = true;
+    button.textContent = "measuring…";
+    try {
+      s.measured = await invoke("measure_speed", { size: s.id });
+      renderSizes();
+      say(`Measured ${s.name} on this device.`);
+    } finally { button.disabled = false; }
+  }, "Measure speed") }, m ? "measure again" : "Measure");
+  if (!m) return el("td", {}, el("span", { class: "note" }, "not measured "), button);
+  const perMillion = 1e6 / m.training / 60;
+  const reading = perMillion < 90 ? `${Math.ceil(perMillion)} min` : `${(perMillion / 60).toFixed(1)} h`;
+  return el("td", {},
+    el("div", {}, `training ${fmt(Math.round(m.training))} tok/s · replies ${fmt(Math.round(m.generation))} tok/s `, button),
+    el("div", { class: "note", title: `Measured with ${m.threads} threads. Foundation lessons train four candidates, so an epoch takes about 4× as long as Joint-only.` },
+      `reading 1M tokens ≈ ${reading}`));
+}
+function renderSizes() {
+  const body = $("sizeTable").tBodies[0];
+  body.replaceChildren(...sizes.map(s => {
+    const radio = el("input", { type: "radio", name: "modelSize", value: s.id, "aria-label": s.name });
+    radio.checked = s.id === chosenSize;
+    radio.addEventListener("change", () => { chosenSize = s.id; });
+    const share = g => (100 * g / s.parameters).toFixed(1) + "%";
+    return el("tr", { class: s.id === chosenSize ? "current-row" : "" },
+      el("td", {}, radio),
+      el("td", {}, s.name),
+      el("td", { class: "num" }, fmt(s.parameters)),
+      el("td", { class: "num" }, s.groups.map(share).join(" · ")),
+      el("td", { class: "num" }, bytes(s.fileBytes)),
+      el("td", { class: "num" }, [s.chatBytes, s.readingBytes, s.teachingBytes].map(bytes).join(" · ")),
+      speedCell(s));
+  }));
+  body.querySelectorAll("input[name=modelSize]").forEach(r => r.addEventListener("change", renderSizes));
+}
 $("createModel").addEventListener("click", safe(async () => {
   const name = $("newName").value.trim();
   if (!name) { $("newName").focus(); throw new Error("Give the new model a name"); }
-  showActive(await invoke("create_model", { name }));
+  showActive(await invoke("create_model", { name, size: chosenSize }));
   $("newName").value = "";
   await refreshModels();
-  say(`Created ${active.name}: an untrained Bicameral model.`);
+  say(`Created ${active.name}: an untrained Bicameral model with ${fmt(active.parameters)} parameters.`);
 }, "Create model"));
 $("importModel").addEventListener("click", safe(async () => {
   const meta = await invoke("import_model");
@@ -630,6 +673,8 @@ async function boot() {
   const s = await invoke("status");
   showActive(s.active);
   setTeaching(s.teaching);
+  sizes = await invoke("model_sizes");
+  renderSizes();
   await refreshModels();
   await refreshLessons();
   say(`Yendory Studio ${s.engine} · every reply and measurement comes from the model itself.`);

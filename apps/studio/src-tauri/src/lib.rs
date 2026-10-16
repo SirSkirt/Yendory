@@ -14,13 +14,17 @@ use yendory_engine::fingerprint::sha256_hex;
 use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileOutcome, FileRecord};
 use yendory_engine::learn::eval::{evaluate, reply, Report};
 use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
+use yendory_engine::learn::{batch_loss_and_gradients, Row};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
-use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree};
+use yendory_engine::{
+    size_presets, Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree,
+};
 
 mod reading;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
-const MAX_CHECKPOINT_BYTES: usize = 64 << 20;
+/// Large enough for the biggest size preset (16M parameters × 12 bytes + header).
+const MAX_CHECKPOINT_BYTES: usize = 200 << 20;
 
 type Res<T> = Result<T, String>;
 
@@ -193,10 +197,140 @@ fn list_models(app: AppHandle) -> Res<Vec<Meta>> {
 }
 
 #[tauri::command]
-fn create_model(app: AppHandle, studio: State<Studio>, name: String) -> Res<Meta> {
+fn create_model(app: AppHandle, studio: State<Studio>, name: String, size: Option<String>) -> Res<Meta> {
     not_teaching(&studio)?;
+    let config = match size.as_deref() {
+        None => Config::default(),
+        Some(id) => size_presets().into_iter().find(|p| p.id == id).ok_or("Unknown model size")?.config,
+    };
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    install(&app, &studio, &name, Bicameral::with_config(Config::default(), seed), "new")
+    install(&app, &studio, &name, Bicameral::with_config(config, seed), "new")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Model sizes: memory computed from the size, speed measured on this device
+// ---------------------------------------------------------------------------------------------
+
+/// Training and generation speed measured on this device for one size.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Speed {
+    /// Training tokens per second (one batch of 8 × 64 tokens, all threads).
+    training: f64,
+    /// Generated tokens per second (KV-cached greedy replies).
+    generation: f64,
+    threads: usize,
+    time: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SizeInfo {
+    id: &'static str,
+    name: &'static str,
+    parameters: usize,
+    /// Transformer (left), dense (right), interconnect.
+    groups: [usize; 3],
+    /// `.nnova2` file: weights and both Adam moments (12 bytes per parameter).
+    file_bytes: u64,
+    /// Estimated memory while talking, reading a corpus, and teaching lessons.
+    chat_bytes: u64,
+    reading_bytes: u64,
+    teaching_bytes: u64,
+    measured: Option<Speed>,
+}
+
+fn speed_file(app: &AppHandle) -> Res<PathBuf> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("speed.json"))
+}
+
+fn load_speeds(app: &AppHandle) -> std::collections::BTreeMap<String, Speed> {
+    speed_file(app)
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Memory estimates from the parameter count `p`: a model copy (weights + Adam moments) is 12p
+/// bytes and a gradient buffer 4p. Counted from the code paths, including short-lived copies:
+/// talking keeps 2 copies (the open model and the one answering); reading keeps up to 6 (open,
+/// reading thread, working, best, the serialised checkpoint being saved, the open model being
+/// replaced); teaching up to 10 (those plus the course, lesson-start, accepted and candidate
+/// models). Training adds one gradient buffer per thread and two for the batch. Checked: a 15M
+/// model reading peaked at 1.57 GB with 4 threads (estimate 1.37 GB + activations and corpus).
+fn memory(p: usize, threads: usize) -> (u64, u64, u64, u64) {
+    let (copy, grad) = (12 * p as u64, 4 * p as u64);
+    let grads = grad * (threads as u64 + 2);
+    (copy, 2 * copy, 6 * copy + grads, 10 * copy + grads)
+}
+
+#[tauri::command]
+fn model_sizes(app: AppHandle) -> Vec<SizeInfo> {
+    let speeds = load_speeds(&app);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    size_presets()
+        .into_iter()
+        .map(|p| {
+            let m = Bicameral::with_config(p.config, 1);
+            let n = m.parameter_count();
+            let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(n, threads);
+            SizeInfo {
+                id: p.id,
+                name: p.name,
+                parameters: n,
+                groups: [
+                    m.group_parameters(Focus::Left),
+                    m.group_parameters(Focus::Right),
+                    m.group_parameters(Focus::Interconnect),
+                ],
+                file_bytes,
+                chat_bytes,
+                reading_bytes,
+                teaching_bytes,
+                measured: speeds.get(p.id).cloned(),
+            }
+        })
+        .collect()
+}
+
+/// Measures training and generation speed of one size on this device with a temporary model.
+#[tauri::command]
+async fn measure_speed(app: AppHandle, studio: State<'_, Studio>, size: String) -> Res<Speed> {
+    not_teaching(&studio)?;
+    let preset = size_presets().into_iter().find(|p| p.id == size).ok_or("Unknown model size")?;
+    let speed = tauri::async_runtime::spawn_blocking(move || -> Res<Speed> {
+        let m = Bicameral::with_config(preset.config, 1);
+        let text = "U: Where is the key?\nN: The key is in the box under the old table.\n".repeat(3);
+        let ids = m.tokenizer.encode(&text)?;
+        let n = 64.min(ids.len() - 1);
+        let rows: Vec<Row> = (0..8)
+            .map(|r| Row {
+                ids: ids[r..r + n].to_vec(),
+                targets: ids[r + 1..r + n + 1].to_vec(),
+                mask: vec![1.; n],
+            })
+            .collect();
+        batch_loss_and_gradients(&m, &rows[..1], Ablation::default())?;
+        let t = std::time::Instant::now();
+        batch_loss_and_gradients(&m, &rows, Ablation::default())?;
+        let training = (rows.len() * n) as f64 / t.elapsed().as_secs_f64();
+        let prompt = m.tokenizer.encode("U: Where is the key?\nN: ")?;
+        let t = std::time::Instant::now();
+        let mut generated = 0;
+        while t.elapsed().as_secs_f64() < 0.5 {
+            generated += m.generate_cached_ids(&prompt, 24, Ablation::default())?.len();
+        }
+        let generation = generated as f64 / t.elapsed().as_secs_f64();
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        Ok(Speed { training, generation, threads, time: now() })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let mut speeds = load_speeds(&app);
+    speeds.insert(size, speed.clone());
+    write_atomic(&speed_file(&app)?, &serde_json::to_vec_pretty(&speeds).map_err(|e| e.to_string())?)?;
+    Ok(speed)
 }
 
 #[tauri::command]
@@ -717,6 +851,8 @@ pub fn run() {
             status,
             list_models,
             create_model,
+            model_sizes,
+            measure_speed,
             open_model,
             rename_model,
             delete_model,
