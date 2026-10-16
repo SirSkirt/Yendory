@@ -8,6 +8,7 @@ pub mod lessons;
 pub mod session;
 
 use crate::model::{Ablation, Bicameral};
+use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
 pub use lessons::{grow_vocabulary, parse_lesson, Item, Kind, Segment};
 
@@ -52,8 +53,8 @@ pub fn lr_schedule(step: u64, peak: f32, warmup: u64, total: u64, floor: f32) ->
 /// One training sequence: inputs, next-token targets and the loss weight of each target.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    pub ids: Vec<u16>,
-    pub targets: Vec<u16>,
+    pub ids: Vec<TokenId>,
+    pub targets: Vec<TokenId>,
     pub mask: Vec<f32>,
 }
 

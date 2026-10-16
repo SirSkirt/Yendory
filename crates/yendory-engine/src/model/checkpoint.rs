@@ -9,8 +9,13 @@ const MAX_CONFIG_JSON: usize = 8192;
 
 /// Rejects configurations that would panic or allocate absurdly before any weights are read.
 pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
-    let dims = [c.vocab, c.d, c.heads, c.ff, c.blocks, c.window_chars, c.r1, c.r2, c.max_tokens];
-    if dims.iter().any(|&x| x == 0 || x > 1 << 16) || c.loops == 0 || c.loops > 64 {
+    let dims = [c.d, c.heads, c.ff, c.blocks, c.window_chars, c.r1, c.r2, c.max_tokens];
+    if dims.iter().any(|&x| x == 0 || x > 1 << 16)
+        || c.vocab == 0
+        || c.vocab > super::MAX_VOCAB
+        || c.loops == 0
+        || c.loops > 64
+    {
         return Err("Invalid Nova-2 configuration dimensions".into());
     }
     if c.d % c.heads != 0 || (c.d / c.heads) % 2 != 0 || c.split >= c.blocks {
@@ -19,7 +24,8 @@ pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
     if !c.rope_base.is_finite() || c.rope_base <= 0. || !c.gate_bias.is_finite() {
         return Err("Invalid Nova-2 configuration constants".into());
     }
-    // Every dimension is at most 2^16, so these products cannot overflow u64.
+    // The vocabulary is at most 2^28 and every other dimension at most 2^16, so these products
+    // cannot overflow u64.
     let (v, d, ff, b, w, r1, r2) = (
         c.vocab as u64,
         c.d as u64,
@@ -84,7 +90,7 @@ impl Bicameral {
         };
         let n = self.weights.len();
         let mut w =
-            Vec::with_capacity(8 + 4 + config.len() + 8 + 12 * n + 12 + 28 * self.tokenizer.words.len());
+            Vec::with_capacity(8 + 4 + config.len() + 8 + 12 * n + 12 + 28 * self.tokenizer.words().len());
         w.extend_from_slice(MAGIC);
         w.extend_from_slice(&(config.len() as u32).to_le_bytes());
         w.extend_from_slice(&config);
@@ -95,8 +101,8 @@ impl Bicameral {
             }
         }
         w.extend_from_slice(WORDS_MAGIC);
-        w.extend_from_slice(&(self.tokenizer.words.len() as u32).to_le_bytes());
-        for s in &self.tokenizer.words {
+        w.extend_from_slice(&(self.tokenizer.words().len() as u32).to_le_bytes());
+        for s in self.tokenizer.words() {
             w.extend_from_slice(&(s.len() as u32).to_le_bytes());
             w.extend_from_slice(s.as_bytes());
         }
@@ -130,8 +136,8 @@ impl Bicameral {
             return Err("Nova-2 vocabulary trailer missing".into());
         }
         let count = r.u32()? as usize;
-        if count > crate::tokenizer::MAX_WORDS {
-            return Err("Invalid learned-word count".into());
+        if count > model.word_capacity() {
+            return Err("The checkpoint has more learned words than its vocabulary holds".into());
         }
         for _ in 0..count {
             let n = r.u32()? as usize;
@@ -139,7 +145,7 @@ impl Bicameral {
                 return Err("Invalid learned-word length".into());
             }
             let word = String::from_utf8(r.take(n)?.to_vec()).map_err(|e| e.to_string())?;
-            model.tokenizer.words.push(word);
+            model.tokenizer.push_word(word);
         }
         model.tokenizer.validate()?;
         if r.pos != data.len() {
@@ -188,8 +194,10 @@ mod tests {
 
     #[test]
     fn round_trip_fresh_model() {
-        let mut m = Bicameral::with_config(small(), 7);
+        // Room for the 3 learned words (ids 128..130) next to the 128 characters.
+        let mut m = Bicameral::with_config(Config { vocab: 131, ..small() }, 7);
         m.tokenizer.grow_from_corpus("Mira opens a box. Mira opens the box.");
+        assert_eq!(m.tokenizer.words().len(), 3);
         m.step = 42;
         let bytes = m.to_bytes().unwrap();
         let back = Bicameral::from_bytes(&bytes).unwrap();

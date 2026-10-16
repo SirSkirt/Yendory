@@ -40,6 +40,10 @@ pub struct SessionConfig {
     pub protect_correct_answers: bool,
     /// Grow learned word units from this lesson's training text (ids stay stable).
     pub grow_vocabulary: bool,
+    /// Vocabulary limit (learned word units). `None`: the model's allocated slots. A larger
+    /// limit adds slots as words are learned, so the model never carries unused ones.
+    #[serde(default)]
+    pub word_limit: Option<usize>,
     pub min_word_count: usize,
     pub seed: u64,
     /// How training units are scheduled into batches.
@@ -109,6 +113,7 @@ impl Default for SessionConfig {
             retention_panel: 8,
             protect_correct_answers: true,
             grow_vocabulary: true,
+            word_limit: None,
             min_word_count: 12,
             seed: 1,
             strategy: Strategy::Standard,
@@ -346,11 +351,13 @@ pub fn teach_with(
     let mut start = model.clone();
     let mut new_words = 0;
     if cfg.grow_vocabulary {
-        let words =
-            grow_vocabulary(&start.tokenizer.words, lesson, crate::tokenizer::MAX_WORDS, cfg.min_word_count);
-        let words: Vec<String> = words.into_iter().take(start.config.vocab.saturating_sub(128)).collect();
-        new_words = words.len() - start.tokenizer.words.len();
-        start.tokenizer.words = words;
+        let limit = cfg.word_limit.unwrap_or(start.word_capacity()).max(start.tokenizer.words().len());
+        let words = grow_vocabulary(start.tokenizer.words(), lesson, limit, cfg.min_word_count);
+        new_words = words.len() - start.tokenizer.words().len();
+        if words.len() > start.word_capacity() {
+            start = start.with_word_capacity(words.len(), cfg.seed ^ 0x5EED)?;
+        }
+        start.tokenizer.set_words(words);
     }
 
     let mut rng = Rng::new(cfg.seed);

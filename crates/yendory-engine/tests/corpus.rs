@@ -63,10 +63,10 @@ fn reading_lowers_held_out_loss_and_keeps_the_best_checkpoint() {
     .unwrap();
     assert!(r.accepted);
     assert!(r.best_loss < r.baseline_loss - 0.5, "{} -> {}", r.baseline_loss, r.best_loss);
-    assert!(r.new_words > 0 && r.model.tokenizer.words.len() <= 192);
-    assert!(r.model.tokenizer.words.contains(&"named".to_string()));
+    assert!(r.new_words > 0 && r.model.tokenizer.words().len() <= 192);
+    assert!(r.model.tokenizer.words().contains(&"named".to_string()));
     // Names are kept character-level, like in lessons.
-    assert!(!r.model.tokenizer.words.contains(&"Lily".to_string()));
+    assert!(!r.model.tokenizer.words().contains(&"Lily".to_string()));
     let accepted: Vec<_> = r.evaluations.iter().filter(|e| e.accepted).collect();
     assert_eq!(saved.len(), accepted.len());
     let last = accepted.last().unwrap();

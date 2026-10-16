@@ -6,6 +6,7 @@ use yendory_engine::learn::eval::{evaluate, Report};
 use yendory_engine::learn::{
     batch_loss_and_gradients, encode_item, grow_vocabulary, parse_lesson, Item, Rng,
 };
+use yendory_engine::TokenId;
 use yendory_engine::{Ablation, Bicameral};
 
 fn root() -> PathBuf {
@@ -33,8 +34,8 @@ fn opt(v: &Value) -> Option<String> {
 fn strings(v: &Value) -> Vec<String> {
     v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
 }
-fn u16s(v: &Value) -> Vec<u16> {
-    v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u16).collect()
+fn u16s(v: &Value) -> Vec<TokenId> {
+    v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as TokenId).collect()
 }
 
 fn check_items(items: &[Item], want: &Value) {
@@ -67,13 +68,13 @@ fn check_pipeline(lessons: &Path, expected: &Path) -> (Bicameral, Vec<Item>, Val
     check_items(&items, &want["items"]);
 
     let model = Bicameral::load(root().join("fixtures/nova2-step15000.nnova2")).unwrap();
-    assert_eq!(model.tokenizer.words.len() as u64, want["words_before"].as_u64().unwrap());
+    assert_eq!(model.tokenizer.words().len() as u64, want["words_before"].as_u64().unwrap());
     let min_count = want["min_count"].as_u64().unwrap() as usize;
-    let words = grow_vocabulary(&model.tokenizer.words, &items, 256, min_count);
+    let words = grow_vocabulary(model.tokenizer.words(), &items, 256, min_count);
     assert_eq!(words, strings(&want["words"]), "grown vocabulary");
 
     let mut grown = model.clone();
-    grown.tokenizer.words = words;
+    grown.tokenizer.set_words(words);
     let max = grown.config.max_tokens;
     let train: Vec<&Item> = items.iter().filter(|it| !it.held_out).collect();
     let mut rng = Rng::new(1);
@@ -142,7 +143,7 @@ fn all_lessons_match_reference_when_present() {
     let (_, items, want) = check_pipeline(&lessons, &expected);
     let step19000 = Bicameral::load(&ckpt).unwrap();
     assert_eq!(
-        step19000.tokenizer.words,
+        step19000.tokenizer.words(),
         strings(&want["words"]),
         "vocabulary growth reproduces step 19,000"
     );

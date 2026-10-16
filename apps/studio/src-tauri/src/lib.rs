@@ -17,7 +17,7 @@ use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{batch_loss_and_gradients, Row};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::{
-    size_presets, Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree,
+    size_presets, Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree, TokenId,
 };
 
 mod reading;
@@ -115,7 +115,7 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
         model.group_parameters(Focus::Right),
         model.group_parameters(Focus::Interconnect),
     ];
-    meta.words = model.tokenizer.words.len();
+    meta.words = model.tokenizer.words().len();
     meta.updated = now();
 }
 
@@ -802,7 +802,7 @@ async fn think(studio: State<'_, Studio>, prompt: String) -> Res<ThinkingTree> {
 /// Brain-scan measurements of one step of a thinking tree: the forward pass that read the
 /// prompt and the first `prefix` generated tokens.
 #[tauri::command]
-async fn measure_step(studio: State<'_, Studio>, prompt: String, prefix: Vec<u16>) -> Res<Measurements> {
+async fn measure_step(studio: State<'_, Studio>, prompt: String, prefix: Vec<TokenId>) -> Res<Measurements> {
     let message = clean_message(&prompt)?;
     if prefix.len() > 256 {
         return Err("Too many generated tokens".into());

@@ -9,6 +9,7 @@ mod linalg;
 mod measure;
 mod tape;
 mod think;
+pub use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
 pub use cache::{CacheStats, GateTrace, KvCache, StageTrace, Trace};
 pub use measure::{AblationEffects, Measurements};
@@ -17,9 +18,13 @@ use std::collections::HashMap;
 use std::ops::Range;
 pub use think::{Branch, Choice, Readout, ThinkOptions, ThinkingTree, ThoughtStep};
 
-/// Largest model the Engine creates or loads (the 15M size preset fits with room to spare).
-/// Checkpoints describing a bigger model are refused before anything is allocated.
-pub const MAX_PARAMETERS: usize = 16_000_000;
+/// Largest model the Engine creates or loads (1 billion parameters: 12 GB with the optimizer
+/// state). A large vocabulary counts too: every word slot is one embedding row (`d` values)
+/// plus an output bias. Checkpoints describing a bigger model are refused before anything is
+/// allocated.
+pub const MAX_PARAMETERS: usize = 1_000_000_000;
+/// Largest vocabulary (token ids, including the 128 characters) a configuration may declare.
+pub const MAX_VOCAB: usize = 1 << 28;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub vocab: usize,
@@ -233,6 +238,44 @@ impl Bicameral {
     pub fn parameters_for(config: &Config) -> usize {
         spec(config).last().map(|s| s.range.end).unwrap_or(0)
     }
+    /// Whether a configuration is valid and within the Engine's limits (the same check a
+    /// checkpoint passes before it is loaded). Call it before `with_config` for user choices.
+    pub fn check_config(config: &Config) -> Result<(), String> {
+        checkpoint::validate_config(config)
+    }
+    /// How many learned word units this model's vocabulary holds (`vocab` minus the 128
+    /// character ids).
+    pub fn word_capacity(&self) -> usize {
+        self.config.vocab.saturating_sub(crate::tokenizer::BASE)
+    }
+    /// The same model with room for `words` learned word units: existing weights, optimizer
+    /// state, step and words are kept; new word slots get fresh embedding rows (initialised like
+    /// a new model's) and a zero output bias. Shrinking is allowed down to the words in use.
+    pub fn with_word_capacity(&self, words: usize, seed: u64) -> Result<Bicameral, String> {
+        if words < self.tokenizer.words().len() {
+            return Err(format!(
+                "The model already uses {} word units; the vocabulary cannot be smaller than that",
+                self.tokenizer.words().len()
+            ));
+        }
+        let config = Config { vocab: crate::tokenizer::BASE + words, ..self.config.clone() };
+        checkpoint::validate_config(&config)?;
+        let mut out = Bicameral::with_config(config, seed);
+        out.momentum.fill(0.);
+        out.variance.fill(0.);
+        for slot in &self.slots {
+            let new = out.slot(&slot.name).range.clone();
+            // Rows of `embed` and entries of `out_bias` are word ids: copy the ids both have.
+            let n = slot.range.len().min(new.len());
+            let (src, dst) = (slot.range.start..slot.range.start + n, new.start..new.start + n);
+            out.weights[dst.clone()].copy_from_slice(&self.weights[src.clone()]);
+            out.momentum[dst.clone()].copy_from_slice(&self.momentum[src.clone()]);
+            out.variance[dst].copy_from_slice(&self.variance[src]);
+        }
+        out.step = self.step;
+        out.tokenizer = self.tokenizer.clone();
+        Ok(out)
+    }
     pub fn parameter_count(&self) -> usize {
         self.weights.len()
     }
@@ -302,7 +345,14 @@ impl Bicameral {
         let fused = t.mul(gate, zproj);
         t.add(h, fused)
     }
-    fn forward(&self, t: &mut tape::Tape, ids: &[u16], feats: Vec<f32>, abl: Ablation) -> usize {
+    fn forward(&self, t: &mut tape::Tape, ids: &[TokenId], feats: Vec<f32>, abl: Ablation) -> usize {
+        let h = self.forward_hidden(t, ids, feats, abl);
+        let embed = self.param(t, "embed");
+        let bias = self.param(t, "out_bias");
+        t.linear(h, embed, Some(bias), self.config.d, self.config.vocab)
+    }
+    /// Everything up to the output layer: the final normalised left state of every position.
+    fn forward_hidden(&self, t: &mut tape::Tape, ids: &[TokenId], feats: Vec<f32>, abl: Ablation) -> usize {
         let c = &self.config;
         let tok = ids.iter().map(|&v| v as usize).collect::<Vec<_>>();
         let embed = self.param(t, "embed");
@@ -329,11 +379,9 @@ impl Bicameral {
                 z2 = self.efferent(t, z1, h, abl);
             }
         }
-        let h = self.norm(t, h, "ln_f");
-        let bias = self.param(t, "out_bias");
-        t.linear(h, embed, Some(bias), c.d, c.vocab)
+        self.norm(t, h, "ln_f")
     }
-    pub fn features(&self, ids: &[u16]) -> Result<Vec<f32>, String> {
+    pub fn features(&self, ids: &[TokenId]) -> Result<Vec<f32>, String> {
         let c = &self.config;
         let mut decoded = Vec::new();
         let mut out = Vec::with_capacity(ids.len() * c.window_chars * 16);
@@ -341,7 +389,7 @@ impl Bicameral {
             if (id as usize) < 128 {
                 decoded.push(id as u8);
             } else {
-                let w = self.tokenizer.words.get(id as usize - 128).ok_or("Unknown word token")?;
+                let w = self.tokenizer.words().get(id as usize - 128).ok_or("Unknown word token")?;
                 decoded.extend_from_slice(w.as_bytes());
             }
             let recent = &decoded[decoded.len().saturating_sub(c.window_chars)..];
@@ -366,7 +414,7 @@ impl Bicameral {
         }
         Ok(out)
     }
-    pub fn logits(&self, ids: &[u16], abl: Ablation) -> Result<Vec<f32>, String> {
+    pub fn logits(&self, ids: &[TokenId], abl: Ablation) -> Result<Vec<f32>, String> {
         if ids.is_empty() {
             return Err("Nova-2 expects at least one token".into());
         }
@@ -378,7 +426,7 @@ impl Bicameral {
     }
     pub fn logits_with_features(
         &self,
-        ids: &[u16],
+        ids: &[TokenId],
         features: &[f32],
         abl: Ablation,
     ) -> Result<Vec<f32>, String> {
@@ -392,11 +440,11 @@ impl Bicameral {
         let node = self.forward(&mut t, ids, features.to_vec(), abl);
         Ok(t.values(node).to_vec())
     }
-    pub fn predict(&self, ids: &[u16], abl: Ablation) -> Result<Vec<f32>, String> {
+    pub fn predict(&self, ids: &[TokenId], abl: Ablation) -> Result<Vec<f32>, String> {
         let z = self.logits(ids, abl)?;
         let last = &z[z.len() - self.config.vocab..];
         let mut p = last.to_vec();
-        let valid = (128 + self.tokenizer.words.len()).min(self.config.vocab);
+        let valid = (128 + self.tokenizer.words().len()).min(self.config.vocab);
         for item in p.iter_mut().skip(valid) {
             *item = f32::NEG_INFINITY;
         }
@@ -413,8 +461,8 @@ impl Bicameral {
     }
     pub fn loss_and_gradients(
         &self,
-        ids: &[u16],
-        targets: &[u16],
+        ids: &[TokenId],
+        targets: &[TokenId],
         mask: &[f32],
         abl: Ablation,
     ) -> Result<(f32, Vec<f32>), String> {
@@ -433,9 +481,9 @@ impl Bicameral {
     }
     pub fn loss_and_gradients_with_features(
         &self,
-        ids: &[u16],
+        ids: &[TokenId],
         features: &[f32],
-        targets: &[u16],
+        targets: &[TokenId],
         mask: &[f32],
         abl: Ablation,
     ) -> Result<(f32, Vec<f32>), String> {
@@ -455,8 +503,8 @@ impl Bicameral {
     /// (one buffer reused across rows) and returns the row's loss.
     pub fn accumulate_loss_and_gradients(
         &self,
-        ids: &[u16],
-        targets: &[u16],
+        ids: &[TokenId],
+        targets: &[TokenId],
         mask: &[f32],
         abl: Ablation,
         grads: &mut [f32],
@@ -478,18 +526,19 @@ impl Bicameral {
     }
     fn add_gradients(
         &self,
-        ids: &[u16],
+        ids: &[TokenId],
         features: Vec<f32>,
-        targets: &[u16],
+        targets: &[TokenId],
         mask: &[f32],
         abl: Ablation,
         grads: &mut [f32],
         scale: f32,
     ) -> f32 {
         let mut t = tape::Tape::new(&self.weights, Some(grads));
-        let logits = self.forward(&mut t, ids, features, abl);
+        let h = self.forward_hidden(&mut t, ids, features, abl);
         let targets = targets.iter().map(|&v| v as usize).collect::<Vec<_>>();
-        let loss = t.xent(logits, &targets, mask, self.config.vocab);
+        let (embed, bias) = (self.param(&mut t, "embed"), self.param(&mut t, "out_bias"));
+        let loss = t.head_xent(h, embed, bias, self.config.d, self.config.vocab, &targets, mask);
         let value = t.values(loss)[0];
         t.backward(loss, scale);
         value
@@ -523,8 +572,8 @@ impl Bicameral {
     }
     pub fn train_sequence(
         &mut self,
-        ids: &[u16],
-        targets: &[u16],
+        ids: &[TokenId],
+        targets: &[TokenId],
         mask: &[f32],
         rate: f32,
         focus: Focus,
@@ -546,6 +595,31 @@ impl Bicameral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fused_output_layer_equals_linear_then_cross_entropy() {
+        let mut m = Bicameral::new();
+        m.tokenizer.set_words(vec!["the".into(), "key".into(), "box".into()]);
+        for _ in 0..2 {
+            m.train_text("U: Where is the key?\nN: In the box.\n", 1e-2, Focus::Joint).unwrap();
+        }
+        let ids =
+            m.tokenizer.encode("U: The key is in the box. Where is the key?\nN: In the box.\n").unwrap();
+        let (x, y) = (&ids[..ids.len() - 1], &ids[1..]);
+        let mask: Vec<f32> = (0..x.len()).map(|i| if i % 3 == 0 { 0.15 } else { 1. }).collect();
+        let feats = m.features(x).unwrap();
+        let (fused, gf) = m.loss_and_gradients(x, y, &mask, Ablation::default()).unwrap();
+        let mut gu = vec![0f32; m.weights.len()];
+        let mut t = tape::Tape::new(&m.weights, Some(&mut gu));
+        let logits = m.forward(&mut t, x, feats, Ablation::default());
+        let targets: Vec<usize> = y.iter().map(|&v| v as usize).collect();
+        let loss = t.xent(logits, &targets, &mask, m.config.vocab);
+        let unfused = t.values(loss)[0];
+        t.backward(loss, 1.);
+        assert!((fused - unfused).abs() < 1e-5, "{fused} vs {unfused}");
+        let scale = gu.iter().fold(0f32, |a, g| a.max(g.abs()));
+        let worst = gf.iter().zip(&gu).fold(0f32, |a, (p, q)| a.max((p - q).abs()));
+        assert!(worst <= 1e-5 * scale, "gradient difference {worst} (largest {scale})");
+    }
     #[test]
     fn size_and_groups() {
         let m = Bicameral::new();

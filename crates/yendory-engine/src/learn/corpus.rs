@@ -10,6 +10,7 @@
 use super::lessons::{grow_vocabulary_from_texts, is_held_out};
 use super::{batch_loss_and_gradients, lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
+use crate::tokenizer::TokenId;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -137,9 +138,13 @@ pub struct PretrainConfig {
     pub min_loss_improvement: f32,
     /// Stop after this many evaluations in a row without an accepted checkpoint.
     pub patience: usize,
-    /// Learn word units from the corpus, up to `max_words` in total (leave room for lessons).
+    /// Learn word units from the corpus, up to `max_words` in total across all sessions
+    /// (leave room for lessons); never more than the model's vocabulary holds.
     pub grow_vocabulary: bool,
     pub max_words: usize,
+    /// Vocabulary limit (learned word units). `None`: the model's allocated slots. A larger
+    /// limit adds slots as words are learned (`max_words` still caps what reading adds).
+    pub word_limit: Option<usize>,
     pub min_word_count: usize,
     pub seed: u64,
 }
@@ -157,6 +162,7 @@ impl Default for PretrainConfig {
             patience: 4,
             grow_vocabulary: true,
             max_words: 192,
+            word_limit: None,
             min_word_count: 12,
             seed: 1,
         }
@@ -221,10 +227,10 @@ pub struct PretrainResult {
 }
 
 /// Encodes documents into one token stream, each document followed by a blank line.
-fn encode_stream(model: &Bicameral, docs: &[String]) -> Result<Vec<u16>, String> {
+fn encode_stream(model: &Bicameral, docs: &[String]) -> Result<Vec<TokenId>, String> {
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).max(1);
     let chunk = docs.len().div_ceil(threads).max(1);
-    let parts: Vec<Result<Vec<u16>, String>> = std::thread::scope(|scope| {
+    let parts: Vec<Result<Vec<TokenId>, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = docs
             .chunks(chunk)
             .map(|part| {
@@ -232,7 +238,7 @@ fn encode_stream(model: &Bicameral, docs: &[String]) -> Result<Vec<u16>, String>
                     let mut out = Vec::new();
                     for d in part {
                         out.extend(model.tokenizer.encode(d)?);
-                        out.extend([b'\n' as u16, b'\n' as u16]);
+                        out.extend([b'\n' as TokenId, b'\n' as TokenId]);
                     }
                     Ok(out)
                 })
@@ -250,13 +256,13 @@ fn encode_stream(model: &Bicameral, docs: &[String]) -> Result<Vec<u16>, String>
     Ok(stream)
 }
 
-fn window_row(stream: &[u16], start: usize, len: usize) -> Row {
+fn window_row(stream: &[TokenId], start: usize, len: usize) -> Row {
     let w = &stream[start..start + len + 1];
     Row { ids: w[..len].to_vec(), targets: w[1..].to_vec(), mask: vec![1.; len] }
 }
 
 /// Fixed, evenly spaced held-out windows (the same ones at every evaluation).
-fn eval_rows(stream: &[u16], window: usize, count: usize) -> Vec<Row> {
+fn eval_rows(stream: &[TokenId], window: usize, count: usize) -> Vec<Row> {
     if stream.len() < 2 {
         return Vec::new();
     }
@@ -318,15 +324,19 @@ pub fn pretrain(
     let mut current = model.clone();
     let mut new_words = 0;
     if cfg.grow_vocabulary {
-        let cap = cfg.max_words.min(crate::tokenizer::MAX_WORDS).max(current.tokenizer.words.len());
+        let limit = cfg.word_limit.unwrap_or(current.word_capacity());
+        let cap = cfg.max_words.min(limit).max(current.tokenizer.words().len());
         let words = grow_vocabulary_from_texts(
-            &current.tokenizer.words,
+            current.tokenizer.words(),
             corpus.train.iter().map(String::as_str),
             cap,
             cfg.min_word_count,
         );
-        new_words = words.len() - current.tokenizer.words.len();
-        current.tokenizer.words = words;
+        new_words = words.len() - current.tokenizer.words().len();
+        if words.len() > current.word_capacity() {
+            current = current.with_word_capacity(words.len(), cfg.seed ^ 0x5EED)?;
+        }
+        current.tokenizer.set_words(words);
     }
     let window = cfg.window.min(current.config.max_tokens);
     let train = encode_stream(&current, &corpus.train)?;

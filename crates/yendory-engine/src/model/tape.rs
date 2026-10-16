@@ -5,16 +5,75 @@ use std::collections::HashMap;
 #[derive(Clone)]
 enum Op {
     Input,
-    Embed { table: usize, ids: Vec<usize>, d: usize },
-    Linear { input: usize, weight: usize, bias: Option<usize>, rows: usize, cols: usize, out: usize },
-    Add { a: usize, b: usize },
-    Mul { a: usize, b: usize },
-    Silu { src: usize },
-    Sigmoid { src: usize },
-    Norm { src: usize, gain: usize, cols: usize },
-    Rope { src: usize, heads: usize, dim: usize, base: f32 },
-    Attention { q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize, probs: Vec<f32> },
-    Xent { logits: usize, targets: Vec<usize>, mask: Vec<f32>, vocab: usize, probs: Vec<f32>, denom: f32 },
+    Embed {
+        table: usize,
+        ids: Vec<usize>,
+        d: usize,
+    },
+    Linear {
+        input: usize,
+        weight: usize,
+        bias: Option<usize>,
+        rows: usize,
+        cols: usize,
+        out: usize,
+    },
+    Add {
+        a: usize,
+        b: usize,
+    },
+    Mul {
+        a: usize,
+        b: usize,
+    },
+    Silu {
+        src: usize,
+    },
+    Sigmoid {
+        src: usize,
+    },
+    Norm {
+        src: usize,
+        gain: usize,
+        cols: usize,
+    },
+    Rope {
+        src: usize,
+        heads: usize,
+        dim: usize,
+        base: f32,
+    },
+    Attention {
+        q: usize,
+        k: usize,
+        v: usize,
+        t: usize,
+        d: usize,
+        heads: usize,
+        probs: Vec<f32>,
+    },
+    /// Unfused cross-entropy, kept to test [`Op::HeadXent`] against.
+    #[cfg(test)]
+    Xent {
+        logits: usize,
+        targets: Vec<usize>,
+        mask: Vec<f32>,
+        vocab: usize,
+        probs: Vec<f32>,
+        denom: f32,
+    },
+    /// Output layer + cross-entropy in one step: logits are computed a few rows at a time and
+    /// recomputed in the backward pass, so memory does not grow with rows × vocabulary.
+    HeadXent {
+        h: usize,
+        embed: usize,
+        bias: usize,
+        d: usize,
+        vocab: usize,
+        targets: Vec<usize>,
+        mask: Vec<f32>,
+        denom: f32,
+    },
 }
 #[derive(Clone)]
 struct Node {
@@ -193,6 +252,7 @@ impl<'a> Tape<'a> {
         }
         self.node(output, Op::Attention { q, k, v, t, d, heads, probs: p })
     }
+    #[cfg(test)]
     pub(crate) fn xent(&mut self, logits: usize, targets: &[usize], mask: &[f32], vocab: usize) -> usize {
         let vals = &self.nodes[logits].values;
         assert_eq!(vals.len(), targets.len() * vocab);
@@ -215,6 +275,53 @@ impl<'a> Tape<'a> {
         self.node(
             vec![loss],
             Op::Xent { logits, targets: targets.to_vec(), mask: mask.to_vec(), vocab, probs: p, denom },
+        )
+    }
+    /// Rows of logits computed at once by [`Tape::head_xent`] (about 4M floats per chunk).
+    fn head_chunk(vocab: usize) -> usize {
+        ((4 << 20) / vocab.max(1)).clamp(1, 64)
+    }
+    /// Softmax of one row of logits in place (the same steps as [`Tape::xent`]).
+    fn softmax_row(z: &mut [f32]) {
+        let max = z.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut sum = 0.;
+        for v in z.iter_mut() {
+            *v = (*v - max).exp();
+            sum += *v;
+        }
+        for v in z.iter_mut() {
+            *v /= sum;
+        }
+    }
+    /// Mean cross-entropy of `h · embedᵀ + bias` (the tied output layer), without keeping the
+    /// rows × vocabulary logits: equal to `linear` followed by `xent`.
+    pub(crate) fn head_xent(
+        &mut self,
+        h: usize,
+        embed: usize,
+        bias: usize,
+        d: usize,
+        vocab: usize,
+        targets: &[usize],
+        mask: &[f32],
+    ) -> usize {
+        let hv = self.v(h);
+        assert_eq!(hv.len(), targets.len() * d);
+        let (e, b) = (self.v(embed), self.v(bias));
+        let denom = mask.iter().sum::<f32>().max(1.);
+        let chunk = Self::head_chunk(vocab);
+        let mut loss = 0f32;
+        for r0 in (0..targets.len()).step_by(chunk) {
+            let rows = chunk.min(targets.len() - r0);
+            let mut z = super::linalg::linear(&hv[r0 * d..(r0 + rows) * d], e, Some(b), rows, d, vocab);
+            for (r, zr) in z.chunks_exact_mut(vocab).enumerate() {
+                Self::softmax_row(zr);
+                loss -= mask[r0 + r] * zr[targets[r0 + r]].max(1e-30).ln() / denom;
+            }
+        }
+        self.node(
+            vec![loss],
+            Op::HeadXent { h, embed, bias, d, vocab, targets: targets.to_vec(), mask: mask.to_vec(), denom },
         )
     }
     fn accum(&mut self, id: usize, delta: &[f32]) {
@@ -390,6 +497,49 @@ impl<'a> Tape<'a> {
                     self.accum(k, &dk);
                     self.accum(v, &dv);
                 }
+                Op::HeadXent { h, embed, bias, d, vocab, targets, mask, denom } => {
+                    let (ea, eb) = self.nodes[embed].param.expect("output embedding is a parameter");
+                    let (ba, bb) = self.nodes[bias].param.expect("output bias is a parameter");
+                    let weights = self.weights;
+                    let (e, bv) = (&weights[ea..eb], &weights[ba..bb]);
+                    let mut scratch = Vec::new();
+                    let wgrad: &mut [f32] = match self.wgrad.as_deref_mut() {
+                        Some(g) => g,
+                        None => {
+                            scratch.resize(weights.len(), 0.);
+                            &mut scratch
+                        }
+                    };
+                    // The embedding and bias ranges never overlap: split the buffer between them.
+                    let (de, db) = if eb <= ba {
+                        let (lo, hi) = wgrad.split_at_mut(ba);
+                        (&mut lo[ea..eb], &mut hi[..bb - ba])
+                    } else {
+                        let (lo, hi) = wgrad.split_at_mut(ea);
+                        (&mut hi[..eb - ea], &mut lo[ba..bb])
+                    };
+                    let hv = &self.nodes[h].values;
+                    let mut dh = vec![0f32; hv.len()];
+                    let chunk = Self::head_chunk(vocab);
+                    for r0 in (0..targets.len()).step_by(chunk) {
+                        let rows = chunk.min(targets.len() - r0);
+                        let hc = &hv[r0 * d..(r0 + rows) * d];
+                        let mut g = super::linalg::linear(hc, e, Some(bv), rows, d, vocab);
+                        for (r, gr) in g.chunks_exact_mut(vocab).enumerate() {
+                            Self::softmax_row(gr);
+                            gr[targets[r0 + r]] -= 1.;
+                            let scale = mask[r0 + r] * upstream[0] / denom;
+                            for v in gr.iter_mut() {
+                                *v *= scale;
+                            }
+                        }
+                        let dhc =
+                            super::linalg::linear_backward(&g, hc, e, rows, d, vocab, de, Some(&mut *db));
+                        dh[r0 * d..(r0 + rows) * d].copy_from_slice(&dhc);
+                    }
+                    self.accum(h, &dh);
+                }
+                #[cfg(test)]
                 Op::Xent { logits, targets, mask, vocab, mut probs, denom } => {
                     for row in 0..targets.len() {
                         probs[row * vocab + targets[row]] -= 1.;

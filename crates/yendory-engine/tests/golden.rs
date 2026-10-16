@@ -1,5 +1,6 @@
 //! Golden vectors from the float64 numpy reference (tests/compat/golden/*.txt, written by
 //! reference/make_golden.py): loss, 12 logits and 62 sampled gradients per file.
+use yendory_engine::TokenId;
 use yendory_engine::{Ablation, Bicameral, Config};
 
 fn field<'a>(text: &'a str, key: &str) -> &'a str {
@@ -41,8 +42,8 @@ fn check(name: &str) {
         no_efferent: kv(a, "no_efferent") == 1,
         no_right: kv(a, "no_right") == 1,
     };
-    let ids: Vec<u16> = nums(field(&text, "ids"));
-    let targets: Vec<u16> = nums(field(&text, "targets"));
+    let ids: Vec<TokenId> = nums(field(&text, "ids"));
+    let targets: Vec<TokenId> = nums(field(&text, "targets"));
     let mask: Vec<f32> = nums(field(&text, "weights"));
     let want_logits: Vec<f64> = nums(field(&text, "last_logits"));
     let want_loss: f64 = field(&text, "loss").parse().unwrap();

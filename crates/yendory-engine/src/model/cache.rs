@@ -6,6 +6,7 @@
 //! positions restarting at 0, exactly like the reference's uncached `next_token_probs`; the
 //! right hemisphere still sees the characters just before the window, as the reference does.
 use super::{Ablation, Bicameral};
+use crate::tokenizer::TokenId;
 
 #[derive(Clone, Debug, Default)]
 struct Stage {
@@ -20,7 +21,7 @@ pub struct CacheStats {
 }
 pub struct KvCache {
     stages: Vec<Stage>,
-    tokens: Vec<u16>,
+    tokens: Vec<TokenId>,
     chars: Vec<u8>,
     /// Up to `window_chars` characters that precede the first token of the window.
     before: Vec<u8>,
@@ -106,7 +107,7 @@ impl KvCache {
             self.trace = Some(Trace::default());
         }
     }
-    pub fn prefill(&mut self, model: &Bicameral, ids: &[u16]) -> Result<Vec<f32>, String> {
+    pub fn prefill(&mut self, model: &Bicameral, ids: &[TokenId]) -> Result<Vec<f32>, String> {
         let mut last = Vec::new();
         for &id in ids {
             last = self.append(model, id)?;
@@ -116,13 +117,13 @@ impl KvCache {
         }
         Ok(last)
     }
-    pub fn append(&mut self, model: &Bicameral, token: u16) -> Result<Vec<f32>, String> {
+    pub fn append(&mut self, model: &Bicameral, token: TokenId) -> Result<Vec<f32>, String> {
         if model.step != self.model_step || signature(model) != self.model_signature {
             return Err("KV cache is stale; create a new cache after training or loading".into());
         }
         let c = &model.config;
         let id = token as usize;
-        if id >= c.vocab || id >= 128 + model.tokenizer.words.len() {
+        if id >= c.vocab || id >= 128 + model.tokenizer.words().len() {
             return Err("Invalid generated or input token ID".into());
         }
         self.appended += 1;
@@ -148,7 +149,7 @@ impl KvCache {
         }
         Ok(last)
     }
-    fn step(&mut self, model: &Bicameral, token: u16) -> Vec<f32> {
+    fn step(&mut self, model: &Bicameral, token: TokenId) -> Vec<f32> {
         let c = &model.config;
         let id = token as usize;
         let value = token_text(model, token);
@@ -250,12 +251,12 @@ fn readout(model: &Bicameral, h: &[f32]) -> Vec<f32> {
     }
     logits
 }
-fn token_text(model: &Bicameral, token: u16) -> Vec<u8> {
+fn token_text(model: &Bicameral, token: TokenId) -> Vec<u8> {
     let id = token as usize;
     if id < 128 {
         vec![id as u8]
     } else {
-        model.tokenizer.words[id - 128].as_bytes().to_vec()
+        model.tokenizer.words()[id - 128].as_bytes().to_vec()
     }
 }
 fn signature(model: &Bicameral) -> u64 {
@@ -428,7 +429,7 @@ fn block(
     add(&h, &down)
 }
 impl Bicameral {
-    pub fn predict_cached(&self, cache: &mut KvCache, token: u16) -> Result<Vec<f32>, String> {
+    pub fn predict_cached(&self, cache: &mut KvCache, token: TokenId) -> Result<Vec<f32>, String> {
         let logits = cache.append(self, token)?;
         Ok(self.next_token_probabilities(logits))
     }
@@ -436,7 +437,7 @@ impl Bicameral {
     /// generation uses it.
     pub(crate) fn next_token_probabilities(&self, logits: Vec<f32>) -> Vec<f32> {
         let mut p = logits;
-        let valid = (128 + self.tokenizer.words.len()).min(self.config.vocab);
+        let valid = (128 + self.tokenizer.words().len()).min(self.config.vocab);
         for x in p.iter_mut().skip(valid) {
             *x = f32::NEG_INFINITY;
         }
@@ -460,10 +461,10 @@ impl Bicameral {
     /// Generated ids are kept as emitted (never re-tokenized).
     pub fn generate_cached_ids(
         &self,
-        ids: &[u16],
+        ids: &[TokenId],
         max_tokens: usize,
         abl: Ablation,
-    ) -> Result<Vec<u16>, String> {
+    ) -> Result<Vec<TokenId>, String> {
         let mut cache = KvCache::new(self, abl);
         let mut probs = Vec::new();
         for &id in ids {
@@ -474,9 +475,9 @@ impl Bicameral {
         }
         let mut output = Vec::new();
         for _ in 0..max_tokens {
-            let next = probs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0 as u16;
+            let next = probs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0 as TokenId;
             output.push(next);
-            if next == b'\n' as u16 {
+            if next == b'\n' as TokenId {
                 break;
             }
             probs = self.predict_cached(&mut cache, next)?;
@@ -527,7 +528,7 @@ mod tests {
         let mut m = Bicameral::new();
         let mut cache = KvCache::new(&m, Ablation::default());
         m.adam_step(&vec![0.; m.parameter_count()], 0.0001, Focus::Joint).unwrap();
-        assert!(cache.append(&m, b'a' as u16).is_err());
+        assert!(cache.append(&m, b'a' as TokenId).is_err());
     }
     #[test]
     fn full_window_restarts_positions_like_the_reference() {
@@ -543,8 +544,8 @@ mod tests {
         cfg.max_tokens = 8;
         cfg.vocab = 130;
         let mut m = Bicameral::with_config(cfg, 5);
-        m.tokenizer.words = vec!["ab".repeat(2), "xyz".into()];
-        let ids: Vec<u16> = (0..30).map(|i| [104, 128, 33, 129, 10][i % 5]).collect();
+        m.tokenizer.set_words(vec!["ab".repeat(2), "xyz".into()]);
+        let ids: Vec<TokenId> = (0..30).map(|i| [104, 128, 33, 129, 10][i % 5]).collect();
         let row = m.config.window_chars * 16;
         let feats = m.features(&ids).unwrap();
         let mut cache = KvCache::new(&m, Ablation::default());

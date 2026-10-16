@@ -2,6 +2,7 @@
 //! the model. Nothing here is estimated or simulated, and nothing feeds back into training or
 //! inference.
 use super::{Ablation, Bicameral, Focus, KvCache, Trace};
+use crate::tokenizer::TokenId;
 use serde::{Deserialize, Serialize};
 
 /// How much the next-token distribution changes when a pathway is cut, as total variation
@@ -36,7 +37,7 @@ pub struct Measurements {
 }
 
 pub(super) fn probabilities(model: &Bicameral, logits: &[f32]) -> Vec<f64> {
-    let valid = (128 + model.tokenizer.words.len()).min(model.config.vocab);
+    let valid = (128 + model.tokenizer.words().len()).min(model.config.vocab);
     let z = &logits[..valid];
     let max = z.iter().fold(f64::NEG_INFINITY, |m, &x| m.max(x as f64));
     let e: Vec<f64> = z.iter().map(|&x| (x as f64 - max).exp()).collect();
@@ -58,7 +59,7 @@ impl Bicameral {
         self.measure_ids(&self.tokenizer.encode(prompt)?)
     }
     /// Measures the forward pass of the last of `ids` (e.g. a prompt plus generated tokens).
-    pub fn measure_ids(&self, ids: &[u16]) -> Result<Measurements, String> {
+    pub fn measure_ids(&self, ids: &[TokenId]) -> Result<Measurements, String> {
         let ids = ids.to_vec();
         let mut cache = KvCache::with_trace(self, Ablation::default());
         let logits = cache.prefill(self, &ids)?;
@@ -85,7 +86,7 @@ impl Bicameral {
             next_tokens: top
                 .iter()
                 .take(5)
-                .map(|&(t, p)| (self.tokenizer.token_label(t as u16), p as f32))
+                .map(|&(t, p)| (self.tokenizer.token_label(t as TokenId), p as f32))
                 .collect(),
             ablation: AblationEffects {
                 without_right_to_left: total_variation(&full, &without_right),

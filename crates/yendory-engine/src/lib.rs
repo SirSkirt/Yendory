@@ -27,4 +27,4 @@ pub use model::{
     Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, SizePreset,
     ThinkOptions, ThinkingTree, Trace,
 };
-pub use tokenizer::Tokenizer;
+pub use tokenizer::{TokenId, Tokenizer};

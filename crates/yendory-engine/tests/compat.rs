@@ -2,6 +2,7 @@
 //! Expected values come from reference/make_compat.py (float64 evaluation of the stored weights).
 use serde_json::Value;
 use std::path::PathBuf;
+use yendory_engine::TokenId;
 use yendory_engine::{Ablation, Bicameral, Focus, KvCache};
 
 fn root() -> PathBuf {
@@ -18,8 +19,8 @@ fn ablation(mode: &str) -> Ablation {
     }
 }
 
-fn ids(v: &Value) -> Vec<u16> {
-    v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u16).collect()
+fn ids(v: &Value) -> Vec<TokenId> {
+    v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as TokenId).collect()
 }
 
 /// Largest |got - want| relative to max(1, |want|) across a logit vector.
@@ -30,7 +31,7 @@ fn logit_error(got: &[f32], want: &[f64]) -> f64 {
 
 /// Last-position logits without the KV cache, windowed like the reference's
 /// `next_token_probs`: features over the whole history, then the last `max_tokens` positions.
-fn window_logits(m: &Bicameral, seq: &[u16], abl: Ablation) -> Vec<f32> {
+fn window_logits(m: &Bicameral, seq: &[TokenId], abl: Ablation) -> Vec<f32> {
     let start = seq.len().saturating_sub(m.config.max_tokens);
     let row = m.config.window_chars * 16;
     let feats = m.features(seq).unwrap();
@@ -40,17 +41,17 @@ fn window_logits(m: &Bicameral, seq: &[u16], abl: Ablation) -> Vec<f32> {
 
 /// Greedy decoding without the KV cache: the full window is recomputed for every token,
 /// exactly like the reference's `generate`.
-fn greedy_uncached(m: &Bicameral, prompt: &[u16], max_new: usize, abl: Ablation) -> Vec<u16> {
-    let valid = (128 + m.tokenizer.words.len()).min(m.config.vocab);
+fn greedy_uncached(m: &Bicameral, prompt: &[TokenId], max_new: usize, abl: Ablation) -> Vec<TokenId> {
+    let valid = (128 + m.tokenizer.words().len()).min(m.config.vocab);
     let mut seq = prompt.to_vec();
     let mut out = Vec::new();
     for _ in 0..max_new {
         let z = window_logits(m, &seq, abl);
         let last = &z[..valid];
-        let next = last.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0 as u16;
+        let next = last.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0 as TokenId;
         out.push(next);
         seq.push(next);
-        if next == b'\n' as u16 {
+        if next == b'\n' as TokenId {
             break;
         }
     }
@@ -65,7 +66,7 @@ fn check(ckpt: PathBuf, expected: PathBuf) {
     let m = Bicameral::from_bytes(&bytes).unwrap();
     assert_eq!(m.step, want["step"].as_u64().unwrap());
     assert_eq!(m.parameter_count() as u64, want["params"].as_u64().unwrap());
-    assert_eq!(m.tokenizer.words.len() as u64, want["words"].as_u64().unwrap());
+    assert_eq!(m.tokenizer.words().len() as u64, want["words"].as_u64().unwrap());
 
     // 1.4: load -> save reproduces the file byte for byte.
     assert!(m.to_bytes().unwrap() == bytes, "checkpoint round trip is not byte-identical");

@@ -26,6 +26,15 @@ New word units are learned from the training text only (frequency ≥ 12, 3–24
 capitalised words that are rarely lower-case are treated as names and stay character-level.
 Existing word ids never change.
 
+**Vocabulary size.** A model holds `vocab − 128` word units. Nova-2 allocates all 256 slots up
+front (vocab 384). A larger **vocabulary limit** (`word_limit` in `SessionConfig` and
+`PretrainConfig`; any size up to the Engine's parameter limit) adds slots only as words are
+learned (`Bicameral::with_word_capacity`), so a model allowed a million words that has learned
+5,000 trains and replies like a 5,000-word model. New slots start from fresh embedding rows.
+Nova-2's training scores every allocated slot, used or not (as the reference does), so
+allocating unused slots costs speed: at Nova-2's size, measured on a 4-core machine, 16,384
+slots train at 725 tokens/s, 262,144 at 53 and 1,000,000 at 7 (256 slots: 1,715).
+
 Verified: on the owner's 27 lessons the Rust pipeline reproduces the reference split, the
 step-19,000 vocabulary word for word, and the published held-out scores of step 19,000 exactly
 (see docs/STATUS.md).

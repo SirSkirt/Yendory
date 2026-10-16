@@ -12,7 +12,7 @@ Little-endian. Written identically by the Rust Engine and `reference/nova2_ref.p
 | Adam m | f32 × n | first moment |
 | Adam v | f32 × n | second moment |
 | magic | 8 bytes | `WORDUNIT` |
-| word count | u32 | at most 256 |
+| word count | u32 | at most `vocab − 128` (256 for Nova-2's vocab 384) |
 | words | (u32 length, ASCII bytes) × count | learned word units; id = 128 + index; 3–24 chars of `[A-Za-z0-9']` |
 
 No bytes may follow the word list. `n` is determined by the config (1,182,144 for the default).
@@ -23,8 +23,15 @@ read and writes them back unchanged when the config has not changed, so load →
 a file exactly (checked in `tests/compat.rs`).
 
 **Validation on load.** Truncated files, trailing bytes, non-finite parameters, invalid word
-units and impossible configurations (e.g. `d` not divisible by `heads`, absurd sizes) return
+units, more words than the vocabulary holds, and impossible configurations (e.g. `d` not
+divisible by `heads`, a vocabulary above 2^28 ids, more than 1,000,000,000 parameters) return
 errors instead of panicking or allocating.
+
+**Vocabulary size.** `vocab` in the config is the number of token ids: 128 ASCII characters plus
+one slot per learned word unit. Nova-2 uses 384 (256 word slots); Yendory models can use any
+size, and the file layout is the same (the `embed` matrix has `vocab` rows and `out_bias` has
+`vocab` entries). Token ids are 32-bit in the Engine. Files stay readable by the numpy
+reference at any vocabulary size (checked at 100,128 ids in CI).
 
 The model-package format that will wrap `.nnova2` (manifest, checksums, runtime vs archive
 exports) is a pending decision (D3/D4 in docs/STATUS.md).

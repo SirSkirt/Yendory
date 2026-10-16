@@ -68,7 +68,7 @@ pub fn continuation_log_prob(
 ) -> Result<f64, String> {
     let ids = model.tokenizer.encode(prompt)?;
     let answer = model.tokenizer.encode(continuation)?;
-    let valid = (128 + model.tokenizer.words.len()).min(model.config.vocab);
+    let valid = (128 + model.tokenizer.words().len()).min(model.config.vocab);
     let mut cache = KvCache::new(model, abl);
     let mut logits = cache.prefill(model, &ids)?;
     let mut total = 0f64;
