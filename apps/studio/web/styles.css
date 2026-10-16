@@ -182,7 +182,7 @@ table { border-collapse: collapse; width: 100%; }
 /* Conversation */
 .transcript { background: var(--sheet); border: 1px solid var(--rule); min-height: 168px; max-height: 52vh; overflow: auto; padding: 0 16px 28px;
   background-image: repeating-linear-gradient(transparent 0 27px, var(--rule) 27px 28px); line-height: 28px; }
-.transcript p { margin: 0; }
+.transcript p { margin: 0; overflow-wrap: anywhere; }
 .transcript .who { font: 600 13px var(--mono); color: var(--margin); margin-right: 8px; }
 .transcript .model .who { color: var(--accent); }
 
