@@ -503,15 +503,81 @@ function renderMeasure() {
     return s;
   }));
 }
+function showMeasure(m, caption) {
+  lastMeasure = m;
+  const sel = $("stageSelect");
+  sel.replaceChildren(...m.trace.stages.map((s, i) => el("option", { value: i }, Brain.stageLabel(s))));
+  sel.value = String(m.trace.stages.length - 1);
+  renderMeasure();
+  $("brainDetail").textContent = caption;
+}
 $("inspect").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open a model first");
-  lastMeasure = await invoke("measure", { prompt: $("probe").value });
-  const sel = $("stageSelect");
-  sel.replaceChildren(...lastMeasure.trace.stages.map((s, i) => el("option", { value: i }, Brain.stageLabel(s))));
-  sel.value = String(lastMeasure.trace.stages.length - 1);
-  renderMeasure();
-  $("brainDetail").textContent = `Measured at step ${fmt(lastMeasure.step)} while reading the last token of "U: ${$("probe").value}". Click a dot for its value.`;
+  const m = await invoke("measure", { prompt: $("probe").value });
+  showMeasure(m, `Measured at step ${fmt(m.step)} while reading the last token of "U: ${$("probe").value}". Click a dot for its value.`);
 }, "Inspect"));
+
+// ---- thinking tree -------------------------------------------------------------------------
+const bar = (v, cls = "") => el("span", { class: "tt-bar " + cls, title: (100 * v).toFixed(1) + "%" }, (() => { const i = el("i"); i.style.width = (100 * Math.max(0, Math.min(1, v))).toFixed(1) + "%"; return i; })());
+const p100 = v => (100 * v).toFixed(v >= 0.995 || v < 0.0005 ? 0 : 1) + "%";
+const tokText = t => t.token;
+
+function renderThinking(tree, prompt) {
+  const box = $("thinkTree");
+  box.replaceChildren();
+  box.classList.toggle("no-branches", !$("thinkBranches").checked);
+  box.append(el("div", { class: "tt-root" }, `U: ${prompt}`),
+    el("p", { class: "note" }, `Model at training step ${fmt(tree.step)} · ${tree.steps.length} token(s) · ${tree.rounds} thinking round(s) per token · ${tree.branches.length} path(s) not taken shown. Click a step for its full record.`));
+  const trunk = el("div", { class: "tt-trunk" });
+  const branchesAt = new Map();
+  for (const b of tree.branches) branchesAt.set(b.at_step, [...(branchesAt.get(b.at_step) || []), b]);
+  for (const s of tree.steps) {
+    const unsure = s.alternatives[0] && s.alternatives[0].probability >= 0.05;
+    const rounds = el("span", { class: "tt-rounds", title: "What the model would have output after the lower stage and after each thinking round" },
+      ...s.readouts.flatMap((r, i) => [i ? " → " : "", `${r.stage.replace(" (output)", "")} `, el("b", {}, tokText(r.top[0])), ` ${p100(r.top[0].probability)}`]));
+    const detail = el("div", { class: "tt-detail" },
+      el("table", {},
+        el("tr", {}, el("th", {}, "Chosen"), el("td", {}, `${s.chosen.token}  ${p100(s.chosen.probability)}  (uncertainty ${s.entropy.toFixed(2)} bits)`)),
+        el("tr", {}, el("th", {}, "Also weighed"), el("td", {}, s.alternatives.map(a => `${a.token} ${p100(a.probability)}`).join(" · ") || "—")),
+        ...s.readouts.map(r => el("tr", {}, el("th", {}, `After ${r.stage}`), el("td", {}, r.top.map(c => `${c.token} ${p100(c.probability)}`).join(" · ")))),
+        el("tr", {}, el("th", {}, "Gate openings (exchange, rounds)"), el("td", {}, s.gate_means.map(g => g.toFixed(2)).join(" · "))),
+        el("tr", {}, el("th", {}, "Dense hemisphere's influence"), el("td", {}, `${s.right_influence.toFixed(3)} (change of this decision when its input to the left is cut)`)),
+        el("tr", {}, el("th", {}, "Attended most (last block)"), el("td", {}, s.attended.map(([t, w]) => `${t} ${p100(w)}`).join(" · ") || "—"))),
+      el("div", { class: "actions" }, el("button", { onclick: safe(async () => {
+        const m = await invoke("measure_step", { prompt, prefix: tree.path_ids.slice(0, s.index) });
+        showMeasure(m, `Step ${s.index + 1} of the traced reply: the forward pass that chose "${s.chosen.token}" (${p100(s.chosen.probability)}). Click a dot for its value.`);
+        $("hemisphereBrain").scrollIntoView({ behavior: "smooth", block: "center" });
+      }, "Show step in brain scan") }, "Show this step in the brain scan")));
+    const node = el("div", { class: "tt-step" },
+      el("details", {},
+        el("summary", {},
+          el("span", { class: "tt-idx" }, s.index + 1),
+          el("span", { class: "tt-tok" + (unsure ? " unsure" : ""), title: "chosen token" }, s.chosen.token),
+          el("span", { class: "tt-p" }, p100(s.chosen.probability)), bar(s.chosen.probability),
+          rounds,
+          el("span", { class: "tt-p", title: "How much the dense hemisphere changed this decision" }, "dense "), bar(s.right_influence, "right")),
+        detail));
+    trunk.append(node);
+    for (const b of branchesAt.get(s.index) || []) {
+      trunk.append(el("div", { class: "tt-branch" }, "not taken: ",
+        el("span", { class: "tt-tok" }, b.first.token), ` ${p100(b.first.probability)} → the model would have continued `,
+        el("q", {}, b.text), b.ended ? "" : " …"));
+    }
+  }
+  box.append(trunk, el("div", { class: "tt-leaf" }, `N: ${tree.reply || "(empty reply)"}`));
+}
+$("thinkButton").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open a model first");
+  const prompt = $("probe").value.trim();
+  $("thinkButton").disabled = true;
+  try {
+    say("Tracing the reply… every value is measured from the model.");
+    const tree = await invoke("think", { prompt });
+    renderThinking(tree, prompt);
+    say(`Traced ${tree.steps.length} decision(s).`);
+  } finally { $("thinkButton").disabled = false; }
+}, "Thinking tree"));
+$("thinkBranches").addEventListener("change", () => $("thinkTree").classList.toggle("no-branches", !$("thinkBranches").checked));
 $("stageSelect").addEventListener("change", renderMeasure);
 $("probe").addEventListener("keydown", e => { if (e.key === "Enter") $("inspect").click(); });
 

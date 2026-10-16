@@ -65,3 +65,47 @@ fn no_right_equals_no_afferent() {
         KvCache::new(&m, Ablation { no_afferent: true, ..Ablation::default() }).prefill(&m, &ids).unwrap();
     assert_eq!(a, b);
 }
+
+#[test]
+fn thinking_tree_records_the_real_reply() {
+    use yendory_engine::learn::eval::reply;
+    use yendory_engine::ThinkOptions;
+    let m = model();
+    for prompt in
+        ["U: The key is in the box. Where is the key?\nN: ", "U: hello\nN: ", "U: What is a cat?\nN: "]
+    {
+        let tree = m.think(prompt, &ThinkOptions::default()).unwrap();
+        // The recorded path is exactly the reply the model gives.
+        assert_eq!(tree.reply, reply(&m, prompt, 48, Ablation::default()).unwrap());
+        assert_eq!(tree.steps.len(), tree.path_ids.len());
+        for (s, &id) in tree.steps.iter().zip(&tree.path_ids) {
+            assert_eq!(s.chosen.id, id);
+            assert!(s.alternatives.iter().all(|a| a.probability <= s.chosen.probability + 1e-6));
+            // One read-out after the lower stage and one per thinking round; the last is the output.
+            assert_eq!(s.readouts.len(), 1 + m.config.loops);
+            let out = &s.readouts.last().unwrap().top[0];
+            assert_eq!(out.id, s.chosen.id);
+            assert!((out.probability - s.chosen.probability).abs() < 1e-5);
+            assert_eq!(s.gate_means.len(), 1 + m.config.loops);
+            assert!((0.0..=1.0).contains(&s.right_influence));
+            assert!(!s.attended.is_empty());
+        }
+        // The first step is the same forward pass the brain scan measures.
+        let scan = m.measure(prompt).unwrap();
+        assert!((tree.steps[0].right_influence - scan.ablation.without_right_to_left).abs() < 1e-5);
+        assert_eq!(tree.steps[0].gate_means, scan.gate_means);
+        // A branch is the runner-up at its step, continued greedily by the same model.
+        for b in &tree.branches {
+            let s = &tree.steps[b.at_step];
+            assert_eq!(b.first, s.alternatives[0]);
+            let mut prefix = tree.prompt_ids.clone();
+            prefix.extend_from_slice(&tree.path_ids[..b.at_step]);
+            prefix.push(b.first.id);
+            if !b.continuation.is_empty() {
+                let greedy =
+                    m.generate_cached_ids(&prefix, b.continuation.len(), Ablation::default()).unwrap();
+                assert_eq!(greedy, b.continuation.iter().map(|c| c.id).collect::<Vec<_>>());
+            }
+        }
+    }
+}

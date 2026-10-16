@@ -23,6 +23,7 @@ pub mod model;
 pub mod tokenizer;
 
 pub use model::{
-    Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, Trace,
+    Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, ThinkOptions,
+    ThinkingTree, Trace,
 };
 pub use tokenizer::Tokenizer;

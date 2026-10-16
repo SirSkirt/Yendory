@@ -15,7 +15,7 @@ use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileO
 use yendory_engine::learn::eval::{evaluate, reply, Report};
 use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
-use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements};
+use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree};
 
 mod reading;
 
@@ -653,6 +653,32 @@ async fn measure(studio: State<'_, Studio>, prompt: String) -> Res<Measurements>
     model.measure(&format!("U: {message}\nN: "))
 }
 
+/// Generates the model's reply to `prompt` and records how each token was decided.
+#[tauri::command]
+async fn think(studio: State<'_, Studio>, prompt: String) -> Res<ThinkingTree> {
+    let message = clean_message(&prompt)?;
+    let model = with_active(&studio, |a| Ok(a.model.clone()))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        model.think(&format!("U: {message}\nN: "), &ThinkOptions::default())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Brain-scan measurements of one step of a thinking tree: the forward pass that read the
+/// prompt and the first `prefix` generated tokens.
+#[tauri::command]
+async fn measure_step(studio: State<'_, Studio>, prompt: String, prefix: Vec<u16>) -> Res<Measurements> {
+    let message = clean_message(&prompt)?;
+    if prefix.len() > 256 {
+        return Err("Too many generated tokens".into());
+    }
+    let model = with_active(&studio, |a| Ok(a.model.clone()))?;
+    let mut ids = model.tokenizer.encode(&format!("U: {message}\nN: "))?;
+    ids.extend(prefix);
+    model.measure_ids(&ids)
+}
+
 #[tauri::command]
 fn history(app: AppHandle, id: String) -> Res<Vec<serde_json::Value>> {
     let path = model_dir(&app, &id)?.join("history.jsonl");
@@ -704,6 +730,8 @@ pub fn run() {
             ask,
             exam,
             measure,
+            think,
+            measure_step,
             history,
             reading::corpus_sources,
             reading::corpora,

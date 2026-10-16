@@ -190,3 +190,25 @@ any value):
 Example on step 15,000, "Where is the key?": gates 0.42 / 0.18 / 0.18, right→left cut 0.996,
 left→right cut 0.000 — matching the earlier finding that the efferent path has no measurable
 effect in that model.
+
+## Thinking tree (`Bicameral::think`)
+
+Nova-2 has no explicit reasoning steps: for every token, the lower stage runs once and the
+upper stage runs `loops` times (thinking rounds), with a right→left exchange before each round.
+The thinking tree records that computation while the model generates a greedy reply. It is
+exactly the reply the model gives (tested), and every value is measured:
+
+- each step: the chosen token and its probability, the next most likely tokens it weighed, and
+  the uncertainty of the decision (entropy, bits);
+- **read-outs**: the output layer (final norm, tied embedding, bias) applied to the left state
+  after the lower stage and after each thinking round, i.e. what the model would have said had
+  it stopped there (the last read-out is the actual output);
+- the gate openings of each exchange, the attention of the last block (the earlier tokens it
+  looked at most), and the dense hemisphere's influence on this decision (total-variation change
+  when its input to the left is cut);
+- **paths not taken**: at the closest calls (runner-up at least 5% likely, up to 3 steps), the
+  runner-up token continued greedily by the same model for up to 12 tokens.
+
+Studio shows the tree below the brain scan; any step can be opened in the brain scan, which then
+measures the exact forward pass that made that decision (`Bicameral::measure_ids`).
+

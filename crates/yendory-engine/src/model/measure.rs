@@ -35,7 +35,7 @@ pub struct Measurements {
     pub parameters: [usize; 3],
 }
 
-fn probabilities(model: &Bicameral, logits: &[f32]) -> Vec<f64> {
+pub(super) fn probabilities(model: &Bicameral, logits: &[f32]) -> Vec<f64> {
     let valid = (128 + model.tokenizer.words.len()).min(model.config.vocab);
     let z = &logits[..valid];
     let max = z.iter().fold(f64::NEG_INFINITY, |m, &x| m.max(x as f64));
@@ -44,7 +44,7 @@ fn probabilities(model: &Bicameral, logits: &[f32]) -> Vec<f64> {
     e.into_iter().map(|x| x / sum).collect()
 }
 
-fn total_variation(a: &[f64], b: &[f64]) -> f32 {
+pub(super) fn total_variation(a: &[f64], b: &[f64]) -> f32 {
     (0.5 * a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f64>()) as f32
 }
 
@@ -55,7 +55,11 @@ fn mean_abs(v: &[f32]) -> f32 {
 impl Bicameral {
     /// Reads `prompt` and measures the forward pass of its last token.
     pub fn measure(&self, prompt: &str) -> Result<Measurements, String> {
-        let ids = self.tokenizer.encode(prompt)?;
+        self.measure_ids(&self.tokenizer.encode(prompt)?)
+    }
+    /// Measures the forward pass of the last of `ids` (e.g. a prompt plus generated tokens).
+    pub fn measure_ids(&self, ids: &[u16]) -> Result<Measurements, String> {
+        let ids = ids.to_vec();
         let mut cache = KvCache::with_trace(self, Ablation::default());
         let logits = cache.prefill(self, &ids)?;
         let trace = cache.trace().cloned().unwrap_or_default();

@@ -61,6 +61,11 @@ pub struct Trace {
     pub right_upper: Vec<Vec<f32>>,
     /// Afferent injections in order: exchange 1, then one per thinking round.
     pub gates: Vec<GateTrace>,
+    /// Read-outs: the output layer (final norm, embedding, bias) applied to the left state after
+    /// the lower stage and after each thinking round, i.e. what the model would predict if it
+    /// stopped there. The last read-out is the model's actual output.
+    #[serde(default)]
+    pub readouts: Vec<Vec<f32>>,
 }
 impl KvCache {
     pub fn new(model: &Bicameral, abl: Ablation) -> Self {
@@ -182,6 +187,9 @@ impl KvCache {
         if self.abl.no_right {
             z1.fill(0.);
         }
+        if tracing {
+            trace.readouts.push(readout(model, &h));
+        }
         trace.right_trunk = z1.clone();
         if !self.abl.no_afferent {
             let gate;
@@ -216,12 +224,13 @@ impl KvCache {
             if round + 1 < c.loops {
                 z2 = efferent(model, &z1, &h, self.abl);
             }
+            if tracing && round + 1 < c.loops {
+                trace.readouts.push(readout(model, &h));
+            }
         }
-        let final_hidden = norm(&h, model.val("ln_f"));
-        let emb = model.val("embed");
-        let mut logits = mat(emb, c.vocab, c.d, &final_hidden);
-        for (x, b) in logits.iter_mut().zip(model.val("out_bias")) {
-            *x += *b;
+        let logits = readout(model, &h);
+        if tracing {
+            trace.readouts.push(logits.clone());
         }
         self.tokens.push(token);
         self.sequence += 1;
@@ -231,6 +240,15 @@ impl KvCache {
         }
         logits
     }
+}
+/// The output layer applied to a left state: final norm, tied embedding, output bias.
+fn readout(model: &Bicameral, h: &[f32]) -> Vec<f32> {
+    let c = &model.config;
+    let mut logits = mat(model.val("embed"), c.vocab, c.d, &norm(h, model.val("ln_f")));
+    for (x, b) in logits.iter_mut().zip(model.val("out_bias")) {
+        *x += *b;
+    }
+    logits
 }
 fn token_text(model: &Bicameral, token: u16) -> Vec<u8> {
     let id = token as usize;
@@ -419,6 +437,11 @@ fn block(
 impl Bicameral {
     pub fn predict_cached(&self, cache: &mut KvCache, token: u16) -> Result<Vec<f32>, String> {
         let logits = cache.append(self, token)?;
+        Ok(self.next_token_probabilities(logits))
+    }
+    /// Softmax over the valid tokens (learned word ids beyond the vocabulary get 0), exactly as
+    /// generation uses it.
+    pub(crate) fn next_token_probabilities(&self, logits: Vec<f32>) -> Vec<f32> {
         let mut p = logits;
         let valid = (128 + self.tokenizer.words.len()).min(self.config.vocab);
         for x in p.iter_mut().skip(valid) {
@@ -433,7 +456,7 @@ impl Bicameral {
         for x in &mut p {
             *x /= total;
         }
-        Ok(p)
+        p
     }
     pub fn generate_cached(&self, prompt: &str, max_tokens: usize) -> Result<String, String> {
         let ids = self.tokenizer.encode(prompt)?;

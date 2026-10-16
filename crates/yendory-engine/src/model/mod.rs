@@ -7,12 +7,14 @@ mod checkpoint;
 mod golden;
 mod measure;
 mod tape;
+mod think;
 use crate::tokenizer::Tokenizer;
 pub use cache::{CacheStats, GateTrace, KvCache, StageTrace, Trace};
 pub use measure::{AblationEffects, Measurements};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
+pub use think::{Branch, Choice, Readout, ThinkOptions, ThinkingTree, ThoughtStep};
 
 pub const MAX_PARAMETERS: usize = 1_200_144;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -219,6 +219,14 @@
         <div id="attentionTiles" class="chips"><span class="empty">—</span></div>
       </aside>
     </div>
+
+    <h3>Thinking tree</h3>
+    <p class="note">Nova-2 does not write out reasoning steps. For every token, its lower stage runs once and its upper stage runs several thinking rounds, exchanging signals with the dense hemisphere before each round. This tree records that computation while the model answers the question above: the token chosen at each step and the alternatives it weighed, what it would have said after the lower stage and after each round, how much the dense hemisphere changed the decision, and, at the closest calls, where the runner-up would have led. Every value is measured from the model.</p>
+    <div class="actions">
+      <button type="button" id="thinkButton" class="primary">Trace the reply</button>
+      <label class="check-inline"><input type="checkbox" id="thinkBranches" checked> Show paths not taken</label>
+    </div>
+    <div id="thinkTree" class="think-tree"><p class="empty">Trace a reply to see how it was produced.</p></div>
   </section>
 
   <!-- § 6 Library -->
