@@ -121,7 +121,10 @@ fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outc
                 source: it.source.clone(),
                 prompt,
                 expected: expected.clone(),
-                correct: &got == expected,
+                correct: match &it.key {
+                    Some(key) => key.is_correct(&got),
+                    None => &got == expected,
+                },
                 reply: got,
                 prefers_supported,
             });

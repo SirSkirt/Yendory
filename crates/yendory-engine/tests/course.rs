@@ -127,13 +127,13 @@ fn unstable_training_gets_gentler_steps_then_waits() {
         .iter()
         .filter_map(|e| if let CourseEvent::FileFinished(f) = e { Some(f.outcome) } else { None })
         .collect();
-    assert_eq!(finished, [FileOutcome::Deferred, FileOutcome::KeptPrevious]);
+    assert_eq!(finished, [FileOutcome::Deferred, FileOutcome::Unresolved]);
     assert_eq!(r.files[0].attempts.len(), 4);
     assert!(r.files[0].attempts[1].because.as_ref().is_some_and(|d| d.cause == Cause::Unstable));
     assert_eq!(r.model.weights, model.weights);
 }
 
-/// Progress that does not reach the pass mark is "progressed", not "passed", and a model that
+/// Progress that does not reach the pass mark is "unresolved", not "passed", and a model that
 /// cannot answer its own training questions is sent to practise exactly the ones it gets wrong.
 #[test]
 fn progress_is_not_mastery_and_gaps_are_practised() {
@@ -162,7 +162,7 @@ fn progress_is_not_mastery_and_gaps_are_practised() {
     .unwrap();
     let f = &r.files[0];
     assert!(f.final_score.as_ref().unwrap().exact_rate() < 0.95);
-    assert_eq!(f.outcome, if f.changed() { FileOutcome::Progressed } else { FileOutcome::KeptPrevious });
+    assert_eq!(f.outcome, FileOutcome::Unresolved);
     let d = events
         .iter()
         .find_map(|e| {

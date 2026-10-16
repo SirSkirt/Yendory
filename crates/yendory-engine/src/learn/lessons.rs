@@ -60,6 +60,10 @@ pub struct Item {
     /// Conversation: user turns and Nova's turns, in order.
     pub users: Vec<String>,
     pub replies: Vec<String>,
+    /// Course lessons and exams: how the answer is graded (accepted forms and rules). Without a
+    /// key the answer must match exactly, as in the reference evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<super::grading::AnswerKey>,
 }
 impl Item {
     fn new(kind: Kind, source: &str, held_out: bool, segments: Vec<Segment>) -> Self {
@@ -73,6 +77,7 @@ impl Item {
             contradicted: None,
             users: Vec::new(),
             replies: Vec::new(),
+            key: None,
         }
     }
 }
@@ -132,12 +137,16 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Stable held-out decision: lowercase, drop trailing `?.! `, collapse whitespace, CRC-32.
-pub fn is_held_out(key: &str) -> bool {
+/// The form a question is compared in: lowercase, trailing `?.! ` dropped, whitespace collapsed.
+pub fn canonical(key: &str) -> String {
     let lower = key.to_ascii_lowercase();
     let trimmed = lower.trim_end_matches(['?', '.', '!', ' ']);
-    let canon = trimmed.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
-    crc32(canon.as_bytes()) % 100 < HELD_OUT_PERCENT
+    trimmed.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// Stable held-out decision: CRC-32 of the canonical question.
+pub fn is_held_out(key: &str) -> bool {
+    crc32(canonical(key).as_bytes()) % 100 < HELD_OUT_PERCENT
 }
 
 fn block_kind(name: &str) -> Option<Kind> {
@@ -151,7 +160,7 @@ fn block_kind(name: &str) -> Option<Kind> {
 }
 
 /// `[Name]\n ... ^[/Name]` blocks, scanned left to right without overlap.
-fn blocks(text: &str) -> Vec<(&str, &str)> {
+pub(crate) fn blocks(text: &str) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < text.len() {

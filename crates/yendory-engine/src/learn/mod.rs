@@ -3,8 +3,11 @@
 //! `reference/train_lessons.py` (the pipeline that trained the step-19,000 checkpoint).
 pub mod corpus;
 pub mod course;
+pub mod curriculum;
 pub mod eval;
+pub mod grading;
 pub mod lessons;
+pub mod program;
 pub mod session;
 
 use crate::model::{Ablation, Bicameral};

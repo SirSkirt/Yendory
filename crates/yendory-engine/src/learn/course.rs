@@ -25,12 +25,13 @@ pub struct CourseFile {
 pub enum FileOutcome {
     /// The pass mark was reached: the lesson is mastered (by its held-out questions).
     Passed,
-    /// Improvements were accepted and kept, but the pass mark was not reached.
+    /// Records written before `Unresolved` existed: improvements were kept, the pass mark was
+    /// not reached.
     Progressed,
     /// Not passed after its attempts; moved to the end of the queue to try again after other
     /// lessons. A later record for the same file gives the final outcome.
     Deferred,
-    /// Nothing qualified in any attempt; the model before this file was kept.
+    /// Records written before `Unresolved` existed: nothing qualified, the previous model was kept.
     KeptPrevious,
     /// The same content was already taught earlier in this course; not taught again.
     Duplicate,
@@ -40,6 +41,9 @@ pub enum FileOutcome {
     Stopped,
     /// Records written before pass marks existed: a change was accepted (passed or not unknown).
     Learned,
+    /// Not passed after its retries and its one move to the end of the queue: the lesson's
+    /// attempts are used up. Any progress it made is kept (see `FileRecord::changed`).
+    Unresolved,
 }
 
 /// Why an attempt did not pass.
@@ -188,7 +192,7 @@ pub fn sort_files(files: &mut [CourseFile]) {
 /// The teaching order. A lesson that is not passed goes to the end of the queue, remembering how
 /// many changes had been made to the model at that moment; it is tried again only if the model
 /// has changed since (otherwise a retry would repeat the same result).
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
     waiting: std::collections::VecDeque<(usize, Option<usize>)>,
     changes: usize,
@@ -413,7 +417,7 @@ pub fn teach_course(
             Next::Teach { index, pass } => (index, pass),
             Next::Exhausted { index } => {
                 if let Some(r) = finals[index].as_mut() {
-                    r.outcome = if r.changed() { FileOutcome::Progressed } else { FileOutcome::KeptPrevious };
+                    r.outcome = FileOutcome::Unresolved;
                     r.error = Some(
                         "not passed; the model did not change after it was moved to the end of the queue"
                             .into(),
@@ -495,10 +499,8 @@ pub fn teach_course(
                         record.outcome = if pass == 1 && cfg.retry.requeue {
                             queue.defer(index);
                             FileOutcome::Deferred
-                        } else if record.changed() {
-                            FileOutcome::Progressed
                         } else {
-                            FileOutcome::KeptPrevious
+                            FileOutcome::Unresolved
                         };
                     }
                 }
@@ -518,7 +520,7 @@ pub fn teach_course(
 /// All attempts at one lesson in one pass. Sets `record.outcome` to Passed when the pass mark is
 /// reached (or Stopped); otherwise leaves the outcome to the caller.
 #[allow(clippy::too_many_arguments)]
-fn teach_lesson(
+pub(super) fn teach_lesson(
     current: &mut Bicameral,
     archive: &mut Vec<Item>,
     items: &[Item],

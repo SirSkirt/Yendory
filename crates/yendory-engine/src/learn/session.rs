@@ -311,7 +311,7 @@ struct Probes<'a> {
     retention_rows: Vec<Row>,
 }
 
-fn rows_of(model: &Bicameral, items: &[&Item], rng: &mut Rng) -> Result<Vec<Row>, String> {
+pub(super) fn rows_of(model: &Bicameral, items: &[&Item], rng: &mut Rng) -> Result<Vec<Row>, String> {
     let mut rows = Vec::new();
     for it in items {
         if let Some(r) = encode_item(&model.tokenizer, &it.segments, model.config.max_tokens, rng)? {
@@ -359,7 +359,11 @@ fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, R
 }
 
 /// Teacher-forced mean loss of rows (no gradient is applied).
-fn batch_loss_and_gradients_loss(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
+pub(super) fn batch_loss_and_gradients_loss(
+    model: &Bicameral,
+    rows: &[Row],
+    abl: Ablation,
+) -> Result<f32, String> {
     if rows.is_empty() {
         return Ok(0.);
     }
