@@ -86,6 +86,7 @@ pub fn size_presets() -> Vec<SizePreset> {
     vec![
         SizePreset { id: "nova2", name: "Nova-2 size (1.2M)", config: Config::default() },
         SizePreset { id: "4m", name: "4M", config: shape(6, 192, 448, 672, 512) },
+        SizePreset { id: "5m", name: "5M", config: shape(8, 192, 416, 608, 992) },
         SizePreset { id: "8m", name: "8M", config: shape(6, 256, 736, 1152, 768) },
         SizePreset { id: "15m", name: "15M", config: shape(8, 320, 768, 1664, 1248) },
     ]
