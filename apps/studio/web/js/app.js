@@ -300,6 +300,8 @@ function setTeaching(on) {
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
 const FOCI = ["dense", "transformer", "interconnect", "joint"];
+// Candidates of each bicameral education stage, in the Engine's order.
+const STAGE_FOCI = { dense: ["dense+interconnect"], transformer: ["transformer"], cooperative: ["dense+interconnect", "joint"] };
 $("teach").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
   const options = {
@@ -312,8 +314,9 @@ $("teach").addEventListener("click", safe(async () => {
     passPercent: Number($("optPass").value),
     retries: $("optRetries").checked,
     requeue: $("optRequeue").checked,
+    education: $("optEducation").value,
   };
-  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: options.foundation ? 4 : 1, candidate: 0, epoch: 1, attempt: "" };
+  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: (STAGE_FOCI[options.education] || (options.foundation ? FOCI : ["joint"])).length, foci: STAGE_FOCI[options.education] || (options.foundation ? FOCI : ["joint"]), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
@@ -323,6 +326,11 @@ $("teach").addEventListener("click", safe(async () => {
   setTeaching(true);
   say("Teaching started.");
 }, "Teach"));
+$("optEducation").addEventListener("change", () => {
+  const on = $("optEducation").value !== "off";
+  $("optFoundation").disabled = on;
+  $("optFoundation").parentElement.title = on ? "Bicameral education chooses the candidates itself" : "";
+});
 $("stopTeach").addEventListener("click", safe(async () => {
   await invoke("stop_teaching");
   $("stopTeach").disabled = true;
@@ -353,7 +361,7 @@ function onTeachEvent(e) {
       $("progressLine").textContent = `Baseline: held-out loss ${s.baseline.heldout_loss.toFixed(4)}, exact ${scoreCell(s.baseline)}; ${fmt(s.train_units)} units to learn, ${fmt(s.heldout_units)} held out, ${fmt(s.new_words)} new word units.`;
     } else if (s.type === "batch") {
       progress.epoch = s.epoch;
-      progress.candidate = Math.max(0, FOCI.indexOf(s.focus));
+      progress.candidate = Math.max(0, progress.foci.indexOf(s.focus));
       if (progress.candidates === 1) progress.candidate = 0;
       const inFile = (((s.epoch - 1) * progress.candidates + progress.candidate) * s.batches + s.batch) / (progress.epochs * progress.candidates * s.batches);
       $("progressBar").style.width = (100 * Math.min(1, (progress.done + Math.min(1, inFile)) / progress.files)).toFixed(1) + "%";
@@ -364,7 +372,7 @@ function onTeachEvent(e) {
         : el("span", { class: "bad" }, s.reasons.join("; "));
       $("candidateTable").tBodies[0].append(el("tr", { id: `cand-${e.index}-${s.epoch}-${s.focus}` },
         el("td", { class: "num" }, s.epoch), el("td", {}, s.focus),
-        el("td", { class: "num" }, s.train_loss.toFixed(4)), el("td", { class: "num" }, s.score.heldout_loss.toFixed(4)),
+        el("td", { class: "num" }, s.train_loss.toFixed(4)), el("td", { class: "num", title: s.score.dense_reliance == null ? "" : "Dense reliance: held-out loss rise with Dense's input cut" }, s.score.heldout_loss.toFixed(4) + (s.score.dense_reliance == null ? "" : ` · Dense ${s.score.dense_reliance.toFixed(3)}`)),
         el("td", { class: "num" }, scoreCell(s.score)),
         el("td", { class: "num" }, s.score.retention_loss == null ? "—" : s.score.retention_loss.toFixed(4)),
         el("td", {}, decision)));
@@ -493,6 +501,7 @@ $("read").addEventListener("click", safe(async () => {
     learningRate: Number($("readRate").value),
     window: Number($("readWindow").value),
     growVocabulary: $("readWords").checked,
+    education: $("readEducation").value,
     maxWords: Number($("readMaxWords").value),
   };
   $("evalTable").tBodies[0].replaceChildren();
@@ -515,7 +524,7 @@ function onReadEvent(e) {
   if (e.type === "started") {
     readStart = performance.now();
     $("readLine").textContent = `${fmt(e.train_documents)} documents to read (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`;
-    $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", {}, "starting point"), el("td", {}, "")));
+    $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", { class: "num" }, (e.baseline_dense_reliance ?? 0).toFixed(3)), el("td", {}, "starting point"), el("td", {}, "")));
   } else if (e.type === "batch") {
     $("readBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
     const secs = (performance.now() - readStart) / 1000;
@@ -527,6 +536,7 @@ function onReadEvent(e) {
       el("td", { class: "num" }, fmt(e.tokens)),
       el("td", { class: "num" }, e.train_loss.toFixed(4)),
       el("td", { class: "num" }, e.held_out_loss.toFixed(4)),
+      el("td", { class: "num" }, (e.dense_reliance ?? 0).toFixed(3)),
       el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, `not better than ${e.best_loss.toFixed(4)}`)),
       el("td", { class: "sample" }, el("span", { class: "note" }, e.sample_prompt), " ", e.sample)));
   } else if (e.type === "finished" && e.early_stop) {
@@ -581,6 +591,10 @@ $("runExam").addEventListener("click", safe(async () => {
   out.append(el("div", { class: "entry" },
     el("h3", {}, `${r.name}: ${pct(overall.c, overall.t)} exact (${overall.c}/${overall.t})`),
     r.fileWasTaught ? el("p", { class: "bad" }, "This exact file was taught to this model, so this is not an independent exam.") : "",
+    (() => {
+      const cut = Object.values(r.reportWithoutDense.exact).reduce((a, s) => ({ c: a.c + s.correct, t: a.t + s.total }), { c: 0, t: 0 });
+      return el("p", { class: "note" }, `With Dense's input to the transformer cut: ${pct(cut.c, cut.t)} exact (${cut.c}/${cut.t}). The difference is what the answers owe to the dense hemisphere.`);
+    })(),
     r.seenBefore ? el("p", { class: "warn" }, `${r.seenBefore} question(s) also appear in material this model was taught.`) : el("p", { class: "ok" }, "No question appears in material this model was taught."),
     el("table", { class: "figures" }, ...Object.entries(r.report.exact).map(([k, s]) => el("tr", {}, el("th", {}, k), el("td", {}, `${s.correct}/${s.total} (${pct(s.correct, s.total)})`))),
       r.report.prefers_supported.total ? el("tr", {}, el("th", {}, "prefers the supported answer"), el("td", {}, pct(r.report.prefers_supported.correct, r.report.prefers_supported.total))) : "")));

@@ -120,3 +120,38 @@ fn stop_discards_the_epoch_in_progress() {
     assert!(r.stopped && !r.learned && r.epochs.is_empty());
     assert_eq!(r.model.weights, start.weights);
 }
+
+#[test]
+fn bicameral_education_stages_choose_candidates_and_measure_dense() {
+    use yendory_engine::learn::session::EducationStage;
+    use yendory_engine::Focus;
+    let (lesson, archive) = course();
+    let start = model();
+    let cfg = SessionConfig { epochs: 1, education: Some(EducationStage::Cooperative), ..quick() };
+    let mut focuses = Vec::new();
+    let r = teach(
+        &start,
+        &lesson,
+        &archive,
+        &cfg,
+        &mut |e| {
+            if let Event::Candidate(c) = e {
+                focuses.push(c.focus.clone());
+                assert!(c.score.dense_reliance.is_some(), "Dense reliance is measured in education");
+            }
+        },
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(focuses, ["dense+interconnect", "joint"]);
+    assert!(r.baseline.dense_reliance.is_some());
+
+    let cfg = SessionConfig { epochs: 1, education: Some(EducationStage::TransformerLanguage), ..quick() };
+    let r = teach(&start, &lesson, &archive, &cfg, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(r.model.group_values(Focus::Right), start.group_values(Focus::Right));
+    assert_eq!(r.model.group_values(Focus::Interconnect), start.group_values(Focus::Interconnect));
+    // Ordinary teaching does not pay for the Dense measurement.
+    let plain = SessionConfig { epochs: 1, foundation: false, ..quick() };
+    let r = teach(&start, &lesson, &archive, &plain, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    assert!(r.baseline.dense_reliance.is_none());
+}

@@ -13,7 +13,7 @@ use tauri_plugin_fs::{FsExt, OpenOptions};
 use yendory_engine::fingerprint::sha256_hex;
 use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileOutcome, FileRecord};
 use yendory_engine::learn::eval::{evaluate, reply, Report};
-use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
+use yendory_engine::learn::session::{EducationStage, Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{batch_loss_and_gradients, Row};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::{
@@ -767,6 +767,20 @@ struct TeachOptions {
     retries: bool,
     #[serde(default = "yes")]
     requeue: bool,
+    /// Experimental bicameral education stage ("dense", "transformer", "cooperative").
+    #[serde(default)]
+    education: Option<String>,
+}
+
+/// The bicameral education stage named by the frontend.
+fn education_stage(name: Option<&str>) -> Res<Option<EducationStage>> {
+    Ok(match name {
+        None | Some("") | Some("off") => None,
+        Some("dense") => Some(EducationStage::DenseKnowledge),
+        Some("transformer") => Some(EducationStage::TransformerLanguage),
+        Some("cooperative") => Some(EducationStage::Cooperative),
+        Some(other) => return Err(format!("Unknown education stage {other}")),
+    })
 }
 fn yes() -> bool {
     true
@@ -817,6 +831,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         },
         seed: now(),
         word_limit: meta.word_limit,
+        education: education_stage(options.education.as_deref())?,
         ..SessionConfig::default()
     };
     append_history(
@@ -944,6 +959,9 @@ struct ExamResult {
     name: String,
     sha256: String,
     report: Report,
+    /// The same exam with Dense's input to the transformer cut: how much the answers depend
+    /// on the dense hemisphere.
+    report_without_dense: Report,
     /// Exam questions whose prompt also appears in material this model was taught.
     seen_before: usize,
     file_was_taught: bool,
@@ -970,13 +988,15 @@ async fn exam(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<ExamResul
         questions.iter().filter(|q| q.prompt.as_deref().is_some_and(|p| known.contains(p))).count();
     let sha256 = sha256_hex(text.as_bytes());
     let file_was_taught = taught.iter().any(|t| t.sha256 == sha256);
-    let report = tauri::async_runtime::spawn_blocking(move || {
-        let refs: Vec<&Item> = items.iter().filter(|i| i.kind != Kind::Prose).collect();
-        evaluate(&model, &refs, Ablation::default())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok(Some(ExamResult { name, sha256, report, seen_before, file_was_taught }))
+    let (report, report_without_dense) =
+        tauri::async_runtime::spawn_blocking(move || -> Res<(Report, Report)> {
+            let refs: Vec<&Item> = items.iter().filter(|i| i.kind != Kind::Prose).collect();
+            let cut = Ablation { no_afferent: true, ..Ablation::default() };
+            Ok((evaluate(&model, &refs, Ablation::default())?, evaluate(&model, &refs, cut)?))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(Some(ExamResult { name, sha256, report, report_without_dense, seen_before, file_was_taught }))
 }
 
 #[tauri::command]

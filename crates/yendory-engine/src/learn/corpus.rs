@@ -145,6 +145,12 @@ pub struct PretrainConfig {
     /// Vocabulary limit (learned word units). `None`: the model's allocated slots. A larger
     /// limit adds slots as words are learned (`max_words` still caps what reading adds).
     pub word_limit: Option<usize>,
+    /// Experimental bicameral education: Dense + interconnect only (A), the transformer only
+    /// (B), or the whole brain with Dense's contribution protected (C). `None`: whole brain.
+    pub education: Option<crate::learn::session::EducationStage>,
+    /// With `education`, a checkpoint is not accepted if Dense's contribution falls below this
+    /// share of the best checkpoint's.
+    pub keep_dense_reliance: f32,
     pub min_word_count: usize,
     pub seed: u64,
 }
@@ -163,6 +169,8 @@ impl Default for PretrainConfig {
             grow_vocabulary: true,
             max_words: 192,
             word_limit: None,
+            education: None,
+            keep_dense_reliance: 0.5,
             min_word_count: 12,
             seed: 1,
         }
@@ -180,6 +188,9 @@ pub enum PretrainEvent {
         new_words: usize,
         steps: u64,
         baseline_loss: f32,
+        /// Held-out loss rise when Dense's input to the transformer is cut, before reading.
+        #[serde(default)]
+        baseline_dense_reliance: f32,
     },
     Batch {
         step: u64,
@@ -207,6 +218,10 @@ pub struct Evaluation {
     pub held_out_loss: f32,
     pub best_loss: f32,
     pub accepted: bool,
+    /// Dense's measured contribution: how much the held-out loss rises when Dense's input to
+    /// the transformer is cut.
+    #[serde(default)]
+    pub dense_reliance: f32,
     /// Greedy continuation of the start of a held-out document, written by the model.
     pub sample_prompt: String,
     pub sample: String,
@@ -273,10 +288,19 @@ fn eval_rows(stream: &[TokenId], window: usize, count: usize) -> Vec<Row> {
 }
 
 fn mean_loss(model: &Bicameral, rows: &[Row]) -> Result<f32, String> {
+    mean_loss_with(model, rows, Ablation::default())
+}
+
+/// How much the held-out loss rises when Dense's input to the transformer is cut.
+fn dense_reliance(model: &Bicameral, rows: &[Row], loss: f32) -> Result<f32, String> {
+    Ok(mean_loss_with(model, rows, Ablation { no_afferent: true, ..Ablation::default() })? - loss)
+}
+
+fn mean_loss_with(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
     let mut total = 0f64;
     let mut weight = 0f64;
     for chunk in rows.chunks(16) {
-        let (l, _) = batch_loss_and_gradients(model, chunk, Ablation::default())?;
+        let (l, _) = batch_loss_and_gradients(model, chunk, abl)?;
         let w: f64 = chunk.iter().map(|r| r.mask.len() as f64).sum();
         total += l as f64 * w;
         weight += w;
@@ -352,6 +376,13 @@ pub fn pretrain(
     let eval_every = (steps / cfg.evaluations.max(1) as u64).max(1);
 
     let baseline_loss = mean_loss(&current, &probes)?;
+    let baseline_dense_reliance = dense_reliance(&current, &probes, baseline_loss)?;
+    use crate::learn::session::EducationStage;
+    let focus = match cfg.education {
+        None | Some(EducationStage::Cooperative) => Focus::Joint,
+        Some(EducationStage::DenseKnowledge) => Focus::DenseAndInterconnect,
+        Some(EducationStage::TransformerLanguage) => Focus::Left,
+    };
     observer(&PretrainEvent::Started {
         train_documents: corpus.train.len(),
         held_out_documents: corpus.held_out.len(),
@@ -360,7 +391,9 @@ pub fn pretrain(
         new_words,
         steps,
         baseline_loss,
+        baseline_dense_reliance,
     });
+    let mut best_reliance = baseline_dense_reliance;
 
     let mut rng = Rng::new(cfg.seed);
     let mut best: Option<Bicameral> = None;
@@ -383,7 +416,7 @@ pub fn pretrain(
             return Err("Training diverged (loss is not finite); try a lower learning rate".into());
         }
         let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
-        current.adam_step(&grads, lr, Focus::Joint)?;
+        current.adam_step(&grads, lr, focus)?;
         tokens += tokens_per_step;
         since_eval += loss as f64;
         since_n += 1;
@@ -391,9 +424,17 @@ pub fn pretrain(
 
         if (step + 1) % eval_every == 0 || step + 1 == steps {
             let held_out_loss = mean_loss(&current, &probes)?;
-            let accepted = held_out_loss.is_finite() && held_out_loss < best_loss - cfg.min_loss_improvement;
+            let reliance = dense_reliance(&current, &probes, held_out_loss)?;
+            // Bicameral education: a checkpoint that stopped using Dense is not accepted.
+            let keeps_dense = cfg.education.is_none()
+                || best_reliance <= 0.01
+                || reliance >= cfg.keep_dense_reliance * best_reliance;
+            let accepted = held_out_loss.is_finite()
+                && held_out_loss < best_loss - cfg.min_loss_improvement
+                && keeps_dense;
             if accepted {
                 best_loss = held_out_loss;
+                best_reliance = reliance;
                 best = Some(current.clone());
                 misses = 0;
                 on_accepted(&current)?;
@@ -407,6 +448,7 @@ pub fn pretrain(
                 held_out_loss,
                 best_loss,
                 accepted,
+                dense_reliance: reliance,
                 sample_prompt: prompt.clone(),
                 sample: sample(&current, &prompt),
             };

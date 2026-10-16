@@ -212,6 +212,41 @@ Example on step 15,000, "Where is the key?": gates 0.42 / 0.18 / 0.18, right→l
 left→right cut 0.000 — matching the earlier finding that the efferent path has no measurable
 effect in that model.
 
+## Bicameral education (experimental)
+
+An optional way to teach each hemisphere its intended role: Dense as the store of learned
+knowledge and associations, the transformer as the language and reasoning centre, and the
+interconnect as the cable between them. It only changes which parameters may learn in a session
+and adds one guard; the network, the training objective (next-token prediction) and the
+checkpoints are unchanged, and nothing is written into the model by rules.
+
+| Stage | Who learns | Why it teaches the role |
+|---|---|---|
+| A: Dense knowledge | Dense + interconnect (`Focus::DenseAndInterconnect`); transformer frozen | The frozen transformer cannot store what the text teaches, so lowering the loss on knowledge ("a dog is a kind of …") is only possible by Dense storing it and the interconnect carrying it. The cable learns with Dense so it can carry Dense's code; it has no hidden layer of its own (a gated linear projection), so it routes rather than stores. |
+| B: Transformer language | The transformer; Dense and interconnect frozen but still sending | The transformer learns grammar and in-context reasoning (premises in the prompt) alongside Dense's signals, not around them. |
+| C: Cooperation | Each epoch tries Dense + interconnect and the whole brain, keeps the better | Both learn together; a candidate that stops using Dense is rejected. |
+
+**Dense reliance** is measured, not inferred: the rise in held-out loss when Dense's input to the
+transformer is cut (the same ablation as the brain scan). Reading reports it at every check;
+lessons report it for every candidate in an education stage. In every stage a checkpoint or
+candidate is rejected if its Dense reliance falls below half of the accepted model's
+(`keep_dense_reliance`). The Exams page grades a file with and without Dense, so the difference
+shows what the answers owe to Dense.
+
+Measured on a tiny synthetic fact corpus ("A dog is a kind of animal. …", 60,000 tokens, an
+untrained Nova-2-size model): reading with the whole brain reached held-out loss 0.29 with Dense
+reliance 0.40 — cutting Dense left most answers intact, so the transformer held the facts. Stage A
+reached 1.68 with reliance 4.11: the facts were answered correctly ("animal", "flower",
+"vehicle") and cutting Dense turned them into gibberish, so they lived in Dense. One small
+experiment, not a general result.
+
+Limits: Dense reads only the last 64 characters as character bits with separate weights per
+position, so it learns facts tied to how words look in that window rather than word-level
+concepts; word embeddings belong to the transformer and stay frozen in stage A (new word units
+added during stage A keep their initial rows until the transformer trains). Specialisation is
+encouraged, not guaranteed: joint training can move knowledge into the transformer, which the
+reliance measurement and guard make visible.
+
 ## Thinking tree (`Bicameral::think`)
 
 Nova-2 has no explicit reasoning steps: for every token, the lower stage runs once and the

@@ -131,6 +131,13 @@
       <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
       <label>Window (tokens per example) <input type="number" id="readWindow" min="16" step="16" value="128"></label>
+      <label class="wide">Bicameral education (experimental)
+        <select id="readEducation">
+        <option value="off">Off: the whole brain learns together</option>
+        <option value="dense">Stage A: Dense knowledge (Dense + interconnect learn; transformer frozen)</option>
+        <option value="transformer">Stage B: Transformer language and reasoning (Dense + interconnect frozen)</option>
+        <option value="cooperative">Stage C: Cooperation (whole brain; Dense's contribution protected)</option>
+        </select></label>
       <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
     </div>
     <div class="actions">
@@ -144,7 +151,7 @@
       <div class="meter"><div id="readBar"></div></div>
       <p class="mono" id="readLine">—</p>
       <table class="ledger compact" id="evalTable">
-        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th>Decision</th><th>Sample (written by the model)</th></tr></thead>
+        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Sample (written by the model)</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -170,6 +177,13 @@
       <label>Batch size <input type="number" id="optBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="optRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
       <label>Pass mark (% of held-out questions exactly right) <input type="number" id="optPass" min="0" max="100" step="5" value="50"></label>
+      <label class="wide">Bicameral education (experimental)
+        <select id="optEducation">
+        <option value="off">Off: the whole brain learns together</option>
+        <option value="dense">Stage A: Dense knowledge (Dense + interconnect learn; transformer frozen)</option>
+        <option value="transformer">Stage B: Transformer language and reasoning (Dense + interconnect frozen)</option>
+        <option value="cooperative">Stage C: Cooperation (whole brain; Dense's contribution protected)</option>
+        </select></label>
       <label class="check"><input type="checkbox" id="optFoundation" checked> Foundation: try Dense, Transformer, Interconnect and Joint each epoch and keep the best</label>
       <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
       <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses a held-out answer the model already gives</label>

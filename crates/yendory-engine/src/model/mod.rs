@@ -97,10 +97,18 @@ pub enum Focus {
     Left,
     Right,
     Interconnect,
+    /// The dense hemisphere and the interconnect together (the transformer frozen): Dense
+    /// learns, and the cable learns to carry what Dense sends. A training focus only; no
+    /// parameter belongs to this group.
+    DenseAndInterconnect,
 }
 impl Focus {
     fn matches(self, g: Focus) -> bool {
-        self == Focus::Joint || self == g
+        match self {
+            Focus::Joint => true,
+            Focus::DenseAndInterconnect => g == Focus::Right || g == Focus::Interconnect,
+            _ => self == g,
+        }
     }
 }
 #[derive(Clone, Copy, Debug, Default)]
@@ -306,6 +314,14 @@ impl Bicameral {
     }
     pub fn parameter_count(&self) -> usize {
         self.weights.len()
+    }
+    /// The current values of one parameter group (Left, Right or Interconnect), in layout order.
+    pub fn group_values(&self, group: Focus) -> Vec<f32> {
+        self.slots
+            .iter()
+            .filter(|s| s.group == group)
+            .flat_map(|s| self.weights[s.range.clone()].to_vec())
+            .collect()
     }
     pub fn group_parameters(&self, focus: Focus) -> usize {
         self.slots.iter().filter(|s| s.group == focus).map(|s| s.range.len()).sum()

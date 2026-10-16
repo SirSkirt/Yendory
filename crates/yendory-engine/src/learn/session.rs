@@ -23,6 +23,14 @@ pub struct SessionConfig {
     pub learning_rate: f32,
     /// Four candidates (Right, Left, Interconnect, Joint) per epoch instead of Joint only.
     pub foundation: bool,
+    /// Experimental bicameral education stage; when set it replaces the Foundation / Joint
+    /// candidates and turns on the Dense-reliance guard.
+    #[serde(default)]
+    pub education: Option<EducationStage>,
+    /// In bicameral education, reject a candidate whose Dense reliance falls below this share of
+    /// the accepted model's (the held-out loss gap when Dense's input to the transformer is cut).
+    #[serde(default)]
+    pub keep_dense_reliance: f32,
     /// Stop after this many epochs in a row without a selected candidate.
     pub patience: u32,
     /// Share of batch rows drawn from archived earlier lessons (when an archive exists).
@@ -113,6 +121,8 @@ impl Default for SessionConfig {
             retention_panel: 8,
             protect_correct_answers: true,
             grow_vocabulary: true,
+            education: None,
+            keep_dense_reliance: 0.5,
             word_limit: None,
             min_word_count: 12,
             seed: 1,
@@ -130,6 +140,34 @@ pub fn focus_name(f: Focus) -> &'static str {
         Focus::Left => "transformer",
         Focus::Right => "dense",
         Focus::Interconnect => "interconnect",
+        Focus::DenseAndInterconnect => "dense+interconnect",
+    }
+}
+
+/// Experimental bicameral education: which parts of the brain a lesson or reading session may
+/// change, so each hemisphere is taught its intended role. Only the update mask and the guards
+/// differ from ordinary training; nothing is added to the network or its checkpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EducationStage {
+    /// Stage A: Dense and the interconnect learn; the transformer is frozen, so knowledge the
+    /// lesson needs can only be stored in Dense and passed on through the interconnect.
+    DenseKnowledge,
+    /// Stage B: the transformer learns (language, in-context reasoning); Dense and the
+    /// interconnect are frozen but keep sending their signals.
+    TransformerLanguage,
+    /// Stage C: cooperation. Each epoch tries Dense + interconnect and the whole brain, and keeps
+    /// the better one, as long as Dense's contribution does not collapse.
+    Cooperative,
+}
+impl EducationStage {
+    /// The training candidates of an epoch in this stage.
+    pub fn foci(self) -> Vec<Focus> {
+        match self {
+            EducationStage::DenseKnowledge => vec![Focus::DenseAndInterconnect],
+            EducationStage::TransformerLanguage => vec![Focus::Left],
+            EducationStage::Cooperative => vec![Focus::DenseAndInterconnect, Focus::Joint],
+        }
     }
 }
 
@@ -152,6 +190,10 @@ pub struct Score {
     /// Exact matches per kind of question: (correct, total).
     #[serde(default)]
     pub by_kind: std::collections::BTreeMap<String, (usize, usize)>,
+    /// How much the held-out loss rises when Dense's input to the transformer is cut: Dense's
+    /// measured contribution (measured in bicameral education only).
+    #[serde(default)]
+    pub dense_reliance: Option<f32>,
 }
 impl Score {
     /// Share of held-out questions answered exactly right.
@@ -178,6 +220,8 @@ pub enum Rejection {
     AnswersLost,
     /// Eligible, but not better than the accepted model by a meaningful amount.
     NoImprovement,
+    /// Bicameral education: the model stopped using Dense (its contribution collapsed).
+    DenseUnused,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -260,15 +304,21 @@ fn rows_of(model: &Bicameral, items: &[&Item], rng: &mut Rng) -> Result<Vec<Row>
     Ok(rows)
 }
 
-fn score(model: &Bicameral, p: &Probes) -> Result<(Score, Report, Report), String> {
+fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, Report), String> {
     let abl = Ablation::default();
-    let heldout_loss = batch_loss_and_gradients_loss(model, &p.heldout_rows)?;
+    let heldout_loss = batch_loss_and_gradients_loss(model, &p.heldout_rows, abl)?;
+    let dense_reliance = if dense {
+        let cut = Ablation { no_afferent: true, ..Ablation::default() };
+        Some(batch_loss_and_gradients_loss(model, &p.heldout_rows, cut)? - heldout_loss)
+    } else {
+        None
+    };
     let report = evaluate(model, &p.heldout_items, abl)?;
     let panel = evaluate(model, &p.panel_items, abl)?;
     let retention_loss = if p.retention_rows.is_empty() {
         None
     } else {
-        Some(batch_loss_and_gradients_loss(model, &p.retention_rows)?)
+        Some(batch_loss_and_gradients_loss(model, &p.retention_rows, abl)?)
     };
     let overall = report.overall();
     Ok((
@@ -282,6 +332,7 @@ fn score(model: &Bicameral, p: &Probes) -> Result<(Score, Report, Report), Strin
             panel_correct: panel.overall().correct,
             panel_total: panel.overall().total,
             by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
+            dense_reliance,
         },
         report,
         panel,
@@ -289,14 +340,14 @@ fn score(model: &Bicameral, p: &Probes) -> Result<(Score, Report, Report), Strin
 }
 
 /// Teacher-forced mean loss of rows (no gradient is applied).
-fn batch_loss_and_gradients_loss(model: &Bicameral, rows: &[Row]) -> Result<f32, String> {
+fn batch_loss_and_gradients_loss(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
     if rows.is_empty() {
         return Ok(0.);
     }
     let mut total = 0f64;
     let mut weight = 0f64;
     for chunk in rows.chunks(32) {
-        let (l, _) = batch_loss_and_gradients(model, chunk, Ablation::default())?;
+        let (l, _) = batch_loss_and_gradients(model, chunk, abl)?;
         let w: f64 = chunk.iter().map(|r| r.mask.iter().sum::<f32>() as f64).sum();
         total += l as f64 * w.max(1.);
         weight += w.max(1.);
@@ -377,7 +428,8 @@ pub fn teach_with(
         retention_rows: rows_of(&start, &retention_items, &mut rng)?,
     };
 
-    let (baseline, base_report, base_panel) = score(&start, &probes)?;
+    let dense = cfg.education.is_some();
+    let (baseline, base_report, base_panel) = score(&start, &probes, dense)?;
     let base_panel_correct = correct_set(&base_panel);
     observer(&Event::Started {
         train_units: train.len(),
@@ -387,7 +439,9 @@ pub fn teach_with(
         baseline: baseline.clone(),
     });
 
-    let foci: Vec<Focus> = if cfg.foundation {
+    let foci: Vec<Focus> = if let Some(stage) = cfg.education {
+        stage.foci()
+    } else if cfg.foundation {
         vec![Focus::Right, Focus::Left, Focus::Interconnect, Focus::Joint]
     } else {
         vec![Focus::Joint]
@@ -477,7 +531,7 @@ pub fn teach_with(
                     learning_rate: lr,
                 });
             }
-            let (s, report, panel) = score(&cand, &probes)?;
+            let (s, report, panel) = score(&cand, &probes, dense)?;
             let mut reasons = Vec::new();
             let mut rejections = Vec::new();
             let tol = cfg.heldout_loss_tolerance;
@@ -523,6 +577,16 @@ pub fn teach_with(
                 if lost > 0 {
                     rejections.push(Rejection::AnswersLost);
                     reasons.push(format!("lost {lost} held-out answer(s) the accepted model produced"));
+                }
+            }
+            // Bicameral education: keep the model using Dense. A candidate whose measured Dense
+            // contribution falls below the kept share of the accepted model's is rejected.
+            if let (Some(now), Some(before)) = (s.dense_reliance, accepted_score.dense_reliance) {
+                if before > 0.01 && now < cfg.keep_dense_reliance * before {
+                    rejections.push(Rejection::DenseUnused);
+                    reasons.push(format!(
+                        "Dense's contribution fell from {before:.4} to {now:.4} (held-out loss rise with Dense cut)"
+                    ));
                 }
             }
             let eligible = reasons.is_empty();

@@ -316,6 +316,9 @@ pub struct ReadOptions {
     window: usize,
     grow_vocabulary: bool,
     max_words: usize,
+    /// Experimental bicameral education stage ("dense", "transformer", "cooperative").
+    #[serde(default)]
+    education: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -356,6 +359,7 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         grow_vocabulary: options.grow_vocabulary,
         max_words: options.max_words,
         word_limit: meta.word_limit,
+        education: education_stage(options.education.as_deref())?,
         seed: now(),
         ..PretrainConfig::default()
     };
