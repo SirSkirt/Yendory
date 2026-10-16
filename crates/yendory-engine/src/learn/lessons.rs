@@ -295,13 +295,23 @@ pub fn grow_vocabulary(
     capacity: usize,
     min_count: usize,
 ) -> Vec<String> {
+    let texts =
+        items.iter().filter(|it| !it.held_out).flat_map(|it| it.segments.iter().map(|s| s.text.as_str()));
+    grow_vocabulary_from_texts(existing, texts, capacity, min_count)
+}
+
+/// [`grow_vocabulary`] over plain training texts (used for corpora).
+pub fn grow_vocabulary_from_texts<'a>(
+    existing: &[String],
+    texts: impl IntoIterator<Item = &'a str>,
+    capacity: usize,
+    min_count: usize,
+) -> Vec<String> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for it in items.iter().filter(|it| !it.held_out) {
-        for seg in &it.segments {
-            for w in seg.text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '\'')) {
-                if (3..=24).contains(&w.len()) {
-                    *counts.entry(w.to_string()).or_default() += 1;
-                }
+    for text in texts {
+        for w in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '\'')) {
+            if (3..=24).contains(&w.len()) {
+                *counts.entry(w.to_string()).or_default() += 1;
             }
         }
     }

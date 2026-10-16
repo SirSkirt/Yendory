@@ -15,10 +15,11 @@
   <div class="current" id="currentModel" aria-live="polite">No model open</div>
   <nav class="contents" aria-label="Sections">
     <button type="button" data-page="models" class="active"><span>1</span>Models</button>
-    <button type="button" data-page="classroom"><span>2</span>Classroom</button>
-    <button type="button" data-page="exams"><span>3</span>Exams</button>
-    <button type="button" data-page="brain"><span>4</span>Brain</button>
-    <button type="button" data-page="library"><span>5</span>Library</button>
+    <button type="button" data-page="reading"><span>2</span>Reading</button>
+    <button type="button" data-page="classroom"><span>3</span>Classroom</button>
+    <button type="button" data-page="exams"><span>4</span>Exams</button>
+    <button type="button" data-page="brain"><span>5</span>Brain</button>
+    <button type="button" data-page="library"><span>6</span>Library</button>
   </nav>
 </header>
 
@@ -35,6 +36,7 @@
         <tr><th>Transformer (left)</th><td id="activeLeft">—</td><th>Dense (right)</th><td id="activeRight">—</td></tr>
         <tr><th>Interconnect</th><td id="activeInter">—</td><th>Total parameters</th><td id="activeTotal">—</td></tr>
         <tr><th>Lessons</th><td id="activeLessons">—</td><th>Origin</th><td id="activeOrigin">—</td></tr>
+        <tr><th>Reading</th><td id="activeReading" colspan="3">—</td></tr>
       </table>
       <div class="actions">
         <button type="button" id="exportModel">Export .nnova2…</button>
@@ -58,9 +60,59 @@
     </table>
   </section>
 
-  <!-- § 2 Classroom -->
+  <!-- § 2 Reading -->
+  <section class="page" id="page-reading" hidden>
+    <h2><span class="sec">§ 2</span> Reading</h2>
+    <p class="lede">Before its lessons, a model can read ordinary text and learn how words and sentences go together (pre-training). One document in ten is held out and never read; a checkpoint is kept only when it predicts those unseen documents better than every earlier one.</p>
+
+    <h3>Get a corpus</h3>
+    <div id="sourceList"></div>
+    <div class="actions">
+      <button type="button" id="importCorpus">Use a text file from this device…</button>
+      <span class="note">Plain .txt, up to 200 MB. Stories are split at <code>&lt;|endoftext|&gt;</code>, other text at blank lines. Text is converted to ASCII.</span>
+    </div>
+    <div class="entry" id="downloadEntry" hidden>
+      <h3 id="downloadTitle">Downloading</h3>
+      <div class="meter"><div id="downloadBar"></div></div>
+      <p class="mono" id="downloadLine">—</p>
+      <div class="actions"><button type="button" id="cancelDownload">Cancel download</button></div>
+    </div>
+
+    <h3>Corpora on this device</h3>
+    <table class="ledger" id="corpusTable">
+      <thead><tr><th>Corpus</th><th class="num">Size</th><th class="num">Documents</th><th class="num">Held out</th><th>Licence</th><th>Fingerprint</th><th></th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">No corpus yet. Download one or use a text file.</td></tr></tbody>
+    </table>
+
+    <h3>Settings</h3>
+    <div class="settings">
+      <label>Corpus <select id="readCorpus"></select></label>
+      <label>Tokens to read <input type="number" id="readTokens" min="10000" step="100000" value="2000000"></label>
+      <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
+      <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
+      <label>Window (tokens per example) <input type="number" id="readWindow" min="16" max="256" step="16" value="128"></label>
+      <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" max="256" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
+    </div>
+    <div class="actions">
+      <button type="button" id="read" class="primary">Read</button>
+      <button type="button" id="stopRead" disabled>Stop</button>
+      <span class="note" id="readNote">—</span>
+    </div>
+
+    <div class="entry" id="readEntry" hidden>
+      <h3 id="readTitle">Reading</h3>
+      <div class="meter"><div id="readBar"></div></div>
+      <p class="mono" id="readLine">—</p>
+      <table class="ledger compact" id="evalTable">
+        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th>Decision</th><th>Sample (written by the model)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- § 3 Classroom -->
   <section class="page" id="page-classroom" hidden>
-    <h2><span class="sec">§ 2</span> Classroom</h2>
+    <h2><span class="sec">§ 3</span> Classroom</h2>
     <p class="lede">Add Unified lesson files (.txt) or a whole course (.zip). About one unit in ten is held out by a stable hash and never taught; it is used to judge progress.</p>
 
     <div class="actions">
@@ -107,9 +159,9 @@
     </table>
   </section>
 
-  <!-- § 3 Exams -->
+  <!-- § 4 Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 3</span> Exams</h2>
+    <h2><span class="sec">§ 4</span> Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is looked up or scripted.</p>
 
     <h3>Conversation</h3>
@@ -126,9 +178,9 @@
     <div id="examResult"></div>
   </section>
 
-  <!-- § 4 Brain -->
+  <!-- § 5 Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 4</span> Brain</h2>
+    <h2><span class="sec">§ 5</span> Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
     <div class="plate-wrap">
       <figure class="plate">
@@ -169,9 +221,9 @@
     </div>
   </section>
 
-  <!-- § 5 Library -->
+  <!-- § 6 Library -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 5</span> Library</h2>
+    <h2><span class="sec">§ 6</span> Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>

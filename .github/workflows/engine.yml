@@ -61,3 +61,9 @@ jobs:
         working-directory: apps/studio/src-tauri
       - run: cargo test
         working-directory: apps/studio/src-tauri
+      - name: TinyStories download check (network)
+        # Studio's built-in corpus source must stay reachable; a Hugging Face outage is reported
+        # here without failing the build.
+        continue-on-error: true
+        run: cargo test tinystories_is_reachable -- --ignored --nocapture
+        working-directory: apps/studio/src-tauri

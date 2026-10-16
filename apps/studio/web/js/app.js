@@ -69,6 +69,10 @@ function showActive(meta) {
   $("activeLessons").textContent = `${fmt(outcomes.filter(o => o === "passed").length)} passed · ${fmt(outcomes.filter(o => o === "progressed").length)} progressed` +
     (older ? ` · ${fmt(older)} taught before pass marks` : "");
   $("activeOrigin").textContent = meta.origin === "new" ? "created in Studio" : meta.origin || "—";
+  const read = (meta.read || []).filter(r => r.accepted);
+  $("activeReading").textContent = read.length
+    ? read.map(r => `${r.corpus}: ${fmt(r.tokens)} tokens, held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`).join(" · ")
+    : "nothing read yet";
 }
 
 async function refreshModels() {
@@ -177,8 +181,11 @@ function setTeaching(on) {
   teaching = on;
   $("teach").disabled = on;
   $("stopTeach").disabled = !on;
+  $("read").disabled = on;
+  $("stopRead").disabled = !on;
   for (const id of ["addLessons", "clearLessons", "createModel", "importModel"]) $(id).disabled = on;
   renderLessons();
+  renderCorpora();
 }
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
@@ -290,6 +297,144 @@ function onTeachFinished(f) {
   refreshModels();
 }
 
+// ---- reading (corpus pre-training) ---------------------------------------------------------
+let sourcesList = [];
+let corporaList = [];
+const mb = bytes => (bytes / 1048576).toFixed(1) + " MB";
+
+function renderSources() {
+  $("sourceList").replaceChildren(...sourcesList.map(s => {
+    const size = el("input", { type: "number", min: 1, max: Math.min(200, s.sizeMb), value: s.defaultMb, title: "Megabytes to download" });
+    return el("div", { class: "source" },
+      el("b", {}, s.name),
+      s.sizeMb > s.defaultMb ? el("span", {}, "first ", size, ` MB of ${fmt(s.sizeMb)} MB`) : el("span", {}, `${s.sizeMb} MB`),
+      el("button", { onclick: safe(async () => {
+        await invoke("download_corpus", { source: s.id, maxMb: Number(size.value) || s.defaultMb });
+        $("downloadEntry").hidden = false;
+        $("downloadTitle").textContent = `Downloading ${s.name}`;
+        $("downloadBar").style.width = "0%";
+        $("downloadLine").textContent = "Connecting…";
+        $("cancelDownload").hidden = false;
+      }, "Download") }, "Download"),
+      el("p", { class: "note" }, `${s.description} Licence: ${s.license}. Source: ${s.page}`));
+  }));
+}
+function renderCorpora() {
+  const body = $("corpusTable").tBodies[0];
+  body.replaceChildren();
+  if (!corporaList.length) body.append(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "No corpus yet. Download one or use a text file.")));
+  for (const c of corporaList) body.append(el("tr", {},
+    el("td", {}, c.name, c.droppedChars ? el("div", { class: "note" }, `${fmt(c.droppedChars)} non-ASCII characters dropped`) : ""),
+    el("td", { class: "num" }, mb(c.bytes)),
+    el("td", { class: "num" }, fmt(c.documents)),
+    el("td", { class: "num" }, fmt(c.heldOut)),
+    el("td", {}, c.license),
+    el("td", { class: "mono", title: c.sha256 }, c.sha256.slice(0, 12)),
+    el("td", {}, el("button", { class: "quiet", disabled: teaching ? "" : null, onclick: safe(async () => {
+      if (!confirm(`Delete the corpus "${c.name}" from this device?`)) return;
+      corporaList = await invoke("delete_corpus", { id: c.id }); renderCorpora();
+    }, "Delete corpus") }, "delete"))));
+  const sel = $("readCorpus");
+  const keep = sel.value;
+  sel.replaceChildren(...corporaList.map(c => el("option", { value: c.id }, `${c.name} (${mb(c.bytes)})`)));
+  if (corporaList.some(c => c.id === keep)) sel.value = keep;
+  updateReadNote();
+}
+function updateReadNote() {
+  const steps = Math.ceil(Number($("readTokens").value) / (Number($("readBatch").value) * Number($("readWindow").value)));
+  $("readNote").textContent = Number.isFinite(steps) && steps > 0
+    ? `${fmt(steps)} training steps, with about 20 held-out checks. Only checkpoints that lower the held-out loss are kept.`
+    : "—";
+}
+for (const id of ["readTokens", "readBatch", "readWindow"]) $(id).addEventListener("input", updateReadNote);
+async function refreshCorpora() { corporaList = await invoke("corpora"); renderCorpora(); }
+$("importCorpus").addEventListener("click", safe(async () => {
+  say("Reading the file…");
+  const c = await invoke("import_corpus");
+  if (!c) return;
+  await refreshCorpora();
+  $("readCorpus").value = c.id;
+  say(`Added ${c.name}: ${fmt(c.documents)} documents, ${fmt(c.heldOut)} held out.`);
+}, "Use text file"));
+$("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
+function onDownload(e) {
+  if (!e.done) {
+    $("downloadBar").style.width = e.total ? (100 * e.received / e.total).toFixed(1) + "%" : "50%";
+    $("downloadLine").textContent = `${mb(e.received)}${e.total ? " of " + mb(e.total) : ""} received`;
+    return;
+  }
+  $("cancelDownload").hidden = true;
+  if (e.error) { $("downloadLine").textContent = e.error; log("ERROR", e.error); return; }
+  $("downloadBar").style.width = "100%";
+  const c = e.corpus;
+  $("downloadLine").textContent = `Saved ${c.name}: ${mb(c.bytes)}, ${fmt(c.documents)} documents (${fmt(c.heldOut)} held out).`;
+  refreshCorpora().then(() => { $("readCorpus").value = c.id; });
+  say(`Downloaded ${c.name}.`);
+}
+
+let readStart = 0;
+$("read").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open or create a model first");
+  if (!$("readCorpus").value) throw new Error("Download a corpus or use a text file first");
+  const options = {
+    corpusId: $("readCorpus").value,
+    tokens: Number($("readTokens").value),
+    batchSize: Number($("readBatch").value),
+    learningRate: Number($("readRate").value),
+    window: Number($("readWindow").value),
+    growVocabulary: $("readWords").checked,
+    maxWords: Number($("readMaxWords").value),
+  };
+  $("evalTable").tBodies[0].replaceChildren();
+  $("readEntry").hidden = false;
+  $("readBar").style.width = "0%";
+  $("readTitle").textContent = `${active.name} is reading ${$("readCorpus").selectedOptions[0].textContent}`;
+  $("readLine").textContent = "Preparing the corpus…";
+  await invoke("read_corpus", { options });
+  readStart = 0;
+  setTeaching(true);
+  say("Reading started.");
+}, "Read"));
+$("stopRead").addEventListener("click", safe(async () => {
+  await invoke("stop_teaching");
+  $("stopRead").disabled = true;
+  say("Stopping at the next batch; the best checkpoint so far is kept.");
+}, "Stop reading"));
+
+function onReadEvent(e) {
+  if (e.type === "started") {
+    readStart = performance.now();
+    $("readLine").textContent = `${fmt(e.train_documents)} documents to read (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`;
+    $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", {}, "starting point"), el("td", {}, "")));
+  } else if (e.type === "batch") {
+    $("readBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
+    const secs = (performance.now() - readStart) / 1000;
+    const rate = e.tokens / Math.max(secs, 1e-3);
+    const left = (e.steps - e.step) * (e.tokens / e.step) / rate;
+    $("readLine").textContent = `step ${fmt(e.step)}/${fmt(e.steps)} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)} · rate ${e.learning_rate.toExponential(2)} · ${fmt(Math.round(rate))} tokens/s · about ${Math.ceil(left / 60)} min left`;
+  } else if (e.type === "evaluated") {
+    $("evalTable").tBodies[0].append(el("tr", { class: e.accepted ? "current-row" : "" },
+      el("td", { class: "num" }, fmt(e.tokens)),
+      el("td", { class: "num" }, e.train_loss.toFixed(4)),
+      el("td", { class: "num" }, e.held_out_loss.toFixed(4)),
+      el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, `not better than ${e.best_loss.toFixed(4)}`)),
+      el("td", { class: "sample" }, el("span", { class: "note" }, e.sample_prompt), " ", e.sample)));
+  } else if (e.type === "finished" && e.early_stop) {
+    log("INFO", "Reading stopped early: the held-out loss stopped improving.");
+  }
+}
+function onReadFinished(f) {
+  setTeaching(false);
+  if (f.model) showActive(f.model);
+  $("readBar").style.width = "100%";
+  const text = f.error ? `Reading ended with an error: ${f.error}`
+    : f.accepted ? `${f.stopped ? "Stopped" : f.earlyStop ? "Finished early (no further improvement)" : "Finished"} after ${fmt(f.tokens)} tokens: held-out loss ${f.baselineLoss.toFixed(4)} → ${f.bestLoss.toFixed(4)}. The best checkpoint is saved.`
+    : `${f.stopped ? "Stopped" : "Finished"}: no checkpoint lowered the held-out loss, so the model is unchanged.`;
+  $("readTitle").textContent = text;
+  if (f.error) log("ERROR", f.error); else say(text);
+  refreshModels();
+}
+
 // ---- exams ---------------------------------------------------------------------------------
 let conversation = [];
 function addLine(who, text, cls) {
@@ -377,9 +522,12 @@ async function loadHistory() {
   const rows = await invoke("history", { id: active.id });
   if (!rows.length) { box.replaceChildren(el("p", { class: "empty" }, "Nothing has been taught to this model in Studio yet.")); return; }
   // Candidates are shown inside their epoch; start markers add nothing to the record.
-  const shown = rows.filter(r => r.type || r.event?.type === "file_finished" || (r.event?.type === "session" && r.event.event.type === "epoch"));
+  const shown = rows.filter(r => r.type || r.reading?.type === "evaluated" || r.event?.type === "file_finished" || (r.event?.type === "session" && r.event.event.type === "epoch"));
   box.replaceChildren(...shown.reverse().map(r => {
     const e = r.event;
+    if (r.type === "reading_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Reading started: ${r.corpus.name} (sha256 ${r.corpus.sha256.slice(0, 12)}), up to ${fmt(r.options.tokens)} tokens.`);
+    if (r.type === "reading_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Reading ended with an error: " + r.error) : `Reading ${r.stopped ? "stopped" : "finished"} after ${fmt(r.tokens)} tokens; ${r.accepted ? "best checkpoint kept" : "model unchanged"}.`);
+    if (r.reading?.type === "evaluated") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Read ${fmt(r.reading.tokens)} tokens: held-out loss ${r.reading.held_out_loss.toFixed(4)} — ${r.reading.accepted ? "kept" : "not better"}.`, el("div", { class: "note mono" }, `${r.reading.sample_prompt} → ${r.reading.sample}`));
     if (r.type === "course_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Course started: ${r.files} file(s), ${r.options.epochs} epoch(s), ${r.options.foundation ? "Foundation" : "Joint only"}.`);
     if (r.type === "course_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Course ended with an error: " + r.error) : `Course ${r.stopped ? "stopped" : "finished"}.`);
     if (e?.type === "file_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),
@@ -407,6 +555,12 @@ async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
   await tauri.event.listen("teach-event", ev => { try { onTeachEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("teach-finished", ev => onTeachFinished(ev.payload));
+  await tauri.event.listen("read-event", ev => { try { onReadEvent(ev.payload); } catch (err) { log("ERROR", err); } });
+  await tauri.event.listen("read-finished", ev => onReadFinished(ev.payload));
+  await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));
+  sourcesList = await invoke("corpus_sources");
+  renderSources();
+  await refreshCorpora();
   const s = await invoke("status");
   showActive(s.active);
   setTeaching(s.teaching);

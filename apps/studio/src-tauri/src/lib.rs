@@ -17,6 +17,8 @@ use yendory_engine::learn::session::{Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::{Ablation, Bicameral, Config, Focus, Measurements};
 
+mod reading;
+
 const MAX_LESSON_BYTES: usize = 8 << 20;
 const MAX_CHECKPOINT_BYTES: usize = 64 << 20;
 
@@ -57,6 +59,9 @@ pub struct Meta {
     /// Where the model came from: "new", or the imported file's name.
     #[serde(default)]
     origin: String,
+    /// Corpora this model has read (pre-training), oldest first.
+    #[serde(default)]
+    read: Vec<reading::ReadRecord>,
 }
 
 struct Active {
@@ -69,8 +74,11 @@ struct Active {
 struct Studio {
     active: Mutex<Option<Active>>,
     lessons: Mutex<Vec<CourseFile>>,
+    /// Teaching lessons or reading a corpus (one training run at a time).
     teaching: AtomicBool,
     stop: Arc<AtomicBool>,
+    downloading: AtomicBool,
+    cancel_download: Arc<AtomicBool>,
 }
 
 fn models_dir(app: &AppHandle) -> Res<PathBuf> {
@@ -151,6 +159,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         words: 0,
         taught: Vec::new(),
         origin: origin.into(),
+        read: Vec::new(),
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -695,7 +704,14 @@ pub fn run() {
             ask,
             exam,
             measure,
-            history
+            history,
+            reading::corpus_sources,
+            reading::corpora,
+            reading::delete_corpus,
+            reading::import_corpus,
+            reading::download_corpus,
+            reading::cancel_download,
+            reading::read_corpus
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yendory Studio");

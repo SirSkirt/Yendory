@@ -7,10 +7,11 @@ computed by the Engine; the window only displays them.
 | Section | What it does |
 |---|---|
 | **1 Models** | Create an untrained model with any name, import a `.nnova2` checkpoint (e.g. Nova), open, rename, delete, export (`.nnova2`, verified after writing). |
-| **2 Classroom** | Add lesson files (`.txt`) or a course (`.zip`), see each file's taught / held-out units, then teach with Foundation candidates, rehearsal and answer protection. Live progress shows every candidate of every epoch and why it was or was not selected. The model is saved after every learned file. |
-| **3 Exams** | Talk to the model; grade a lesson file as an exam (flags questions the model was taught). |
-| **4 Brain** | Neural Nova's hemisphere shapes in the notebook colours, driven by real measurements: attention per block and thinking round, gate openings, right-hemisphere activations, and how much each pathway changes the output. |
-| **5 Library** | The open model's teaching record: each lesson file's fingerprint, steps and outcome, and each epoch's candidates. |
+| **2 Reading** | Pre-train on a text corpus before the lessons: download TinyStories (or the first part of its training file) or use any `.txt` file. One document in ten is held out; only checkpoints that lower the held-out loss are kept, and every check shows a sample written by the model. Corpora are stored in `corpora/` with their fingerprint. |
+| **3 Classroom** | Add lesson files (`.txt`) or a course (`.zip`), see each file's taught / held-out units, then teach with Foundation candidates, rehearsal and answer protection. Live progress shows every candidate of every epoch and why it was or was not selected. The model is saved after every learned file. |
+| **4 Exams** | Talk to the model; grade a lesson file as an exam (flags questions the model was taught). |
+| **5 Brain** | Neural Nova's hemisphere shapes in the notebook colours, driven by real measurements: attention per block and thinking round, gate openings, right-hemisphere activations, and how much each pathway changes the output. |
+| **6 Library** | The open model's record: what it read, each lesson file's fingerprint, steps and outcome, and each epoch's candidates. |
 
 Models live in the app's data folder (`models/<id>/model.nnova2`, `meta.json`, `archive.json`,
 `history.jsonl`). Uninstalling the app can delete that folder: export models you want to keep.

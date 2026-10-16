@@ -40,6 +40,34 @@ step-19,000 vocabulary word for word, and the published held-out scores of step 
   independent exam: lesson-matched held-out data is used to choose checkpoints. Keep genuinely
   unseen tests separate (Studio's Exams).
 
+## Reading: corpus pre-training (`learn::corpus::pretrain`)
+
+Optional, before the lessons: the model reads ordinary text and learns next-token prediction on
+it, so it starts the lessons already knowing how English words and sentences go together.
+
+1. **Normalise** to ASCII (typographic quotes, dashes, ellipses and spaces become ASCII; common
+   accented letters lose their accents; anything else is dropped and counted).
+2. **Split into documents**: at `<|endoftext|>` when present (TinyStories), otherwise at blank
+   lines. About 10% of documents are **held out** by the same stable hash as lesson units and
+   are never trained on.
+3. **Word units** are learned from the training documents only (frequency ≥ 12, names stay
+   character-level), up to a total limit (default 192 of 256) so later lessons can still add
+   their own words.
+4. **Train** the whole model (Joint) on random windows of the training documents (default
+   128 tokens, batch 16, warmup then cosine learning rate).
+5. **Judge**: about 20 times over the run the held-out loss is measured on fixed held-out
+   windows. A checkpoint is **accepted** only when it lowers the best held-out loss by at
+   least 0.002; every accepted checkpoint is saved. After 4 checks in a row without an
+   accepted checkpoint, reading stops early. The model returned is the best accepted
+   checkpoint, or the original model (including its vocabulary) when none was accepted.
+   Each check also records a greedy continuation of the start of a held-out document, written
+   by the model, so progress can be read and not only measured.
+
+Studio stores corpora with their SHA-256 fingerprint and records what each model read
+(`meta.json` `read`, and every check in `history.jsonl`). The built-in source is TinyStories
+(Hugging Face `roneneldan/TinyStories`), downloaded on the user's device and never redistributed
+by Yendory; any plain-text file can be used instead.
+
 ## Teaching sessions (`learn::session::teach`)
 
 One lesson at a time, starting from the accepted model.
