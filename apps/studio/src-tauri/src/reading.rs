@@ -337,10 +337,9 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         || !(1..=128).contains(&options.batch_size)
         || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
         || !(16..=256).contains(&options.window)
-        || options.max_words > yendory_engine::tokenizer::MAX_WORDS
     {
-        return Err("Choose 10,000 or more tokens, a batch size of 1-128, a learning rate up to 0.01, \
-                    a window of 16-256 tokens and at most 256 word units"
+        return Err("Choose 10,000 or more tokens, a batch size of 1-128, a learning rate up to 0.01 \
+                    and a window of 16-256 tokens"
             .into());
     }
     let info = load_info(&app, &options.corpus_id)?;
@@ -356,6 +355,7 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         window: options.window,
         grow_vocabulary: options.grow_vocabulary,
         max_words: options.max_words,
+        word_limit: meta.word_limit,
         seed: now(),
         ..PretrainConfig::default()
     };

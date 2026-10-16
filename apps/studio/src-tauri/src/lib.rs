@@ -23,8 +23,9 @@ use yendory_engine::{
 mod reading;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
-/// Large enough for the biggest size preset (16M parameters × 12 bytes + header).
-const MAX_CHECKPOINT_BYTES: usize = 200 << 20;
+/// Large enough for the largest model the Engine accepts (1 billion parameters × 12 bytes,
+/// plus the header and word list).
+const MAX_CHECKPOINT_BYTES: usize = if usize::BITS >= 64 { 12_200_000_000u64 as usize } else { usize::MAX };
 
 type Res<T> = Result<T, String>;
 
@@ -58,6 +59,13 @@ pub struct Meta {
     /// Transformer (left), dense (right), interconnect.
     groups: [usize; 3],
     words: usize,
+    /// Word slots the model has allocated (vocab − 128).
+    #[serde(default)]
+    slots: usize,
+    /// Vocabulary limit: slots are added up to this many words as they are learned. `None`:
+    /// the allocated slots are the limit (Nova-2's fixed 256).
+    #[serde(default)]
+    word_limit: Option<usize>,
     #[serde(default)]
     taught: Vec<TaughtFile>,
     /// Where the model came from: "new", or the imported file's name.
@@ -116,6 +124,7 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
         model.group_parameters(Focus::Interconnect),
     ];
     meta.words = model.tokenizer.words().len();
+    meta.slots = model.word_capacity();
     meta.updated = now();
 }
 
@@ -164,6 +173,8 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         taught: Vec::new(),
         origin: origin.into(),
         read: Vec::new(),
+        slots: 0,
+        word_limit: None,
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -197,14 +208,102 @@ fn list_models(app: AppHandle) -> Res<Vec<Meta>> {
 }
 
 #[tauri::command]
-fn create_model(app: AppHandle, studio: State<Studio>, name: String, size: Option<String>) -> Res<Meta> {
+fn create_model(
+    app: AppHandle,
+    studio: State<Studio>,
+    name: String,
+    size: Option<String>,
+    word_limit: Option<usize>,
+) -> Res<Meta> {
     not_teaching(&studio)?;
-    let config = match size.as_deref() {
+    let mut config = match size.as_deref() {
         None => Config::default(),
         Some(id) => size_presets().into_iter().find(|p| p.id == id).ok_or("Unknown model size")?.config,
     };
+    if let Some(limit) = word_limit {
+        check_word_limit(&config, limit)?;
+        // No slots yet: one is added for each word the model learns, up to the limit.
+        config.vocab = yendory_engine::tokenizer::BASE;
+    }
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    install(&app, &studio, &name, Bicameral::with_config(config, seed), "new")
+    let meta = install(&app, &studio, &name, Bicameral::with_config(config, seed), "new")?;
+    if word_limit.is_none() {
+        return Ok(meta);
+    }
+    set_limit(&app, &studio, &meta.id, word_limit)
+}
+
+/// A vocabulary limit must leave the model within the Engine's limits when every slot is used.
+fn check_word_limit(config: &Config, limit: usize) -> Res<()> {
+    let full = Config { vocab: yendory_engine::tokenizer::BASE + limit, ..config.clone() };
+    Bicameral::check_config(&full).map_err(|_| {
+        let base =
+            Bicameral::parameters_for(&Config { vocab: yendory_engine::tokenizer::BASE, ..config.clone() });
+        let most = (yendory_engine::model::MAX_PARAMETERS.saturating_sub(base)) / (config.d + 1);
+        format!("At this size the vocabulary can hold up to {most} words (1 billion parameters)")
+    })
+}
+
+fn set_limit(app: &AppHandle, studio: &Studio, id: &str, limit: Option<usize>) -> Res<Meta> {
+    let mut guard = studio.active.lock().unwrap();
+    let active = guard.as_mut().filter(|a| a.meta.id == id).ok_or("Open the model first")?;
+    if let Some(l) = limit {
+        if l < active.model.tokenizer.words().len() {
+            return Err(format!("The model already knows {} words", active.model.tokenizer.words().len()));
+        }
+        check_word_limit(&active.model.config, l)?;
+    }
+    active.meta.word_limit = limit;
+    let dir = model_dir(app, id)?;
+    write_atomic(
+        &dir.join("meta.json"),
+        &serde_json::to_vec_pretty(&active.meta).map_err(|e| e.to_string())?,
+    )?;
+    Ok(active.meta.clone())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VocabularyCost {
+    /// Parameters, file size and memory once every word up to the limit is learned.
+    parameters: usize,
+    file_bytes: u64,
+    chat_bytes: u64,
+    reading_bytes: u64,
+    teaching_bytes: u64,
+    /// Parameters each learned word adds (one embedding row and one output bias).
+    per_word: usize,
+    /// The largest limit this size allows.
+    max_words: usize,
+}
+
+/// What a vocabulary limit costs at a size, when every word up to the limit has been learned.
+#[tauri::command]
+fn vocabulary_cost(size: String, limit: usize) -> Res<VocabularyCost> {
+    let config = size_presets().into_iter().find(|p| p.id == size).ok_or("Unknown model size")?.config;
+    let base =
+        Bicameral::parameters_for(&Config { vocab: yendory_engine::tokenizer::BASE, ..config.clone() });
+    let per_word = config.d + 1;
+    let max_words = yendory_engine::model::MAX_PARAMETERS.saturating_sub(base) / per_word;
+    let parameters = base + limit.min(max_words) * per_word;
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(parameters, threads);
+    Ok(VocabularyCost {
+        parameters,
+        file_bytes,
+        chat_bytes,
+        reading_bytes,
+        teaching_bytes,
+        per_word,
+        max_words,
+    })
+}
+
+/// Changes the open model's vocabulary limit (`None`: back to its allocated slots).
+#[tauri::command]
+fn set_word_limit(app: AppHandle, studio: State<Studio>, id: String, limit: Option<usize>) -> Res<Meta> {
+    not_teaching(&studio)?;
+    set_limit(&app, &studio, &id, limit)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -337,8 +436,9 @@ async fn measure_speed(app: AppHandle, studio: State<'_, Studio>, size: String) 
 fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
     not_teaching(&studio)?;
     let dir = model_dir(&app, &id)?;
-    let meta = load_meta(&app, &id)?;
+    let mut meta = load_meta(&app, &id)?;
     let model = Bicameral::load(dir.join("model.nnova2"))?;
+    meta.slots = model.word_capacity();
     let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(_) => Vec::new(),
@@ -634,6 +734,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             ..RetryPolicy::default()
         },
         seed: now(),
+        word_limit: meta.word_limit,
         ..SessionConfig::default()
     };
     append_history(
@@ -852,6 +953,8 @@ pub fn run() {
             list_models,
             create_model,
             model_sizes,
+            set_word_limit,
+            vocabulary_cost,
             measure_speed,
             open_model,
             rename_model,

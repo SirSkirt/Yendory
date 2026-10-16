@@ -37,10 +37,12 @@
         <tr><th>Interconnect</th><td id="activeInter">—</td><th>Total parameters</th><td id="activeTotal">—</td></tr>
         <tr><th>Lessons</th><td id="activeLessons">—</td><th>Origin</th><td id="activeOrigin">—</td></tr>
         <tr><th>Reading</th><td id="activeReading" colspan="3">—</td></tr>
+        <tr><th>Vocabulary</th><td id="activeVocab" colspan="3">—</td></tr>
       </table>
       <div class="actions">
         <button type="button" id="exportModel">Export .nnova2…</button>
         <button type="button" id="renameModel" class="quiet">Rename…</button>
+        <button type="button" id="vocabLimit" class="quiet">Change vocabulary limit…</button>
       </div>
     </div>
 
@@ -50,6 +52,20 @@
       <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">Transformer · dense · interconnect</th><th class="num">File</th><th class="num">Memory: talking · reading · teaching</th><th>Speed on this device</th></tr></thead>
       <tbody></tbody>
     </table>
+    <div class="line-form">
+      <label for="vocabChoice">Vocabulary</label>
+      <select id="vocabChoice">
+        <option value="fixed">256 words, Nova-2 layout (all slots reserved)</option>
+        <option value="1000">up to 1,000 words</option>
+        <option value="10000">up to 10,000 words</option>
+        <option value="50000">up to 50,000 words</option>
+        <option value="100000">up to 100,000 words</option>
+        <option value="1000000">up to 1,000,000 words</option>
+        <option value="custom">another limit…</option>
+      </select>
+      <input id="vocabCustom" type="number" min="1" step="1" placeholder="words" class="narrow-num" hidden>
+    </div>
+    <p class="note" id="vocabNote">—</p>
     <div class="line-form">
       <label for="newName">Name</label>
       <input id="newName" maxlength="60" placeholder="e.g. Echo" autocomplete="off">
@@ -96,7 +112,7 @@
       <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
       <label>Window (tokens per example) <input type="number" id="readWindow" min="16" max="256" step="16" value="128"></label>
-      <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" max="256" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
+      <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
     </div>
     <div class="actions">
       <button type="button" id="read" class="primary">Read</button>

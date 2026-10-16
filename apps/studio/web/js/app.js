@@ -69,6 +69,10 @@ function showActive(meta) {
   $("activeLessons").textContent = `${fmt(outcomes.filter(o => o === "passed").length)} passed · ${fmt(outcomes.filter(o => o === "progressed").length)} progressed` +
     (older ? ` · ${fmt(older)} taught before pass marks` : "");
   $("activeOrigin").textContent = meta.origin === "new" ? "created in Studio" : meta.origin || "—";
+  const limit = meta.wordLimit;
+  $("activeVocab").textContent = `${fmt(meta.words)} words learned · ${fmt(meta.slots)} slots · ` +
+    (limit == null ? "fixed (no slots are added)" : `limit ${fmt(limit)} (a slot is added for each word learned)`);
+  $("readMaxWords").value = Math.floor(0.75 * (limit ?? meta.slots));
   const read = (meta.read || []).filter(r => r.accepted);
   $("activeReading").textContent = read.length
     ? read.map(r => `${r.corpus}: ${fmt(r.tokens)} tokens, held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`).join(" · ")
@@ -151,12 +155,35 @@ function renderSizes() {
       el("td", { class: "num" }, [s.chatBytes, s.readingBytes, s.teachingBytes].map(bytes).join(" · ")),
       speedCell(s));
   }));
-  body.querySelectorAll("input[name=modelSize]").forEach(r => r.addEventListener("change", renderSizes));
+  body.querySelectorAll("input[name=modelSize]").forEach(r => r.addEventListener("change", () => { renderSizes(); safe(updateVocabNote, "Vocabulary")(); }));
 }
+function chosenLimit() {
+  const v = $("vocabChoice").value;
+  if (v === "fixed") return null;
+  const n = Number(v === "custom" ? $("vocabCustom").value : v);
+  if (!(Number.isInteger(n) && n >= 1)) throw new Error("Enter a vocabulary limit of at least 1 word");
+  return n;
+}
+async function updateVocabNote() {
+  $("vocabCustom").hidden = $("vocabChoice").value !== "custom";
+  let limit;
+  try { limit = chosenLimit(); } catch { $("vocabNote").textContent = "Enter a number of words."; return; }
+  if (limit === null) {
+    $("vocabNote").textContent = "Nova-2's layout: 256 word slots reserved from the start (included in the table above). Reading and lessons fill them; the limit can be raised later.";
+    return;
+  }
+  const c = await invoke("vocabulary_cost", { size: chosenSize, limit });
+  const over = limit > c.maxWords;
+  $("vocabNote").replaceChildren(
+    over ? el("span", { class: "bad" }, `This size allows up to ${fmt(c.maxWords)} words. `) : "",
+    `Slots are added only as words are learned; each word adds ${fmt(c.perWord)} parameters. With all ${fmt(Math.min(limit, c.maxWords))} words learned: ${fmt(c.parameters)} parameters, file ${bytes(c.fileBytes)}, memory ${[c.chatBytes, c.readingBytes, c.teachingBytes].map(bytes).join(" · ")} (talking · reading · teaching). Training slows as words are learned: the output layer scores every learned word for every token.`);
+}
+$("vocabChoice").addEventListener("change", safe(updateVocabNote, "Vocabulary"));
+$("vocabCustom").addEventListener("input", safe(updateVocabNote, "Vocabulary"));
 $("createModel").addEventListener("click", safe(async () => {
   const name = $("newName").value.trim();
   if (!name) { $("newName").focus(); throw new Error("Give the new model a name"); }
-  showActive(await invoke("create_model", { name, size: chosenSize }));
+  showActive(await invoke("create_model", { name, size: chosenSize, wordLimit: chosenLimit() }));
   $("newName").value = "";
   await refreshModels();
   say(`Created ${active.name}: an untrained Bicameral model with ${fmt(active.parameters)} parameters.`);
@@ -172,6 +199,15 @@ $("exportModel").addEventListener("click", safe(async () => {
   const where = await invoke("export_model");
   if (where) say(`Exported and verified: ${where}`);
 }, "Export"));
+$("vocabLimit").addEventListener("click", safe(async () => {
+  if (!active) return;
+  const answer = prompt(`Vocabulary limit for ${active.name}: the most words it may learn. It knows ${fmt(active.words)} now and has ${fmt(active.slots)} slots. Leave empty to keep only the slots it has.`, active.wordLimit ?? "");
+  if (answer === null) return;
+  const limit = answer.trim() === "" ? null : Number(answer.replace(/[ ,_]/g, ""));
+  if (limit !== null && !(Number.isInteger(limit) && limit >= 0)) throw new Error("Enter a whole number of words");
+  showActive(await invoke("set_word_limit", { id: active.id, limit }));
+  say(limit === null ? "Vocabulary fixed at the slots the model has." : `Vocabulary limit set to ${fmt(limit)} words.`);
+}, "Vocabulary limit"));
 $("renameModel").addEventListener("click", safe(async () => {
   if (!active) return;
   const name = prompt("New name for this model", active.name);
@@ -675,6 +711,7 @@ async function boot() {
   setTeaching(s.teaching);
   sizes = await invoke("model_sizes");
   renderSizes();
+  await updateVocabNote();
   await refreshModels();
   await refreshLessons();
   say(`Yendory Studio ${s.engine} · every reply and measurement comes from the model itself.`);
