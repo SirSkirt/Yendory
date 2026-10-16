@@ -20,6 +20,7 @@ use yendory_engine::{
     size_presets, Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree, TokenId,
 };
 
+mod courses;
 mod reading;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
@@ -1098,7 +1099,22 @@ pub fn run() {
             reading::import_corpus,
             reading::download_corpus,
             reading::cancel_download,
-            reading::read_corpus
+            reading::read_corpus,
+            courses::list_courses,
+            courses::create_course,
+            courses::course_detail,
+            courses::delete_course,
+            courses::add_course_files,
+            courses::attach_practice,
+            courses::choose_exam,
+            courses::edit_course,
+            courses::list_plans,
+            courses::create_plan,
+            courses::plan_detail,
+            courses::edit_plan,
+            courses::delete_plan,
+            courses::restart_course,
+            courses::start_plan
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yendory Studio");

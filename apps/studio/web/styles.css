@@ -249,3 +249,14 @@ table { border-collapse: collapse; width: 100%; }
   .brain-stage { min-height: 205px; }
   h2 { font-size: 24px; }
 }
+
+/* Courses and planner */
+.ledger input[type=number].mark { width: 4.5em; font: 14px var(--mono); padding: 2px; text-align: right; }
+.ledger select.stage { font-size: 13.5px; }
+.ledger select.stage { max-width: 15em; }
+.plan-log { max-height: 320px; overflow-y: auto; border-top: 1px solid var(--rule); margin-top: 8px; font-size: 13.5px; }
+.plan-log p { margin: 4px 0; overflow-wrap: anywhere; }
+.report { border-top: 1px solid var(--rule); padding: 10px 0; }
+.report h5 { margin: 0 0 6px; font-size: 15px; }
+.check-list { margin: 8px 0; padding-left: 1.2em; font-size: 13.5px; }
+.check-list li { overflow-wrap: anywhere; }

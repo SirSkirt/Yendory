@@ -17,9 +17,11 @@
     <button type="button" data-page="models" class="active"><span>1</span>Models</button>
     <button type="button" data-page="reading"><span>2</span>Reading</button>
     <button type="button" data-page="classroom"><span>3</span>Classroom</button>
-    <button type="button" data-page="exams"><span>4</span>Exams</button>
-    <button type="button" data-page="brain"><span>5</span>Brain</button>
-    <button type="button" data-page="library"><span>6</span>Library</button>
+    <button type="button" data-page="courses"><span>4</span>Courses</button>
+    <button type="button" data-page="planner"><span>5</span>Planner</button>
+    <button type="button" data-page="exams"><span>6</span>Exams</button>
+    <button type="button" data-page="brain"><span>7</span>Brain</button>
+    <button type="button" data-page="library"><span>8</span>Library</button>
   </nav>
 </header>
 
@@ -213,9 +215,103 @@
     </table>
   </section>
 
-  <!-- § 4 Exams -->
+  <!-- § 4 Courses -->
+  <section class="page" id="page-courses" hidden>
+    <h2><span class="sec">§ 4</span> Courses</h2>
+    <p class="lede">A course is a set of lesson files with pass marks, extra practice material held in reserve, and a final exam. Its grade is 70% lessons (re-graded at the end of the course) and 30% final exam; it passes when the grade reaches the average of its lesson pass marks.</p>
+    <p class="note">File names decide everything: the first number orders the lessons; the words <b>Dense</b>, <b>Transformer</b> or <b>Co-op</b> choose Stage A, B or C; a file named <b>Practice</b> is extra practice for the lesson with the same number and stage (an <code>[Extra Practice]</code> block inside a lesson works too); a file named <b>Exam</b> is the final exam, with <code>[Dense]</code>, <code>[Transformer]</code>, <code>[Co-op]</code> or <code>[Whole Brain]</code> sections. Answers may list accepted forms and rules, separated by <code>|</code>: <code>animal | creature | !plant</code> (Dense: keywords, a <code>!</code> word must not appear) or <code>A robin is an animal. | must: robin animal | never: not</code> (sentences). Training uses the first form.</p>
+    <div class="actions"><button type="button" id="newCourse" class="primary">New course…</button></div>
+    <table class="ledger" id="courseList">
+      <thead><tr><th>Course</th><th class="num">Lessons</th><th class="num">Required grade</th><th>Status</th><th></th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">No courses yet.</td></tr></tbody>
+    </table>
+
+    <div class="entry" id="courseEditor" hidden>
+      <h3 id="courseTitle">—</h3>
+      <div class="actions">
+        <button type="button" id="addCourseFiles" class="primary">Add lesson files…</button>
+        <button type="button" id="chooseExam">Choose exam file…</button>
+        <button type="button" id="renameCourse" class="quiet">Rename…</button>
+        <button type="button" id="deleteCourse" class="quiet">Delete course</button>
+      </div>
+      <div id="courseNotes"></div>
+      <table class="ledger compact" id="courseLessons">
+        <thead><tr><th>#</th><th>Lesson file</th><th>Stage</th><th class="num">Pass mark %</th><th class="num">Train · evaluation · exam</th><th>Extra practice</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="courseCheck"></div>
+
+      <h4>Grading</h4>
+      <div class="settings">
+        <label>Pass mark for every lesson (%) <input type="number" id="cAllMarks" min="0" max="100" step="5" value="70"><button type="button" id="cApplyMarks" class="quiet">Apply to all</button></label>
+        <label class="wide">Lessons without a stage word in their name
+          <select id="cDefaultStage">
+            <option value="">Whole brain (no education stage)</option>
+            <option value="dense_knowledge">Stage A: Dense</option>
+            <option value="transformer_language">Stage B: Transformer</option>
+            <option value="cooperative">Stage C: Co-op</option>
+          </select></label>
+        <label>Exam section weights: Dense <input type="number" id="wDense" min="0" max="100" step="1"></label>
+        <label>Transformer <input type="number" id="wTransformer" min="0" max="100" step="1"></label>
+        <label>Co-op <input type="number" id="wCoop" min="0" max="100" step="1"></label>
+        <label>Whole brain <input type="number" id="wWhole" min="0" max="100" step="1"></label>
+        <label class="check"><input type="checkbox" id="cExamMinOn"> Also require a final-exam score of at least <input type="number" class="inline-num" id="cExamMin" min="0" max="100" step="5" value="50">%</label>
+        <label class="check"><input type="checkbox" id="cPretest"> Give the final exam before the course too, as an ungraded pre-test (shows how much the course taught)</label>
+      </div>
+      <h4>Training</h4>
+      <div class="settings">
+        <label>Epochs <input type="number" id="cEpochs" min="1" max="50"></label>
+        <label>Batch size <input type="number" id="cBatch" min="1" max="128"></label>
+        <label>Learning rate <input type="number" id="cRate" min="0.000001" max="0.01" step="0.0001"></label>
+        <label>Lesson retries (0-3) <input type="number" id="cRetries" min="0" max="3"></label>
+        <label>Time limit (hours, empty = none) <input type="number" id="cTimeLimit" min="0.1" max="720" step="0.5"></label>
+        <label class="check"><input type="checkbox" id="cFoundation"> Foundation: try each part of the lesson's stage on its own and together</label>
+        <label class="check"><input type="checkbox" id="cRehearsal"> Rehearse earlier lessons</label>
+        <label class="check"><input type="checkbox" id="cProtect"> Never accept a step that loses an answer the model already gives</label>
+        <label class="check"><input type="checkbox" id="cRequeue"> A lesson not passed after its retries moves once to the end of the course (then it is recorded as unresolved)</label>
+      </div>
+      <p class="note">Changing training settings does not count as a revision of the course; changing lessons, practice material, the exam, pass marks or exam weights does.</p>
+    </div>
+  </section>
+
+  <!-- § 5 Planner -->
+  <section class="page" id="page-planner" hidden>
+    <h2><span class="sec">§ 5</span> Planner</h2>
+    <p class="lede">A plan teaches saved courses to one model, in order and unattended. Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
+    <div class="actions"><button type="button" id="newPlan" class="primary">New plan for the open model…</button></div>
+    <table class="ledger" id="planList">
+      <thead><tr><th>Plan</th><th>Model</th><th class="num">Courses passed</th><th>Status</th><th></th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">No plans yet.</td></tr></tbody>
+    </table>
+
+    <div class="entry" id="planEditor" hidden>
+      <h3 id="planTitle">—</h3>
+      <p id="planMessage"></p>
+      <table class="ledger compact" id="planCourses">
+        <thead><tr><th>#</th><th>Course</th><th class="num">Required</th><th class="num">Grade</th><th>State</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="line-form"><select id="planAddCourse"></select><button type="button" id="planAdd">Add course</button></div>
+      <div class="actions">
+        <button type="button" id="planStart" class="primary">Start</button>
+        <button type="button" id="planStop" disabled>Stop</button>
+        <button type="button" id="planRestart" hidden>Restart course</button>
+        <button type="button" id="planDelete" class="quiet">Delete plan</button>
+      </div>
+      <div class="entry" id="planProgress" hidden>
+        <h4 id="planNow">—</h4>
+        <div class="meter"><div id="planBar"></div></div>
+        <p class="mono" id="planLine">—</p>
+        <div id="planLog" class="plan-log"></div>
+      </div>
+      <h4>Course reports</h4>
+      <div id="planResults"><p class="empty">No course finished yet.</p></div>
+    </div>
+  </section>
+
+  <!-- § 6 Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 4</span> Exams</h2>
+    <h2><span class="sec">§ 6</span> Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is looked up or scripted.</p>
 
     <h3>Conversation</h3>
@@ -234,7 +330,7 @@
 
   <!-- § 5 Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 5</span> Brain</h2>
+    <h2><span class="sec">§ 7</span> Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
     <div class="plate-wrap">
       <figure class="plate">
@@ -285,7 +381,7 @@
 
   <!-- § 6 Library -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 6</span> Library</h2>
+    <h2><span class="sec">§ 8</span> Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>
@@ -298,5 +394,6 @@
 </footer>
 <script src="js/brain.js"></script>
 <script src="js/app.js"></script>
+<script src="js/courses.js"></script>
 </body>
 </html>

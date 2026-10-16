@@ -21,6 +21,8 @@ has been checked, how, and what has not.
 | **Step 19,000 held-out re-score**, all 666 units | dialogue 155/324, understanding 30/54, reasoning 166/264, conversation turns 65/72, prefers supported 77.3%, overall 58.3%: equal to the published report (local only; 24 s in Rust) |
 | Teaching session: four whole-model candidates per epoch from the same accepted model, deterministic for a seed, rollback leaves the model bit-identical, stop discards the epoch in progress | pass |
 | Courses: per-file SHA-256, steps, outcomes; duplicates not re-taught; a failing file does not end the course | pass |
+| Course Builder: file names give order, stage and role; exam questions, evaluation questions and training never overlap; practice leaks excluded; keyword and sentence grading; fingerprints and restart rules (`tests/program.rs`, `grading.rs`) | pass |
+| Course runs: pre-test, 70/30 grade, three remediation attempts with different strategies and halved learning rates, best checkpoint returned, stop and resume continue where they were | pass |
 | Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
 | **Size presets** 4M, 8M, 15M (Nova-2's 64 / 28.5 / 7.7% division): a briefly trained model of each, last-position logits, loss and 3,000 sampled gradients recomputed by the numpy reference (`examples/size_compat.rs` + `reference/check_sizes.py`, in CI) | logits within 2e-6, loss identical to 6 decimals, gradients within 3e-7 of the largest |
 | **Selectable context**: changing `max_tokens` keeps every weight and every short-prompt logit; a 1,024-token-context model trains on a 900-token row and its KV cache matches the full pass; recomputed attention (no stored weights) passes every compatibility test; a 1,024-token context on an 800-token input recomputed by the numpy reference in CI | logits within 6e-7 |
@@ -34,7 +36,9 @@ Checked in this development container on Linux (real app under a virtual display
 open models, import a ZIP course through the native file dialog, teach with Foundation candidates
 and live progress, per-file saving and records, conversation, exam grading with taught-material
 warnings, the brain visualizer with live measurements, the Library record; a `.deb` package
-builds. Not checked: the Windows installer and Android APK on real devices (CI builds them).
+builds. Course Builder and Planner: a ZIP of Dense / Transformer / Co-op lessons with a practice
+file was read into a course (order, stages, practice and exam pool as expected), a plan taught it,
+graded it, started remediation, was stopped mid-remediation and resumed at the next lesson. Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified
 

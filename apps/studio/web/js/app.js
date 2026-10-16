@@ -42,6 +42,7 @@ function go(page) {
   document.querySelectorAll(".contents button").forEach(b => b.classList.toggle("active", b.dataset.page === page));
   document.querySelectorAll(".page").forEach(p => { p.hidden = p.id !== "page-" + page; });
   if (page === "library") loadHistory();
+  window.onPage?.(page);
 }
 document.querySelectorAll(".contents button").forEach(b => b.addEventListener("click", () => go(b.dataset.page)));
 
@@ -66,7 +67,7 @@ function showActive(meta) {
   const latest = new Map(meta.taught.map(t => [t.sha256, t.outcome]));
   const outcomes = [...latest.values()];
   const older = outcomes.filter(o => o === "learned").length;
-  $("activeLessons").textContent = `${fmt(outcomes.filter(o => o === "passed").length)} passed · ${fmt(outcomes.filter(o => o === "progressed").length)} progressed` +
+  $("activeLessons").textContent = `${fmt(outcomes.filter(o => o === "passed").length)} passed · ${fmt(outcomes.filter(o => ["unresolved", "progressed", "kept_previous"].includes(o)).length)} unresolved` +
     (older ? ` · ${fmt(older)} taught before pass marks` : "");
   $("activeOrigin").textContent = meta.origin === "new" ? "created in Studio" : meta.origin || "—";
   const limit = meta.wordLimit;
@@ -296,6 +297,7 @@ function setTeaching(on) {
   for (const id of ["addLessons", "clearLessons", "createModel", "importModel"]) $(id).disabled = on;
   renderLessons();
   renderCorpora();
+  window.onTeachingChanged?.(on);
 }
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
@@ -342,6 +344,8 @@ $("stopTeach").addEventListener("click", safe(async () => {
   say("Stopping at the next batch; the epoch in progress will be discarded.");
 }, "Stop"));
 
+const OUTCOME_CLASS = { passed: "ok", learned: "ok", progressed: "warn", deferred: "warn", kept_previous: "bad", unresolved: "bad", duplicate: "warn", failed: "bad", stopped: "warn" };
+const OUTCOME_LABEL = { passed: "passed", learned: "learned", progressed: "progressed, not passed", deferred: "not passed yet: moved to the end of the queue", kept_previous: "not learned; previous model kept", unresolved: "unresolved: attempts used up", duplicate: "duplicate", failed: "not taught", stopped: "stopped" };
 function scoreCell(s) { return s ? `${s.exact_correct}/${s.exact_total}` : "—"; }
 function onTeachEvent(e) {
   if (e.type === "file_started") {
@@ -398,8 +402,9 @@ function onTeachEvent(e) {
       log("INFO", `Epoch ${s.epoch}: ${s.selected ? "selected " + s.selected : "no candidate selected"}`);
     }
   } else if (e.type === "file_finished") {
-    const cls = { passed: "ok", learned: "ok", progressed: "warn", deferred: "warn", kept_previous: "bad", duplicate: "warn", failed: "bad", stopped: "warn" }[e.outcome] || "";
-    const label = { passed: "passed", learned: "learned", progressed: "progressed, not passed", deferred: "not passed yet: moved to the end of the queue", kept_previous: "not learned; previous model kept", duplicate: "duplicate", failed: "not taught", stopped: "stopped" }[e.outcome] || e.outcome;
+    const cls = OUTCOME_CLASS[e.outcome] || "";
+    const label = e.outcome === "unresolved" ? (e.attempts?.some(a => a.learned) ? "unresolved: attempts used up, progress kept" : "unresolved: attempts used up, nothing learned")
+      : OUTCOME_LABEL[e.outcome] || e.outcome;
     if (e.outcome !== "deferred") progress.done += 1;
     fileState[e.index] = el("span", { class: cls }, label);
     renderLessons();
@@ -419,9 +424,9 @@ function onTeachFinished(f) {
   if (f.model) showActive(f.model);
   $("progressBar").style.width = "100%";
   const passed = f.files.filter(x => x.outcome === "passed").length;
-  const progressed = f.files.filter(x => x.outcome === "progressed").length;
+  const unresolved = f.files.filter(x => x.outcome === "unresolved" || x.outcome === "progressed" || x.outcome === "kept_previous").length;
   const text = f.error ? `Teaching ended with an error: ${f.error}`
-    : `${f.stopped ? "Stopped" : "Finished"}: ${passed} of ${f.files.length} lesson file(s) passed, ${progressed} progressed without passing. Every accepted improvement is saved.`;
+    : `${f.stopped ? "Stopped" : "Finished"}: ${passed} of ${f.files.length} lesson file(s) passed, ${unresolved} unresolved (their attempts are used up). Every accepted improvement is saved.`;
   $("progressTitle").textContent = text;
   if (f.error) log("ERROR", f.error); else say(text);
   refreshModels();

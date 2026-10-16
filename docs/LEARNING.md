@@ -149,8 +149,13 @@ accepted only if it answers more questions exactly right, or lowers the held-out
 but the lesson's outcome is:
 
 - `passed`: the pass mark was reached (if the model already met it, no change is needed);
-- `progressed`: improvements were kept, but the pass mark was not reached;
-- `kept_previous`: nothing qualified; the model is unchanged.
+- `deferred`: not passed after its retries; moved once to the end of the queue;
+- `unresolved`: still not passed after its retries and its one move to the end of the queue.
+  Its attempts are used up; any improvement it made is kept (`FileRecord::changed`). Records
+  written before this outcome existed say `progressed` (improvements kept) or `kept_previous`.
+
+Lesson retries are finite: at most 3 diagnosed retries, then at most one move to the end of the
+queue (only if the model changed meanwhile), then `unresolved`. No lesson is retried endlessly.
 
 **A lesson that does not pass is diagnosed, not blindly retried.** After each attempt below the
 pass mark the trainer works out why, from the rejected candidates and from re-asking the
@@ -172,7 +177,7 @@ the diagnosis that led to it).
 
 Example (step 15,000, sample course, pass mark 95% to force retries): exact 3/19 → targeted
 practice ("not learned yet") 5/19 → balanced practice ("interference") 5/19 → gentler balanced
-practice 7/19. The lesson is reported as *progressed*, not passed. If the lesson still does not pass, it **moves to the end of the queue**
+practice 7/19. The lesson is not passed. If the lesson still does not pass, it **moves to the end of the queue**
 (outcome `deferred`) and the course continues: a later lesson may teach the skill it needs. It
 is tried again once the rest of the queue is done, but only if the model changed in the meantime
 (otherwise the result would be the same); then its final outcome is recorded.
@@ -186,12 +191,133 @@ ZIP is the frontend's job, `sort_files` orders by name). For every file the Engi
 - training and held-out unit counts, `start_step` and `end_step`;
 - the pass mark, the attempts (each with its diagnosis), and `pass` (2 when it is the retry after
   being moved to the end of the queue);
-- the outcome: `passed`, `progressed`, `deferred`, `kept_previous`, `duplicate` (same content
+- the outcome: `passed`, `deferred`, `unresolved`, `duplicate` (same content
   as an earlier file; not taught again), `failed` (with the reason, e.g. no held-out units or
   non-ASCII text; the course continues), or `stopped`;
 - the baseline and final scores.
 
 Learned files join the archive, so later files rehearse them and are guarded against forgetting them.
+
+## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
+
+Courses with graded lessons, a final exam and automatic remediation, run one after another by a
+plan, unattended. Nothing here changes the network or its checkpoints: it decides what is taught
+when, with which settings, and how the result is graded.
+
+### Building a course
+
+File names decide order, stage and role (`curriculum::read_name`, whole words, any case):
+
+- the **first number** in the name orders the lessons (2 before 10); files with the same number
+  form a set, taught Dense → Transformer → Co-op → whole brain; files without a number come last;
+- **Dense**, **Transformer** or **Co-op** (also `Coop`, `Cooperative`) choose Stage A, B or C
+  (see *Bicameral education*); without a keyword the course's default stage is used (whole brain
+  unless chosen). A name with two stage keywords must have its stage chosen by hand;
+- **Practice** marks extra practice for the lesson with the same number and stage; an
+  `[Extra Practice] … [/Extra Practice]` block inside a lesson file works too (ordinary teaching
+  ignores it);
+- **Exam** marks the course's final exam: sections `[Dense]`, `[Transformer]`, `[Co-op]`,
+  `[Whole Brain]` holding ordinary lesson blocks, or no sections (one whole-brain exam).
+
+Each lesson has its own **pass mark**. The course's **required grade** is the average of its
+lessons' pass marks.
+
+### Answer keys and grading (`learn::grading`)
+
+In course lessons and exams an answer may list accepted forms and rules separated by `|`; the
+first form is the training target:
+
+```
+What is a cat?  animal | creature | !plant
+Is a robin an animal?  Yes, a robin is an animal. | A robin is an animal. | must: robin animal | never: not
+```
+
+- **Keyword grading** (Dense lessons, the exam's Dense section): correct when the reply contains
+  an accepted keyword (or phrase) as whole words, not negated, and no conflicting keyword that is
+  not negated ("not", "no", "never", "nor", "without" within the two words before it).
+  Conflicts are the `!word` entries plus, by default, the accepted keywords of the lesson's other
+  questions, leaving out words of the question itself. "Animal", "Cat animal" and "Animal, not
+  plant" are correct; "Animal plant" and "not an animal" are not.
+- **Sentence grading** (Transformer, Co-op, whole brain): the reply must equal an accepted form
+  after normalising case, punctuation, spacing and contractions ("isn't" = "is not"), or contain
+  all `must:` words and no `never:` word. Overlapping words alone never give credit, so "The door
+  is not open" never matches "The door is open". The reasoning check (supported answer more
+  likely than the contradicted one) is recorded as evidence; it never turns a wrong reply right.
+
+Ordinary Classroom lessons have no key and keep exact matching, as in the reference evaluation.
+
+### Questions that are never trained on
+
+- About 10% of each lesson's questions are its **evaluation questions** (the usual held-out hash).
+- Without a teacher-written exam, a **second, independent hash** reserves about 10% of each
+  lesson's remaining questions for the **final exam**, in the section of the lesson's stage. They
+  are neither trained on nor used for the lesson grades. A section with fewer than 8 questions is
+  warned about; questions are never reused to fill it.
+- A teacher-written exam question that also appears in any lesson or practice file is left out
+  of the exam (with a warning).
+- Practice questions matching an evaluation or exam question are excluded (with a warning).
+
+### The course grade
+
+**Course grade = 70% lessons + 30% final exam.**
+
+- Lessons: the average of each lesson's score on its evaluation questions, re-graded on the model
+  **at the end of the course**. Each lesson also records its score *when taught*; the difference
+  shows forgetting (or later improvement).
+- Final exam: the sections' scores weighted (default equal; configurable per course; a section
+  without questions shares its weight proportionally with the others). Every section is also
+  graded with Dense's input cut, and the exam's Dense reliance (loss rise with Dense cut) is
+  recorded. Neither counts towards passing.
+- The course passes when the grade reaches the required grade and, if set, the exam reaches its
+  optional minimum. Lessons below their own mark are listed even when the course passes.
+- An optional **pre-test** gives the final exam before the course (ungraded, never trained on),
+  to show how much the course taught.
+
+### Remediation of a failed course
+
+A failed course gets up to **3 remediation attempts**. Each one:
+
+1. diagnoses the lessons below their mark (from lesson results only; exam questions never steer
+   training): *forgotten* (passed when taught, below at course end), *not learned* (its training
+   questions are not answered), or *not generalising*; *unstable* when the previous attempt made
+   the grade worse. If every lesson met its mark (the exam pulled the grade down), the lessons
+   with the lowest course-end scores are practised;
+2. picks a strategy for the main cause that **has not been used yet in this run**:
+
+   | Strategy | What the session trains on, and how |
+   |---|---|
+   | targeted practice | wrong answers twice, the extra practice, a quarter of what it knows; easiest first, ≥ 8 epochs, 25% rehearsal |
+   | consolidation | the whole lesson and its extra practice, 40% rehearsal of the course's other lessons, ≥ 6 epochs |
+   | broader study | all examples and explanations plus a varied two-thirds of the extra practice, +6 epochs |
+   | fine-grained | half the batch size, Foundation candidates (each part of the stage on its own), +4 epochs |
+
+   Preferred order: not learned → targeted, fine-grained, broader, consolidation; forgotten →
+   consolidation, targeted, fine-grained, broader; not generalising → broader, consolidation,
+   fine-grained, targeted; unstable → fine-grained, targeted, consolidation, broader;
+3. **halves the learning rate** again (×0.5, ×0.25, ×0.125 of the course's rate; floor 0.000001);
+4. teaches each weak lesson **in its own stage** (a Dense lesson stays a Dense lesson), with
+   correct answers protected and all session guards on; extra practice joins the rehearsal
+   archive once used;
+5. re-grades the whole course.
+
+The **best checkpoint** (highest course grade) is kept on disk. An attempt that lowers the grade
+is reverted to it before the next attempt. A course still failing after 3 attempts stops the
+plan on its best checkpoint: the plan **never moves on past a failed course**.
+
+### Plans, resuming and restarts
+
+A plan is an ordered list of saved courses for one model. Progress (the course run: queue,
+records, grades, remediation step) is saved with the model after every lesson and every
+remediation session, so a stopped or interrupted plan resumes where it was; the lesson in progress
+starts again. If the model was changed elsewhere in the meantime, the plan asks for a restart.
+
+Restarting a failed course **continues from the model's best checkpoint** (weights, optimizer
+state and step are kept: restart the education, not the brain), with fresh educational progress
+and three new remediation attempts, and re-grades every lesson. A course version is identified
+by its content fingerprint (lesson files, stages, pass marks, practice, exam, section weights,
+exam minimum; training settings are not part of it). A revised course always gets a fresh run.
+An unchanged failed version gets **one** manual override (warned and recorded in the history);
+after that it must be revised. Failed and earlier runs are kept for comparison.
 
 ## Measurements (`Bicameral::measure`)
 
