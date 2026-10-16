@@ -300,8 +300,14 @@ function setTeaching(on) {
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
 const FOCI = ["dense", "transformer", "interconnect", "joint"];
-// Candidates of each bicameral education stage, in the Engine's order.
-const STAGE_FOCI = { dense: ["dense+interconnect"], transformer: ["transformer"], cooperative: ["dense+interconnect", "joint"] };
+// Candidates of each bicameral education stage, in the Engine's order (with Foundation, each
+// part the stage may train is also tried on its own).
+function stageFoci(stage, foundation) {
+  if (!stage || stage === "off") return foundation ? FOCI : ["joint"];
+  if (stage === "transformer") return ["transformer"];
+  if (stage === "dense") return foundation ? ["dense", "interconnect", "dense+interconnect"] : ["dense+interconnect"];
+  return foundation ? ["dense", "transformer", "interconnect", "dense+interconnect", "joint"] : ["dense+interconnect", "joint"];
+}
 $("teach").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
   const options = {
@@ -316,7 +322,7 @@ $("teach").addEventListener("click", safe(async () => {
     requeue: $("optRequeue").checked,
     education: $("optEducation").value,
   };
-  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: (STAGE_FOCI[options.education] || (options.foundation ? FOCI : ["joint"])).length, foci: STAGE_FOCI[options.education] || (options.foundation ? FOCI : ["joint"]), candidate: 0, epoch: 1, attempt: "" };
+  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
@@ -327,9 +333,8 @@ $("teach").addEventListener("click", safe(async () => {
   say("Teaching started.");
 }, "Teach"));
 $("optEducation").addEventListener("change", () => {
-  const on = $("optEducation").value !== "off";
-  $("optFoundation").disabled = on;
-  $("optFoundation").parentElement.title = on ? "Bicameral education chooses the candidates itself" : "";
+  const f = stageFoci($("optEducation").value, true).join(", ");
+  $("optFoundation").parentElement.title = $("optEducation").value === "off" ? "" : `In this stage Foundation tries: ${f}`;
 });
 $("stopTeach").addEventListener("click", safe(async () => {
   await invoke("stop_teaching");
@@ -372,7 +377,7 @@ function onTeachEvent(e) {
         : el("span", { class: "bad" }, s.reasons.join("; "));
       $("candidateTable").tBodies[0].append(el("tr", { id: `cand-${e.index}-${s.epoch}-${s.focus}` },
         el("td", { class: "num" }, s.epoch), el("td", {}, s.focus),
-        el("td", { class: "num" }, s.train_loss.toFixed(4)), el("td", { class: "num", title: s.score.dense_reliance == null ? "" : "Dense reliance: held-out loss rise with Dense's input cut" }, s.score.heldout_loss.toFixed(4) + (s.score.dense_reliance == null ? "" : ` · Dense ${s.score.dense_reliance.toFixed(3)}`)),
+        el("td", { class: "num" }, s.train_loss.toFixed(4)), el("td", { class: "num", title: s.score.dense_reliance == null ? "" : "Whole brain; in brackets the transformer alone (Dense's input cut) and Dense's contribution (the difference)" }, s.score.heldout_loss.toFixed(4), s.score.dense_reliance == null ? "" : el("div", { class: "note" }, `without Dense ${s.score.without_dense_loss.toFixed(4)} · Dense +${s.score.dense_reliance.toFixed(3)}`)),
         el("td", { class: "num" }, scoreCell(s.score)),
         el("td", { class: "num" }, s.score.retention_loss == null ? "—" : s.score.retention_loss.toFixed(4)),
         el("td", {}, decision)));
@@ -383,6 +388,13 @@ function onTeachEvent(e) {
         if (c.selected) { row.classList.add("current-row"); row.lastChild.replaceChildren(el("b", { class: "ok" }, "selected")); }
         else if (c.eligible && !c.reasons.length) row.lastChild.replaceChildren(el("span", {}, "eligible; another candidate was better"));
       }
+      // The whole brain after this epoch (the accepted model): progress at a glance.
+      const a = s.accepted_score;
+      $("candidateTable").tBodies[0].append(el("tr", { class: "epoch-summary" }, el("td", { colspan: 7 },
+        el("b", {}, `Whole brain after epoch ${s.epoch}: `),
+        `exact ${scoreCell(a)} · held-out loss ${a.heldout_loss.toFixed(4)}`,
+        a.dense_reliance == null ? "" : ` · transformer alone ${a.without_dense_loss.toFixed(4)} · Dense contribution ${a.dense_reliance.toFixed(3)}`,
+        ` · ${s.selected ? "kept " + s.selected : "no candidate kept"}`)));
       log("INFO", `Epoch ${s.epoch}: ${s.selected ? "selected " + s.selected : "no candidate selected"}`);
     }
   } else if (e.type === "file_finished") {

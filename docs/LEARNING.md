@@ -226,6 +226,15 @@ checkpoints are unchanged, and nothing is written into the model by rules.
 | B: Transformer language | The transformer; Dense and interconnect frozen but still sending | The transformer learns grammar and in-context reasoning (premises in the prompt) alongside Dense's signals, not around them. |
 | C: Cooperation | Each epoch tries Dense + interconnect and the whole brain, keeps the better | Both learn together; a candidate that stops using Dense is rejected. |
 
+**Foundation in a stage.** With Foundation on, each part the stage may train is also tried on
+its own, and every candidate is scored as a whole brain: stage A tries Dense, the interconnect,
+and Dense + interconnect; stage B the transformer; stage C Dense, the transformer, the
+interconnect, Dense + interconnect and the whole brain. For every candidate the record shows the
+whole brain's held-out loss and exact answers, the transformer alone (Dense's input cut), and
+Dense's contribution (the difference); after every epoch a summary shows the whole brain as
+accepted. In stage A the transformer-alone loss stays exactly the same for every candidate (the
+transformer is frozen), which is a useful check that the masks hold.
+
 **Dense reliance** is measured, not inferred: the rise in held-out loss when Dense's input to the
 transformer is cut (the same ablation as the brain scan). Reading reports it at every check;
 lessons report it for every candidate in an education stage. In every stage a checkpoint or

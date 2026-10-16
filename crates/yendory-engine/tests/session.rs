@@ -127,7 +127,12 @@ fn bicameral_education_stages_choose_candidates_and_measure_dense() {
     use yendory_engine::Focus;
     let (lesson, archive) = course();
     let start = model();
-    let cfg = SessionConfig { epochs: 1, education: Some(EducationStage::Cooperative), ..quick() };
+    let cfg = SessionConfig {
+        epochs: 1,
+        foundation: false,
+        education: Some(EducationStage::Cooperative),
+        ..quick()
+    };
     let mut focuses = Vec::new();
     let r = teach(
         &start,
@@ -145,6 +150,34 @@ fn bicameral_education_stages_choose_candidates_and_measure_dense() {
     .unwrap();
     assert_eq!(focuses, ["dense+interconnect", "joint"]);
     assert!(r.baseline.dense_reliance.is_some());
+    // With Foundation, each part the stage may train is tried on its own as well.
+    let cfg = SessionConfig {
+        epochs: 1,
+        foundation: true,
+        education: Some(EducationStage::DenseKnowledge),
+        ..quick()
+    };
+    let mut focuses = Vec::new();
+    let r = teach(
+        &start,
+        &lesson,
+        &archive,
+        &cfg,
+        &mut |e| {
+            if let Event::Candidate(c) = e {
+                focuses.push(c.focus.clone());
+                assert!(c.score.without_dense_loss.is_some());
+            }
+        },
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(focuses, ["dense", "interconnect", "dense+interconnect"]);
+    assert_eq!(
+        r.model.group_values(Focus::Left),
+        start.group_values(Focus::Left),
+        "stage A never trains the transformer"
+    );
 
     let cfg = SessionConfig { epochs: 1, education: Some(EducationStage::TransformerLanguage), ..quick() };
     let r = teach(&start, &lesson, &archive, &cfg, &mut |_| {}, &AtomicBool::new(false)).unwrap();

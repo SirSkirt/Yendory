@@ -21,10 +21,11 @@ pub struct SessionConfig {
     pub epochs: u32,
     pub batch_size: usize,
     pub learning_rate: f32,
-    /// Four candidates (Right, Left, Interconnect, Joint) per epoch instead of Joint only.
+    /// Four candidates (Right, Left, Interconnect, Joint) per epoch instead of Joint only. With
+    /// an education stage: each part the stage may train, on its own and together.
     pub foundation: bool,
-    /// Experimental bicameral education stage; when set it replaces the Foundation / Joint
-    /// candidates and turns on the Dense-reliance guard.
+    /// Experimental bicameral education stage; when set it chooses the candidates (see
+    /// `EducationStage::foci`) and turns on the Dense measurements and guard.
     #[serde(default)]
     pub education: Option<EducationStage>,
     /// In bicameral education, reject a candidate whose Dense reliance falls below this share of
@@ -161,12 +162,24 @@ pub enum EducationStage {
     Cooperative,
 }
 impl EducationStage {
-    /// The training candidates of an epoch in this stage.
-    pub fn foci(self) -> Vec<Focus> {
-        match self {
-            EducationStage::DenseKnowledge => vec![Focus::DenseAndInterconnect],
-            EducationStage::TransformerLanguage => vec![Focus::Left],
-            EducationStage::Cooperative => vec![Focus::DenseAndInterconnect, Focus::Joint],
+    /// The training candidates of an epoch in this stage. With Foundation, every part the stage
+    /// may train is also tried on its own, so each is evaluated in its role; every candidate is
+    /// still scored as a whole brain.
+    pub fn foci(self, foundation: bool) -> Vec<Focus> {
+        match (self, foundation) {
+            (EducationStage::DenseKnowledge, false) => vec![Focus::DenseAndInterconnect],
+            (EducationStage::DenseKnowledge, true) => {
+                vec![Focus::Right, Focus::Interconnect, Focus::DenseAndInterconnect]
+            }
+            (EducationStage::TransformerLanguage, _) => vec![Focus::Left],
+            (EducationStage::Cooperative, false) => vec![Focus::DenseAndInterconnect, Focus::Joint],
+            (EducationStage::Cooperative, true) => vec![
+                Focus::Right,
+                Focus::Left,
+                Focus::Interconnect,
+                Focus::DenseAndInterconnect,
+                Focus::Joint,
+            ],
         }
     }
 }
@@ -194,6 +207,10 @@ pub struct Score {
     /// measured contribution (measured in bicameral education only).
     #[serde(default)]
     pub dense_reliance: Option<f32>,
+    /// Held-out loss of the transformer with Dense's input cut: how the language side does on
+    /// its own (measured in bicameral education only).
+    #[serde(default)]
+    pub without_dense_loss: Option<f32>,
 }
 impl Score {
     /// Share of held-out questions answered exactly right.
@@ -307,12 +324,13 @@ fn rows_of(model: &Bicameral, items: &[&Item], rng: &mut Rng) -> Result<Vec<Row>
 fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, Report), String> {
     let abl = Ablation::default();
     let heldout_loss = batch_loss_and_gradients_loss(model, &p.heldout_rows, abl)?;
-    let dense_reliance = if dense {
+    let without_dense_loss = if dense {
         let cut = Ablation { no_afferent: true, ..Ablation::default() };
-        Some(batch_loss_and_gradients_loss(model, &p.heldout_rows, cut)? - heldout_loss)
+        Some(batch_loss_and_gradients_loss(model, &p.heldout_rows, cut)?)
     } else {
         None
     };
+    let dense_reliance = without_dense_loss.map(|l| l - heldout_loss);
     let report = evaluate(model, &p.heldout_items, abl)?;
     let panel = evaluate(model, &p.panel_items, abl)?;
     let retention_loss = if p.retention_rows.is_empty() {
@@ -333,6 +351,7 @@ fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, R
             panel_total: panel.overall().total,
             by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
             dense_reliance,
+            without_dense_loss,
         },
         report,
         panel,
@@ -440,7 +459,7 @@ pub fn teach_with(
     });
 
     let foci: Vec<Focus> = if let Some(stage) = cfg.education {
-        stage.foci()
+        stage.foci(cfg.foundation)
     } else if cfg.foundation {
         vec![Focus::Right, Focus::Left, Focus::Interconnect, Focus::Joint]
     } else {
