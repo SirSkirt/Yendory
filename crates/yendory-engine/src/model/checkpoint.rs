@@ -19,6 +19,25 @@ pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
     if !c.rope_base.is_finite() || c.rope_base <= 0. || !c.gate_bias.is_finite() {
         return Err("Invalid Nova-2 configuration constants".into());
     }
+    // Every dimension is at most 2^16, so these products cannot overflow u64.
+    let (v, d, ff, b, w, r1, r2) = (
+        c.vocab as u64,
+        c.d as u64,
+        c.ff as u64,
+        c.blocks as u64,
+        c.window_chars as u64,
+        c.r1 as u64,
+        c.r2 as u64,
+    );
+    let rough =
+        v * d + b * (4 * d * d + 3 * ff * d) + r1 * w * 16 + r2 * r1 + r2 * d + d * (r1 + r2) + 2 * d * d;
+    if rough > super::MAX_PARAMETERS as u64 {
+        return Err(format!(
+            "This checkpoint describes a model of about {} parameters; the Engine supports up to {}",
+            rough,
+            super::MAX_PARAMETERS
+        ));
+    }
     Ok(())
 }
 

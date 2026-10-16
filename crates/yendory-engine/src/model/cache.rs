@@ -269,16 +269,7 @@ fn signature(model: &Bicameral) -> u64 {
     sig
 }
 fn mat(w: &[f32], rows: usize, cols: usize, x: &[f32]) -> Vec<f32> {
-    assert_eq!(x.len(), cols);
-    let mut out = vec![0.; rows];
-    for i in 0..rows {
-        let mut s = 0f32;
-        for j in 0..cols {
-            s += w[i * cols + j] * x[j];
-        }
-        out[i] = s;
-    }
-    out
+    super::linalg::matvec(w, rows, cols, x)
 }
 fn norm(x: &[f32], gain: &[f32]) -> Vec<f32> {
     let div = (x.iter().map(|x| x * x).sum::<f32>() / x.len() as f32 + 1e-6).sqrt();
@@ -401,10 +392,10 @@ fn block(
         let mut scores = vec![0f32; n];
         let mut top = f32::NEG_INFINITY;
         for t in 0..n {
-            let mut score = 0.;
-            for j in 0..hd {
-                score += q[head * hd + j] * stage.keys[t * d + head * hd + j];
-            }
+            let score = super::linalg::dot(
+                &q[head * hd..(head + 1) * hd],
+                &stage.keys[t * d + head * hd..t * d + (head + 1) * hd],
+            );
             scores[t] = score * scale;
             top = top.max(scores[t]);
         }
@@ -415,9 +406,11 @@ fn block(
         }
         for t in 0..n {
             let weight = scores[t] / total;
-            for j in 0..hd {
-                att[head * hd + j] += weight * stage.values[t * d + head * hd + j];
-            }
+            super::linalg::axpy(
+                &mut att[head * hd..(head + 1) * hd],
+                weight,
+                &stage.values[t * d + head * hd..t * d + (head + 1) * hd],
+            );
         }
         if let Some(out) = attention.as_deref_mut() {
             out.push(scores.iter().map(|s| s / total).collect());

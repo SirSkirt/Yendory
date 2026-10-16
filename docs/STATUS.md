@@ -22,6 +22,8 @@ has been checked, how, and what has not.
 | Teaching session: four whole-model candidates per epoch from the same accepted model, deterministic for a seed, rollback leaves the model bit-identical, stop discards the epoch in progress | pass |
 | Courses: per-file SHA-256, steps, outcomes; duplicates not re-taught; a failing file does not end the course | pass |
 | Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
+| **Size presets** 4M, 8M, 15M (Nova-2's 64 / 28.5 / 7.7% division): a briefly trained model of each, last-position logits, loss and 3,000 sampled gradients recomputed by the numpy reference (`examples/size_compat.rs` + `reference/check_sizes.py`, in CI) | logits within 2e-6, loss identical to 6 decimals, gradients within 3e-7 of the largest |
+| Matrix kernels (`model/linalg.rs`: packed panels, 4×16 register tiles, 8-lane dot products; safe Rust, no dependencies): same products as plain loops, only the order of additions differs | all compatibility tests above pass unchanged; one core reaches ~14 GFLOP/s (SSE2) |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 
 ## Yendory Studio (apps/studio)
@@ -70,7 +72,7 @@ builds. Not checked: the Windows installer and Android APK on real devices (CI b
 | # | Decision | Status |
 |---|---|---|
 | D1 | License | owner will decide later |
-| D2 | Parameter cap (`MAX_PARAMETERS = 1,200,144`, currently not enforced anywhere) as a configurable safety limit | open |
+| D2 | Parameter cap | **decided**: size presets up to 15M keep Nova-2's parameter division; `MAX_PARAMETERS = 16,000,000` is enforced when a checkpoint is loaded |
 | D3 | Package extension/container wrapping `.nnova2` | open |
 | D4 | Runtime exports may drop optimizer state | open |
 | D5 | One repository | **decided: monorepo** |

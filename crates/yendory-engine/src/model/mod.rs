@@ -5,6 +5,7 @@ mod cache;
 mod checkpoint;
 #[cfg(test)]
 mod golden;
+mod linalg;
 mod measure;
 mod tape;
 mod think;
@@ -16,7 +17,9 @@ use std::collections::HashMap;
 use std::ops::Range;
 pub use think::{Branch, Choice, Readout, ThinkOptions, ThinkingTree, ThoughtStep};
 
-pub const MAX_PARAMETERS: usize = 1_200_144;
+/// Largest model the Engine creates or loads (the 15M size preset fits with room to spare).
+/// Checkpoints describing a bigger model are refused before anything is allocated.
+pub const MAX_PARAMETERS: usize = 16_000_000;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub vocab: usize,
@@ -52,6 +55,35 @@ impl Default for Config {
         }
     }
 }
+/// A model size offered when creating a model. Every preset keeps Nova-2's division of
+/// parameters (about 64% transformer, 28.5% dense, 7.7% interconnect) and its tokenizer,
+/// context length, thinking rounds and right-hemisphere character window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SizePreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub config: Config,
+}
+
+pub fn size_presets() -> Vec<SizePreset> {
+    let shape = |blocks: usize, d: usize, ff: usize, r1: usize, r2: usize| Config {
+        d,
+        heads: d / 32,
+        ff,
+        blocks,
+        split: blocks / 2,
+        r1,
+        r2,
+        ..Config::default()
+    };
+    vec![
+        SizePreset { id: "nova2", name: "Nova-2 size (1.2M)", config: Config::default() },
+        SizePreset { id: "4m", name: "4M", config: shape(6, 192, 448, 672, 512) },
+        SizePreset { id: "8m", name: "8M", config: shape(6, 256, 736, 1152, 768) },
+        SizePreset { id: "15m", name: "15M", config: shape(8, 320, 768, 1664, 1248) },
+    ]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Focus {
     Joint,
@@ -197,6 +229,10 @@ impl Bicameral {
             stored_config_json: None,
         }
     }
+    /// Parameters a configuration would have, without building the model.
+    pub fn parameters_for(config: &Config) -> usize {
+        spec(config).last().map(|s| s.range.end).unwrap_or(0)
+    }
     pub fn parameter_count(&self) -> usize {
         self.weights.len()
     }
@@ -210,7 +246,7 @@ impl Bicameral {
         &self.weights[self.slot(name).range.clone()]
     }
     fn param(&self, t: &mut tape::Tape, name: &str) -> usize {
-        t.parameter(name, self.val(name))
+        t.parameter(name, self.slot(name).range.clone())
     }
     fn norm(&self, t: &mut tape::Tape, h: usize, name: &str) -> usize {
         let g = self.param(t, name);
@@ -352,7 +388,7 @@ impl Bicameral {
         {
             return Err("Invalid Nova-2 inference features".into());
         }
-        let mut t = tape::Tape::new();
+        let mut t = tape::Tape::new(&self.weights, None);
         let node = self.forward(&mut t, ids, features.to_vec(), abl);
         Ok(t.values(node).to_vec())
     }
@@ -411,19 +447,52 @@ impl Bicameral {
         {
             return Err("Invalid Nova-2 training dimensions".into());
         }
-        let mut t = tape::Tape::new();
-        let logits = self.forward(&mut t, ids, features.to_vec(), abl);
+        let mut grads = vec![0.; self.weights.len()];
+        let value = self.add_gradients(ids, features.to_vec(), targets, mask, abl, &mut grads, 1.);
+        Ok((value, grads))
+    }
+    /// Like [`Bicameral::loss_and_gradients`], but ADDS `scale ×` the gradient into `grads`
+    /// (one buffer reused across rows) and returns the row's loss.
+    pub fn accumulate_loss_and_gradients(
+        &self,
+        ids: &[u16],
+        targets: &[u16],
+        mask: &[f32],
+        abl: Ablation,
+        grads: &mut [f32],
+        scale: f32,
+    ) -> Result<f32, String> {
+        if ids.len() != targets.len()
+            || ids.len() != mask.len()
+            || ids.is_empty()
+            || ids.len() > self.config.max_tokens
+            || grads.len() != self.weights.len()
+        {
+            return Err("Nova-2 training dimensions or context invalid".into());
+        }
+        if targets.iter().any(|&x| x as usize >= self.config.vocab) {
+            return Err("Invalid target token".into());
+        }
+        let feats = self.features(ids)?;
+        Ok(self.add_gradients(ids, feats, targets, mask, abl, grads, scale))
+    }
+    fn add_gradients(
+        &self,
+        ids: &[u16],
+        features: Vec<f32>,
+        targets: &[u16],
+        mask: &[f32],
+        abl: Ablation,
+        grads: &mut [f32],
+        scale: f32,
+    ) -> f32 {
+        let mut t = tape::Tape::new(&self.weights, Some(grads));
+        let logits = self.forward(&mut t, ids, features, abl);
         let targets = targets.iter().map(|&v| v as usize).collect::<Vec<_>>();
         let loss = t.xent(logits, &targets, mask, self.config.vocab);
         let value = t.values(loss)[0];
-        t.backward(loss);
-        let mut grads = vec![0.; self.weights.len()];
-        for s in &self.slots {
-            if let Some(g) = t.param_grad(&s.name) {
-                grads[s.range.clone()].copy_from_slice(g);
-            }
-        }
-        Ok((value, grads))
+        t.backward(loss, scale);
+        value
     }
     pub fn adam_step(&mut self, gradients: &[f32], lr: f32, focus: Focus) -> Result<f32, String> {
         if gradients.len() != self.weights.len() || !lr.is_finite() || lr <= 0. {

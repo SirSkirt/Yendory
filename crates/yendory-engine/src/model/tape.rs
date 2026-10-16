@@ -21,40 +21,56 @@ struct Node {
     values: Vec<f32>,
     grad: Vec<f32>,
     op: Op,
+    /// Parameter nodes read the model's weights in place (this range of them) and add their
+    /// gradient straight into the caller's gradient buffer, so no weight is copied per row.
+    param: Option<(usize, usize)>,
 }
-pub(crate) struct Tape {
+pub(crate) struct Tape<'a> {
     nodes: Vec<Node>,
     params: HashMap<String, usize>,
+    weights: &'a [f32],
+    /// Where parameter gradients are added (`None` for forward-only tapes).
+    wgrad: Option<&'a mut [f32]>,
 }
-impl Tape {
-    pub(crate) fn new() -> Self {
-        Self { nodes: Vec::new(), params: HashMap::new() }
+impl<'a> Tape<'a> {
+    pub(crate) fn new(weights: &'a [f32], wgrad: Option<&'a mut [f32]>) -> Self {
+        Self { nodes: Vec::new(), params: HashMap::new(), weights, wgrad }
     }
     fn node(&mut self, v: Vec<f32>, op: Op) -> usize {
         let id = self.nodes.len();
         let grad = vec![0.; v.len()];
-        self.nodes.push(Node { values: v, grad, op });
+        self.nodes.push(Node { values: v, grad, op, param: None });
         id
+    }
+    /// The values of a node (for a parameter, the model's weights).
+    fn v(&self, id: usize) -> &[f32] {
+        match self.nodes[id].param {
+            Some((a, b)) => &self.weights[a..b],
+            None => &self.nodes[id].values,
+        }
     }
     pub(crate) fn input(&mut self, x: Vec<f32>) -> usize {
         self.node(x, Op::Input)
     }
-    pub(crate) fn parameter(&mut self, name: &str, weights: &[f32]) -> usize {
+    pub(crate) fn parameter(&mut self, name: &str, range: std::ops::Range<usize>) -> usize {
         if let Some(&id) = self.params.get(name) {
             return id;
         }
-        let id = self.input(weights.to_vec());
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            values: Vec::new(),
+            grad: Vec::new(),
+            op: Op::Input,
+            param: Some((range.start, range.end)),
+        });
         self.params.insert(name.to_owned(), id);
         id
     }
     pub(crate) fn values(&self, id: usize) -> &[f32] {
-        &self.nodes[id].values
-    }
-    pub(crate) fn param_grad(&self, name: &str) -> Option<&[f32]> {
-        self.params.get(name).map(|&id| self.nodes[id].grad.as_slice())
+        self.v(id)
     }
     pub(crate) fn embed(&mut self, ids: &[usize], table: usize, d: usize) -> usize {
-        let src = &self.nodes[table].values;
+        let src = self.v(table);
         let mut out = vec![0.; ids.len() * d];
         for (i, &token) in ids.iter().enumerate() {
             out[i * d..(i + 1) * d].copy_from_slice(&src[token * d..(token + 1) * d]);
@@ -69,23 +85,13 @@ impl Tape {
         in_dim: usize,
         out_dim: usize,
     ) -> usize {
-        let input = &self.nodes[x].values;
-        let mat = &self.nodes[w].values;
+        let input = self.v(x);
+        let mat = self.v(w);
         assert_eq!(input.len() % in_dim, 0);
         assert_eq!(mat.len(), out_dim * in_dim);
         let rows = input.len() / in_dim;
-        let mut out = vec![0.; rows * out_dim];
-        for row in 0..rows {
-            for o in 0..out_dim {
-                let wr = &mat[o * in_dim..(o + 1) * in_dim];
-                let xr = &input[row * in_dim..(row + 1) * in_dim];
-                let mut sum = 0f32;
-                for j in 0..in_dim {
-                    sum += wr[j] * xr[j];
-                }
-                out[row * out_dim + o] = sum + b.map(|id| self.nodes[id].values[o]).unwrap_or(0.);
-            }
-        }
+        let bias = b.map(|id| self.v(id));
+        let out = super::linalg::linear(input, mat, bias, rows, in_dim, out_dim);
         self.node(out, Op::Linear { input: x, weight: w, bias: b, rows, cols: in_dim, out: out_dim })
     }
     pub(crate) fn add(&mut self, a: usize, b: usize) -> usize {
@@ -107,8 +113,8 @@ impl Tape {
         self.node(v, Op::Sigmoid { src })
     }
     pub(crate) fn norm(&mut self, src: usize, gain: usize, d: usize) -> usize {
-        let x = &self.nodes[src].values;
-        let g = &self.nodes[gain].values;
+        let x = self.v(src);
+        let g = self.v(gain);
         let mut out = vec![0.; x.len()];
         assert_eq!(x.len() % d, 0);
         assert_eq!(g.len(), d);
@@ -212,15 +218,30 @@ impl Tape {
         )
     }
     fn accum(&mut self, id: usize, delta: &[f32]) {
-        for (a, b) in self.nodes[id].grad.iter_mut().zip(delta) {
+        let target = match self.nodes[id].param {
+            Some((a, b)) => match self.wgrad.as_deref_mut() {
+                Some(g) => &mut g[a..b],
+                None => return,
+            },
+            None => &mut self.nodes[id].grad[..],
+        };
+        for (a, b) in target.iter_mut().zip(delta) {
             *a += *b;
         }
     }
-    pub(crate) fn backward(&mut self, root: usize) {
-        self.nodes[root].grad[0] = 1.;
+    /// Back-propagates from `root`, whose gradient is `seed` (1 for the plain loss; a row weight
+    /// to accumulate a weighted sum of rows). Parameter gradients are added to the buffer given
+    /// to [`Tape::new`].
+    pub(crate) fn backward(&mut self, root: usize, seed: f32) {
+        self.nodes[root].grad[0] = seed;
         for id in (0..self.nodes.len()).rev() {
-            let op = self.nodes[id].op.clone();
-            let upstream = self.nodes[id].grad.clone();
+            if matches!(self.nodes[id].op, Op::Input) {
+                continue;
+            }
+            // Each node is visited once, after everything that uses it: its op and gradient can
+            // be moved out instead of copied.
+            let op = std::mem::replace(&mut self.nodes[id].op, Op::Input);
+            let upstream = std::mem::take(&mut self.nodes[id].grad);
             match op {
                 Op::Input => {}
                 Op::Add { a, b } => {
@@ -251,37 +272,50 @@ impl Tape {
                     self.accum(src, &g);
                 }
                 Op::Embed { table, ids, d } => {
-                    for (row, tok) in ids.iter().enumerate() {
-                        for j in 0..d {
-                            self.nodes[table].grad[tok * d + j] += upstream[row * d + j];
+                    let (a, _) = self.nodes[table].param.expect("embedding table is a parameter");
+                    if let Some(g) = self.wgrad.as_deref_mut() {
+                        for (row, tok) in ids.iter().enumerate() {
+                            super::linalg::axpy(
+                                &mut g[a + tok * d..a + (tok + 1) * d],
+                                1.,
+                                &upstream[row * d..(row + 1) * d],
+                            );
                         }
                     }
                 }
                 Op::Linear { input, weight, bias, rows, cols, out } => {
-                    let xx = self.nodes[input].values.clone();
-                    let w = self.nodes[weight].values.clone();
-                    let mut dx = vec![0.; xx.len()];
-                    let mut dw = vec![0.; w.len()];
-                    let mut db = vec![0.; out];
-                    for row in 0..rows {
-                        for o in 0..out {
-                            let g = upstream[row * out + o];
-                            db[o] += g;
-                            for j in 0..cols {
-                                dx[row * cols + j] += g * w[o * cols + j];
-                                dw[o * cols + j] += g * xx[row * cols + j];
-                            }
+                    let (a, b) = self.nodes[weight].param.expect("linear weight is a parameter");
+                    let weights = self.weights;
+                    let mut scratch = Vec::new();
+                    let dw = match self.wgrad.as_deref_mut() {
+                        Some(g) => &mut g[a..b],
+                        None => {
+                            scratch.resize(b - a, 0.);
+                            &mut scratch[..]
                         }
-                    }
+                    };
+                    let dx = super::linalg::linear_backward(
+                        &upstream,
+                        &self.nodes[input].values,
+                        &weights[a..b],
+                        rows,
+                        cols,
+                        out,
+                        dw,
+                        None,
+                    );
                     self.accum(input, &dx);
-                    self.accum(weight, &dw);
-                    if let Some(b) = bias {
-                        self.accum(b, &db);
+                    if let Some(bias) = bias {
+                        let mut db = vec![0f32; out];
+                        for grow in upstream.chunks_exact(out) {
+                            super::linalg::axpy(&mut db, 1., grow);
+                        }
+                        self.accum(bias, &db);
                     }
                 }
                 Op::Norm { src, gain, cols } => {
                     let x = self.nodes[src].values.clone();
-                    let gamma = self.nodes[gain].values.clone();
+                    let gamma = self.v(gain).to_vec();
                     let mut dx = vec![0.; x.len()];
                     let mut dg = vec![0.; cols];
                     for row in 0..x.len() / cols {

@@ -111,15 +111,19 @@ pub fn batch_loss_and_gradients(
                     let mut grads = vec![0f32; model.parameter_count()];
                     let (mut loss, mut weight) = (0f64, 0f64);
                     for row in part {
-                        let (l, g) = model.loss_and_gradients(&row.ids, &row.targets, &row.mask, abl)?;
                         let sum: f32 = row.mask.iter().sum();
                         // Undo the per-row normalisation (the tape divides by max(sum, 1)).
                         let scale = sum.max(1.);
+                        let l = model.accumulate_loss_and_gradients(
+                            &row.ids,
+                            &row.targets,
+                            &row.mask,
+                            abl,
+                            &mut grads,
+                            scale,
+                        )?;
                         loss += l as f64 * scale as f64;
                         weight += sum as f64;
-                        for (a, b) in grads.iter_mut().zip(&g) {
-                            *a += b * scale;
-                        }
                     }
                     Ok((loss, weight, grads))
                 })

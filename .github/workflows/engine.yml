@@ -38,6 +38,12 @@ jobs:
       - run: pip install numpy
       - working-directory: reference
         run: python selftest.py
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Larger size presets (4M, 8M, 15M) vs the numpy reference
+        run: |
+          cargo run --release --example size_compat -- "$RUNNER_TEMP/sizes"
+          cd reference && python check_sizes.py "$RUNNER_TEMP/sizes"
 
   studio:
     name: Studio app (Linux build, tests, lint)

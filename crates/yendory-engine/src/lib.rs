@@ -21,9 +21,10 @@ pub mod fingerprint;
 pub mod learn;
 pub mod model;
 pub mod tokenizer;
+pub use model::size_presets;
 
 pub use model::{
-    Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, ThinkOptions,
-    ThinkingTree, Trace,
+    Ablation, AblationEffects, Bicameral, CacheStats, Config, Focus, KvCache, Measurements, SizePreset,
+    ThinkOptions, ThinkingTree, Trace,
 };
 pub use tokenizer::Tokenizer;
