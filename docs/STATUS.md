@@ -23,6 +23,7 @@ has been checked, how, and what has not.
 | Courses: per-file SHA-256, steps, outcomes; duplicates not re-taught; a failing file does not end the course | pass |
 | Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
 | **Size presets** 4M, 8M, 15M (Nova-2's 64 / 28.5 / 7.7% division): a briefly trained model of each, last-position logits, loss and 3,000 sampled gradients recomputed by the numpy reference (`examples/size_compat.rs` + `reference/check_sizes.py`, in CI) | logits within 2e-6, loss identical to 6 decimals, gradients within 3e-7 of the largest |
+| **Selectable context**: changing `max_tokens` keeps every weight and every short-prompt logit; a 1,024-token-context model trains on a 900-token row and its KV cache matches the full pass; recomputed attention (no stored weights) passes every compatibility test; a 1,024-token context on an 800-token input recomputed by the numpy reference in CI | logits within 6e-7 |
 | **Selectable vocabulary**: 32-bit token ids; hash-indexed tokenizer (equal to the original scanning encoder on 6,000 random strings); output layer + cross-entropy computed a few rows at a time (equal to the unfused path); a Nova-2-size model with a 100,000-word vocabulary and ids up to 70,130 recomputed by the numpy reference in CI; resizing keeps every existing logit bit-identical; vocabulary limits add slots only for learned words | logits within 7e-7, loss identical to 6 decimals |
 | Matrix kernels (`model/linalg.rs`: packed panels, 4×16 register tiles, 8-lane dot products; safe Rust, no dependencies): same products as plain loops, only the order of additions differs | all compatibility tests above pass unchanged; one core reaches ~14 GFLOP/s (SSE2) |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
@@ -81,4 +82,4 @@ builds. Not checked: the Windows installer and Android APK on real devices (CI b
 | D7 | Old v1 brain / `.nhyb` | **decided: dropped** |
 | D8 | Studio design language (mockups first) | open |
 | D9 | Who reviews Engine changes from the Nova side | open |
-| D10 | Context policy past 256 tokens: exact re-window (current, matches reference) vs. a faster chunked re-window (re-read once every ~64–128 tokens; outputs differ from the reference past 256 tokens) vs. the app trimming history itself | open |
+| D10 | Context policy past the context length | **decided**: the context is selectable per model (256 to 65,536 tokens); Studio keeps conversations within it by dropping the oldest turns; the Engine's exact re-window (matches the reference) remains for anything longer |

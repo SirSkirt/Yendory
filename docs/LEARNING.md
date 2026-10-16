@@ -26,6 +26,18 @@ New word units are learned from the training text only (frequency ≥ 12, 3–24
 capitalised words that are rarely lower-case are treated as names and stay character-level.
 Existing word ids never change.
 
+**Context length.** `max_tokens` (Nova-2: 256) is how many tokens the model reads at once.
+Positions are encoded by rotation (RoPE), so no parameter depends on it: it can be chosen for a
+new model or changed for an existing one (`Bicameral::with_context`), and a model uses a longer
+context well once it has trained on text that long (longer reading windows; lessons with long
+conversations are no longer cut to 256 tokens). Training stores only each attention row's
+softmax maximum and normaliser and recomputes the weights in the backward pass, allocates
+gradients only when the backward pass reaches them, and frees activations as soon as they are
+used, so memory grows with the context, not its square; the compute of attention still grows
+with the square. Measured at Nova-2's size on a 4-core machine (rows as long as the context):
+128 tokens 990 tokens/s, 1,024 649, 4,096 273, 8,192 111. Studio conversations keep as many
+recent turns as fit in the context, and replies may be up to a quarter of it (48–512 tokens).
+
 **Vocabulary size.** A model holds `vocab − 128` word units. Nova-2 allocates all 256 slots up
 front (vocab 384). A larger **vocabulary limit** (`word_limit` in `SessionConfig` and
 `PretrainConfig`; any size up to the Engine's parameter limit) adds slots only as words are

@@ -38,11 +38,13 @@
         <tr><th>Lessons</th><td id="activeLessons">—</td><th>Origin</th><td id="activeOrigin">—</td></tr>
         <tr><th>Reading</th><td id="activeReading" colspan="3">—</td></tr>
         <tr><th>Vocabulary</th><td id="activeVocab" colspan="3">—</td></tr>
+        <tr><th>Context</th><td id="activeContext" colspan="3">—</td></tr>
       </table>
       <div class="actions">
         <button type="button" id="exportModel">Export .nnova2…</button>
         <button type="button" id="renameModel" class="quiet">Rename…</button>
         <button type="button" id="vocabLimit" class="quiet">Change vocabulary limit…</button>
+        <button type="button" id="contextLimit" class="quiet">Change context…</button>
       </div>
     </div>
 
@@ -66,6 +68,23 @@
       <input id="vocabCustom" type="number" min="1" step="1" placeholder="words" class="narrow-num" hidden>
     </div>
     <p class="note" id="vocabNote">—</p>
+    <div class="line-form">
+      <label for="contextChoice">Context</label>
+      <select id="contextChoice">
+        <option value="256">256 tokens (Nova-2)</option>
+        <option value="512">512 tokens</option>
+        <option value="1024">1,024 tokens</option>
+        <option value="2048">2,048 tokens</option>
+        <option value="4096">4,096 tokens</option>
+        <option value="8192">8,192 tokens</option>
+        <option value="16384">16,384 tokens</option>
+        <option value="custom">another length…</option>
+      </select>
+      <input id="contextCustom" type="number" min="16" step="1" placeholder="tokens" class="narrow-num" hidden>
+      <button type="button" id="measureContext" class="quiet">Measure training at this context</button>
+    </div>
+    <p class="note" id="contextNote">How many tokens the model reads at once: a conversation's history, a story, a lesson's dialogue. A token is a learned word or one character (spaces and punctuation included). Longer contexts add no parameters, but attention compares every token with every earlier one, so training costs more per token as the context grows. The context of any model can be changed later.</p>
+    <p class="note" id="costNote">—</p>
     <div class="line-form">
       <label for="newName">Name</label>
       <input id="newName" maxlength="60" placeholder="e.g. Echo" autocomplete="off">
@@ -111,7 +130,7 @@
       <label>Tokens to read <input type="number" id="readTokens" min="10000" step="100000" value="2000000"></label>
       <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
-      <label>Window (tokens per example) <input type="number" id="readWindow" min="16" max="256" step="16" value="128"></label>
+      <label>Window (tokens per example) <input type="number" id="readWindow" min="16" step="16" value="128"></label>
       <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
     </div>
     <div class="actions">

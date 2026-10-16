@@ -66,6 +66,9 @@ pub struct Meta {
     /// the allocated slots are the limit (Nova-2's fixed 256).
     #[serde(default)]
     word_limit: Option<usize>,
+    /// Context length in tokens.
+    #[serde(default)]
+    context: usize,
     #[serde(default)]
     taught: Vec<TaughtFile>,
     /// Where the model came from: "new", or the imported file's name.
@@ -125,6 +128,7 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
     ];
     meta.words = model.tokenizer.words().len();
     meta.slots = model.word_capacity();
+    meta.context = model.config.max_tokens;
     meta.updated = now();
 }
 
@@ -175,6 +179,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         read: Vec::new(),
         slots: 0,
         word_limit: None,
+        context: 0,
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -214,12 +219,18 @@ fn create_model(
     name: String,
     size: Option<String>,
     word_limit: Option<usize>,
+    context: Option<usize>,
 ) -> Res<Meta> {
     not_teaching(&studio)?;
     let mut config = match size.as_deref() {
         None => Config::default(),
         Some(id) => size_presets().into_iter().find(|p| p.id == id).ok_or("Unknown model size")?.config,
     };
+    if let Some(c) = context {
+        config.max_tokens = c;
+        Bicameral::check_config(&config)
+            .map_err(|_| format!("Choose a context of 1 to {} tokens", yendory_engine::model::MAX_CONTEXT))?;
+    }
     if let Some(limit) = word_limit {
         check_word_limit(&config, limit)?;
         // No slots yet: one is added for each word the model learns, up to the limit.
@@ -264,8 +275,9 @@ fn set_limit(app: &AppHandle, studio: &Studio, id: &str, limit: Option<usize>) -
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct VocabularyCost {
-    /// Parameters, file size and memory once every word up to the limit is learned.
+struct ModelCost {
+    /// Parameters, file size and memory once every word up to the vocabulary limit is learned
+    /// (training rows as long as the context).
     parameters: usize,
     file_bytes: u64,
     chat_bytes: u64,
@@ -273,22 +285,28 @@ struct VocabularyCost {
     teaching_bytes: u64,
     /// Parameters each learned word adds (one embedding row and one output bias).
     per_word: usize,
-    /// The largest limit this size allows.
+    /// The largest vocabulary limit this size allows.
     max_words: usize,
+    /// Activation memory of one training row as long as the context, and threads training.
+    row_bytes: u64,
+    threads: usize,
 }
 
-/// What a vocabulary limit costs at a size, when every word up to the limit has been learned.
+/// What a size, a vocabulary limit (`None`: Nova-2's fixed 256 slots) and a context cost.
 #[tauri::command]
-fn vocabulary_cost(size: String, limit: usize) -> Res<VocabularyCost> {
-    let config = size_presets().into_iter().find(|p| p.id == size).ok_or("Unknown model size")?.config;
+fn model_cost(size: String, limit: Option<usize>, context: usize) -> Res<ModelCost> {
+    let mut config = size_presets().into_iter().find(|p| p.id == size).ok_or("Unknown model size")?.config;
+    config.max_tokens = context.clamp(1, yendory_engine::model::MAX_CONTEXT);
     let base =
         Bicameral::parameters_for(&Config { vocab: yendory_engine::tokenizer::BASE, ..config.clone() });
     let per_word = config.d + 1;
     let max_words = yendory_engine::model::MAX_PARAMETERS.saturating_sub(base) / per_word;
-    let parameters = base + limit.min(max_words) * per_word;
+    let words = limit.unwrap_or(config.vocab - yendory_engine::tokenizer::BASE);
+    let parameters = base + words.min(max_words) * per_word;
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-    let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(parameters, threads);
-    Ok(VocabularyCost {
+    let rb = row_bytes(&config);
+    let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(parameters, threads, rb);
+    Ok(ModelCost {
         parameters,
         file_bytes,
         chat_bytes,
@@ -296,7 +314,62 @@ fn vocabulary_cost(size: String, limit: usize) -> Res<VocabularyCost> {
         teaching_bytes,
         per_word,
         max_words,
+        row_bytes: rb,
+        threads,
     })
+}
+
+/// Changes the open model's context length. No weight changes (positions are encoded by
+/// rotation); the model uses a longer context well once it has trained on text that long.
+#[tauri::command]
+fn set_context(app: AppHandle, studio: State<Studio>, id: String, context: usize) -> Res<Meta> {
+    not_teaching(&studio)?;
+    let mut guard = studio.active.lock().unwrap();
+    let active = guard.as_mut().filter(|a| a.meta.id == id).ok_or("Open the model first")?;
+    let model = active
+        .model
+        .with_context(context)
+        .map_err(|_| format!("Choose a context of 1 to {} tokens", yendory_engine::model::MAX_CONTEXT))?;
+    let mut meta = active.meta.clone();
+    refresh_meta(&mut meta, &model);
+    save_all(&app, &meta, &model, &active.archive)?;
+    active.model = model;
+    active.meta = meta.clone();
+    Ok(meta)
+}
+
+/// Training speed of one size at one context length on this device: one row per thread, each
+/// as long as the context (attention compares every token with every earlier one, so the cost
+/// per token grows with the context).
+#[tauri::command]
+async fn measure_context(studio: State<'_, Studio>, size: String, context: usize) -> Res<f64> {
+    not_teaching(&studio)?;
+    let mut config = size_presets().into_iter().find(|p| p.id == size).ok_or("Unknown model size")?.config;
+    config.max_tokens = context;
+    Bicameral::check_config(&config)?;
+    tauri::async_runtime::spawn_blocking(move || -> Res<f64> {
+        let m = Bicameral::with_config(config, 1);
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let mut text = String::new();
+        let mut i = 0;
+        while text.len() < context + 1 {
+            text.push_str(&format!("U: Where is key {i}?\nN: Key {i} is in box {}.\n", i % 7));
+            i += 1;
+        }
+        let ids = m.tokenizer.encode(&text)?;
+        let rows: Vec<Row> = (0..threads)
+            .map(|r| Row {
+                ids: ids[r..r + context].to_vec(),
+                targets: ids[r + 1..r + context + 1].to_vec(),
+                mask: vec![1.; context],
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        batch_loss_and_gradients(&m, &rows, Ablation::default())?;
+        Ok((threads * context) as f64 / t.elapsed().as_secs_f64())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Changes the open model's vocabulary limit (`None`: back to its allocated slots).
@@ -356,12 +429,19 @@ fn load_speeds(app: &AppHandle) -> std::collections::BTreeMap<String, Speed> {
 /// talking keeps 2 copies (the open model and the one answering); reading keeps up to 6 (open,
 /// reading thread, working, best, the serialised checkpoint being saved, the open model being
 /// replaced); teaching up to 10 (those plus the course, lesson-start, accepted and candidate
-/// models). Training adds one gradient buffer per thread and two for the batch. Checked: a 15M
-/// model reading peaked at 1.57 GB with 4 threads (estimate 1.37 GB + activations and corpus).
-fn memory(p: usize, threads: usize) -> (u64, u64, u64, u64) {
+/// models). Training adds one gradient buffer per thread and two for the batch, and each
+/// thread's activations for one training row (`row_bytes`, from
+/// `Bicameral::activation_floats_per_token` × the row length). Checked: a 15M model reading
+/// peaked at 1.57 GB with 4 threads.
+fn memory(p: usize, threads: usize, row_bytes: u64) -> (u64, u64, u64, u64) {
     let (copy, grad) = (12 * p as u64, 4 * p as u64);
-    let grads = grad * (threads as u64 + 2);
-    (copy, 2 * copy, 6 * copy + grads, 10 * copy + grads)
+    let training = grad * (threads as u64 + 2) + row_bytes * threads as u64;
+    (copy, 2 * copy, 6 * copy + training, 10 * copy + training)
+}
+
+/// Activation bytes of one training row as long as the context.
+fn row_bytes(config: &Config) -> u64 {
+    4 * Bicameral::activation_floats_per_token(config) as u64 * config.max_tokens as u64
 }
 
 #[tauri::command]
@@ -373,7 +453,8 @@ fn model_sizes(app: AppHandle) -> Vec<SizeInfo> {
         .map(|p| {
             let m = Bicameral::with_config(p.config, 1);
             let n = m.parameter_count();
-            let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(n, threads);
+            let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) =
+                memory(n, threads, row_bytes(&Config::default()));
             SizeInfo {
                 id: p.id,
                 name: p.name,
@@ -439,6 +520,7 @@ fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
     let mut meta = load_meta(&app, &id)?;
     let model = Bicameral::load(dir.join("model.nnova2"))?;
     meta.slots = model.word_capacity();
+    meta.context = model.config.max_tokens;
     let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(_) => Vec::new(),
@@ -832,12 +914,28 @@ fn clean_message(s: &str) -> Res<String> {
 async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message: String) -> Res<String> {
     let message = clean_message(&message)?;
     let model = with_active(&studio, |a| Ok(a.model.clone()))?;
-    let mut prompt = String::new();
-    for (user, said) in history.iter().rev().take(6).rev() {
-        prompt.push_str(&format!("U: {}\nN: {}\n", clean_message(user)?, said.replace(['\n', '\r'], " ")));
+    let context = model.config.max_tokens;
+    let reply_tokens = reply_length(context);
+    // Keep as many recent turns as fit in the context, leaving room for the reply.
+    let question = format!("U: {message}\nN: ");
+    let mut used = model.tokenizer.encode(&question)?.len();
+    let mut turns = Vec::new();
+    for (user, said) in history.iter().rev() {
+        let turn = format!("U: {}\nN: {}\n", clean_message(user)?, said.replace(['\n', '\r'], " "));
+        let n = model.tokenizer.encode(&turn)?.len();
+        if used + n + reply_tokens > context {
+            break;
+        }
+        used += n;
+        turns.push(turn);
     }
-    prompt.push_str(&format!("U: {message}\nN: "));
-    reply(&model, &prompt, 48, Ablation::default())
+    let prompt: String = turns.into_iter().rev().chain(std::iter::once(question)).collect();
+    reply(&model, &prompt, reply_tokens, Ablation::default())
+}
+
+/// Longest reply in tokens: a quarter of the context, at least 48 (Nova-2's) and at most 512.
+fn reply_length(context: usize) -> usize {
+    (context / 4).clamp(48, 512)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -954,7 +1052,9 @@ pub fn run() {
             create_model,
             model_sizes,
             set_word_limit,
-            vocabulary_cost,
+            set_context,
+            measure_context,
+            model_cost,
             measure_speed,
             open_model,
             rename_model,

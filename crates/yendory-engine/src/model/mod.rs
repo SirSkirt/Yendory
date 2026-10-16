@@ -25,6 +25,8 @@ pub use think::{Branch, Choice, Readout, ThinkOptions, ThinkingTree, ThoughtStep
 pub const MAX_PARAMETERS: usize = 1_000_000_000;
 /// Largest vocabulary (token ids, including the 128 characters) a configuration may declare.
 pub const MAX_VOCAB: usize = 1 << 28;
+/// Longest context (tokens) a configuration may declare.
+pub const MAX_CONTEXT: usize = 1 << 16;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub vocab: usize,
@@ -242,6 +244,32 @@ impl Bicameral {
     /// checkpoint passes before it is loaded). Call it before `with_config` for user choices.
     pub fn check_config(config: &Config) -> Result<(), String> {
         checkpoint::validate_config(config)
+    }
+    /// The same model with a different context length (`max_tokens`). Positions are encoded by
+    /// rotation (RoPE), so no parameter depends on the context: every weight is kept. A model
+    /// uses a longer context well only after training on text that long.
+    pub fn with_context(&self, max_tokens: usize) -> Result<Bicameral, String> {
+        let config = Config { max_tokens, ..self.config.clone() };
+        checkpoint::validate_config(&config)?;
+        let mut out = self.clone();
+        out.config = config;
+        out.stored_config_json = None;
+        Ok(out)
+    }
+    /// Values the training forward pass stores for one token (activations kept for the
+    /// backward pass), counted from the graph: per block execution (the lower blocks once, the
+    /// upper blocks once per thinking round) 12·d + 4·ff, plus the right hemisphere's input
+    /// and layers and the exchanges. Multiply by 4 bytes and the tokens in a training row; the
+    /// output layer and attention weights are recomputed instead of stored.
+    pub fn activation_floats_per_token(config: &Config) -> usize {
+        let c = config;
+        let executions = c.split + (c.blocks - c.split) * c.loops;
+        c.d + executions * (12 * c.d + 4 * c.ff)
+            + c.window_chars * 16
+            + 2 * c.r1
+            + (c.loops + 1) * 6 * c.d
+            + c.loops * (4 * c.r2 + c.d)
+            + c.d
     }
     /// How many learned word units this model's vocabulary holds (`vocab` minus the 128
     /// character ids).

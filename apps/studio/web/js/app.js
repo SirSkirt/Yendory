@@ -73,6 +73,9 @@ function showActive(meta) {
   $("activeVocab").textContent = `${fmt(meta.words)} words learned · ${fmt(meta.slots)} slots · ` +
     (limit == null ? "fixed (no slots are added)" : `limit ${fmt(limit)} (a slot is added for each word learned)`);
   $("readMaxWords").value = Math.floor(0.75 * (limit ?? meta.slots));
+  $("activeContext").textContent = `${fmt(meta.context)} tokens (replies up to ${fmt(Math.min(512, Math.max(48, Math.floor(meta.context / 4))))} tokens; conversations keep as much history as fits)`;
+  $("readWindow").max = meta.context;
+  if (Number($("readWindow").value) > meta.context) $("readWindow").value = meta.context;
   const read = (meta.read || []).filter(r => r.accepted);
   $("activeReading").textContent = read.length
     ? read.map(r => `${r.corpus}: ${fmt(r.tokens)} tokens, held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`).join(" · ")
@@ -157,6 +160,26 @@ function renderSizes() {
   }));
   body.querySelectorAll("input[name=modelSize]").forEach(r => r.addEventListener("change", () => { renderSizes(); safe(updateVocabNote, "Vocabulary")(); }));
 }
+function chosenContext() {
+  const v = $("contextChoice").value;
+  const n = Number(v === "custom" ? $("contextCustom").value : v);
+  if (!(Number.isInteger(n) && n >= 16)) throw new Error("Enter a context of at least 16 tokens");
+  return n;
+}
+$("contextChoice").addEventListener("change", safe(updateVocabNote, "Context"));
+$("contextCustom").addEventListener("input", safe(updateVocabNote, "Context"));
+$("measureContext").addEventListener("click", safe(async () => {
+  const context = chosenContext();
+  const b = $("measureContext");
+  b.disabled = true;
+  b.textContent = "measuring… (long contexts take a while)";
+  try {
+    const rate = await invoke("measure_context", { size: chosenSize, context });
+    const perMillion = 1e6 / rate / 60;
+    const s = sizes.find(x => x.id === chosenSize);
+    $("contextNote").textContent = `Measured on this device: ${s ? s.name : chosenSize} at ${fmt(context)} tokens trains at ${fmt(Math.round(rate))} tokens/s (reading 1M tokens ≈ ${perMillion < 90 ? Math.ceil(perMillion) + " min" : (perMillion / 60).toFixed(1) + " h"}). A longer context adds no parameters; attention compares every token with every earlier one, so the cost per token grows with the context.`;
+  } finally { b.disabled = false; b.textContent = "Measure training at this context"; }
+}, "Measure context"));
 function chosenLimit() {
   const v = $("vocabChoice").value;
   if (v === "fixed") return null;
@@ -166,24 +189,23 @@ function chosenLimit() {
 }
 async function updateVocabNote() {
   $("vocabCustom").hidden = $("vocabChoice").value !== "custom";
-  let limit;
-  try { limit = chosenLimit(); } catch { $("vocabNote").textContent = "Enter a number of words."; return; }
-  if (limit === null) {
-    $("vocabNote").textContent = "Nova-2's layout: 256 word slots reserved from the start (included in the table above). Reading and lessons fill them; the limit can be raised later.";
-    return;
-  }
-  const c = await invoke("vocabulary_cost", { size: chosenSize, limit });
-  const over = limit > c.maxWords;
-  $("vocabNote").replaceChildren(
-    over ? el("span", { class: "bad" }, `This size allows up to ${fmt(c.maxWords)} words. `) : "",
-    `Slots are added only as words are learned; each word adds ${fmt(c.perWord)} parameters. With all ${fmt(Math.min(limit, c.maxWords))} words learned: ${fmt(c.parameters)} parameters, file ${bytes(c.fileBytes)}, memory ${[c.chatBytes, c.readingBytes, c.teachingBytes].map(bytes).join(" · ")} (talking · reading · teaching). Training slows as words are learned: the output layer scores every learned word for every token.`);
+  $("contextCustom").hidden = $("contextChoice").value !== "custom";
+  let limit, context;
+  try { limit = chosenLimit(); context = chosenContext(); } catch (e) { $("costNote").textContent = e.message; return; }
+  const c = await invoke("model_cost", { size: chosenSize, limit, context });
+  $("vocabNote").replaceChildren(limit === null
+    ? "Nova-2's layout: 256 word slots reserved from the start. Reading and lessons fill them; the limit can be raised later."
+    : el("span", {}, limit > c.maxWords ? el("span", { class: "bad" }, `This size allows up to ${fmt(c.maxWords)} words. `) : "",
+      `Slots are added only as words are learned; each word adds ${fmt(c.perWord)} parameters. Training slows as words are learned: the output layer scores every learned word for every token.`));
+  $("costNote").replaceChildren(el("b", {}, "With these choices"),
+    `${limit === null ? "" : ` and every word up to the limit learned`}: ${fmt(c.parameters)} parameters, file ${bytes(c.fileBytes)}; memory ${[c.chatBytes, c.readingBytes, c.teachingBytes].map(bytes).join(" · ")} (talking · reading · teaching), counting ${c.threads} training rows of ${fmt(context)} tokens (${bytes(c.rowBytes)} each).`);
 }
 $("vocabChoice").addEventListener("change", safe(updateVocabNote, "Vocabulary"));
 $("vocabCustom").addEventListener("input", safe(updateVocabNote, "Vocabulary"));
 $("createModel").addEventListener("click", safe(async () => {
   const name = $("newName").value.trim();
   if (!name) { $("newName").focus(); throw new Error("Give the new model a name"); }
-  showActive(await invoke("create_model", { name, size: chosenSize, wordLimit: chosenLimit() }));
+  showActive(await invoke("create_model", { name, size: chosenSize, wordLimit: chosenLimit(), context: chosenContext() }));
   $("newName").value = "";
   await refreshModels();
   say(`Created ${active.name}: an untrained Bicameral model with ${fmt(active.parameters)} parameters.`);
@@ -208,6 +230,15 @@ $("vocabLimit").addEventListener("click", safe(async () => {
   showActive(await invoke("set_word_limit", { id: active.id, limit }));
   say(limit === null ? "Vocabulary fixed at the slots the model has." : `Vocabulary limit set to ${fmt(limit)} words.`);
 }, "Vocabulary limit"));
+$("contextLimit").addEventListener("click", safe(async () => {
+  if (!active) return;
+  const answer = prompt(`Context for ${active.name} in tokens (now ${fmt(active.context)}). No weights change; the model uses a longer context well once it has read or been taught text that long.`, active.context);
+  if (answer === null || answer.trim() === "") return;
+  const context = Number(answer.replace(/[ ,_]/g, ""));
+  if (!(Number.isInteger(context) && context >= 16)) throw new Error("Enter a context of at least 16 tokens");
+  showActive(await invoke("set_context", { id: active.id, context }));
+  say(`Context set to ${fmt(context)} tokens.`);
+}, "Context"));
 $("renameModel").addEventListener("click", safe(async () => {
   if (!active) return;
   const name = prompt("New name for this model", active.name);

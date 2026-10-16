@@ -1,5 +1,5 @@
 //! Writes a briefly trained model of each larger size preset, and of Nova-2's size with a
-//! 100,000-word vocabulary, plus the Rust Engine's logits, loss and gradients for a fixed
+//! 100,000-word vocabulary and with a 1,024-token context, plus the Rust Engine's logits, loss and gradients for a fixed
 //! prompt, so `reference/check_sizes.py` can recompute them with the numpy reference:
 //! `cargo run --release --example size_compat -- <out dir>`.
 use yendory_engine::tokenizer::BASE;
@@ -15,6 +15,8 @@ fn main() {
         .collect();
     // Nova-2 size with room for 100,000 words, 70,003 in use: token ids go beyond 16 bits.
     cases.push(("vocab100k".into(), Config { vocab: BASE + 100_000, ..Config::default() }));
+    // Nova-2 size with a 1,024-token context, checked on an 800-token input.
+    cases.push(("context1024".into(), Config { max_tokens: 1024, ..Config::default() }));
     for (id, config) in cases {
         let mut m = Bicameral::with_config(config, 5);
         if id == "vocab100k" {
@@ -25,10 +27,17 @@ fn main() {
         for _ in 0..3 {
             m.train_text("U: Where is the key?\nN: In the box.\n", 5e-3, Focus::Joint).unwrap();
         }
-        let ids = m
+        let mut ids = m
             .tokenizer
             .encode("U: The key is in the box. Where is the zebra and w069999?\nN: In the box.\n")
             .unwrap();
+        if id == "context1024" {
+            let mut text = String::new();
+            for i in 0..200 {
+                text.push_str(&format!("U: Where is key {i}?\nN: Key {i} is in box {}.\n", i % 7));
+            }
+            ids = m.tokenizer.encode(&text).unwrap()[..801].to_vec();
+        }
         let (inputs, targets) = (&ids[..ids.len() - 1], &ids[1..]);
         let mask: Vec<f32> = (0..inputs.len()).map(|i| if i < 40 { 0.15 } else { 1. }).collect();
         let logits = m.logits(inputs, Ablation::default()).unwrap();

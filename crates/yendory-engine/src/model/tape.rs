@@ -43,6 +43,9 @@ enum Op {
         dim: usize,
         base: f32,
     },
+    /// Causal attention. Only each row's softmax maximum and normaliser are kept
+    /// (`[head][row]`); the backward pass recomputes the weights from them exactly as the
+    /// forward pass made them, so memory grows with the context, not with its square.
     Attention {
         q: usize,
         k: usize,
@@ -50,7 +53,8 @@ enum Op {
         t: usize,
         d: usize,
         heads: usize,
-        probs: Vec<f32>,
+        max: Vec<f32>,
+        total: Vec<f32>,
     },
     /// Unfused cross-entropy, kept to test [`Op::HeadXent`] against.
     #[cfg(test)]
@@ -97,8 +101,9 @@ impl<'a> Tape<'a> {
     }
     fn node(&mut self, v: Vec<f32>, op: Op) -> usize {
         let id = self.nodes.len();
-        let grad = vec![0.; v.len()];
-        self.nodes.push(Node { values: v, grad, op, param: None });
+        // The gradient is allocated when the backward pass first reaches this node, so the
+        // forward pass holds only activations.
+        self.nodes.push(Node { values: v, grad: Vec::new(), op, param: None });
         id
     }
     /// The values of a node (for a parameter, the model's weights).
@@ -208,6 +213,21 @@ impl<'a> Tape<'a> {
         }
         self.node(out, Op::Rope { src, heads, dim: d, base })
     }
+    /// Scaled scores of one query row against keys `0..=row` of one head.
+    fn scores(
+        qv: &[f32],
+        kv: &[f32],
+        row: usize,
+        h0: usize,
+        hd: usize,
+        d: usize,
+        scale: f32,
+        out: &mut Vec<f32>,
+    ) {
+        let qr = &qv[row * d + h0..row * d + h0 + hd];
+        out.clear();
+        out.extend((0..=row).map(|col| super::linalg::dot(qr, &kv[col * d + h0..col * d + h0 + hd]) * scale));
+    }
     pub(crate) fn attention(
         &mut self,
         q: usize,
@@ -223,34 +243,28 @@ impl<'a> Tape<'a> {
         let qv = &self.nodes[q].values;
         let kv = &self.nodes[k].values;
         let vv = &self.nodes[v].values;
-        let mut p = vec![0f32; heads * t * t];
         let mut output = vec![0.; t * d];
+        let (mut maxs, mut totals) = (vec![0f32; heads * t], vec![0f32; heads * t]);
+        let mut p = Vec::with_capacity(t);
         for head in 0..heads {
+            let h0 = head * hd;
             for row in 0..t {
-                let idx = (head * t + row) * t;
-                let mut maximum = f32::NEG_INFINITY;
-                for col in 0..=row {
-                    let mut s = 0f32;
-                    for j in 0..hd {
-                        s += qv[row * d + head * hd + j] * kv[col * d + head * hd + j];
-                    }
-                    p[idx + col] = s * scale;
-                    maximum = maximum.max(p[idx + col]);
-                }
+                Self::scores(qv, kv, row, h0, hd, d, scale, &mut p);
+                let maximum = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                 let mut total = 0f32;
-                for col in 0..=row {
-                    p[idx + col] = (p[idx + col] - maximum).exp();
-                    total += p[idx + col];
+                for x in p.iter_mut() {
+                    *x = (*x - maximum).exp();
+                    total += *x;
                 }
-                for col in 0..=row {
-                    p[idx + col] /= total;
-                    for j in 0..hd {
-                        output[row * d + head * hd + j] += p[idx + col] * vv[col * d + head * hd + j];
-                    }
+                let out = &mut output[row * d + h0..row * d + h0 + hd];
+                for (col, x) in p.iter().enumerate() {
+                    super::linalg::axpy(out, x / total, &vv[col * d + h0..col * d + h0 + hd]);
                 }
+                maxs[head * t + row] = maximum;
+                totals[head * t + row] = total;
             }
         }
-        self.node(output, Op::Attention { q, k, v, t, d, heads, probs: p })
+        self.node(output, Op::Attention { q, k, v, t, d, heads, max: maxs, total: totals })
     }
     #[cfg(test)]
     pub(crate) fn xent(&mut self, logits: usize, targets: &[usize], mask: &[f32], vocab: usize) -> usize {
@@ -330,7 +344,13 @@ impl<'a> Tape<'a> {
                 Some(g) => &mut g[a..b],
                 None => return,
             },
-            None => &mut self.nodes[id].grad[..],
+            None => {
+                let node = &mut self.nodes[id];
+                if node.grad.is_empty() {
+                    node.grad = vec![0.; node.values.len()];
+                }
+                &mut node.grad[..]
+            }
         };
         for (a, b) in target.iter_mut().zip(delta) {
             *a += *b;
@@ -340,7 +360,7 @@ impl<'a> Tape<'a> {
     /// to accumulate a weighted sum of rows). Parameter gradients are added to the buffer given
     /// to [`Tape::new`].
     pub(crate) fn backward(&mut self, root: usize, seed: f32) {
-        self.nodes[root].grad[0] = seed;
+        self.nodes[root].grad = vec![seed];
         for id in (0..self.nodes.len()).rev() {
             if matches!(self.nodes[id].op, Op::Input) {
                 continue;
@@ -349,6 +369,10 @@ impl<'a> Tape<'a> {
             // be moved out instead of copied.
             let op = std::mem::replace(&mut self.nodes[id].op, Op::Input);
             let upstream = std::mem::take(&mut self.nodes[id].grad);
+            if upstream.is_empty() {
+                // Nothing downstream depends on this node: its gradient is zero.
+                continue;
+            }
             match op {
                 Op::Input => {}
                 Op::Add { a, b } => {
@@ -461,35 +485,44 @@ impl<'a> Tape<'a> {
                     }
                     self.accum(src, &dx);
                 }
-                Op::Attention { q, k, v, t, d, heads, probs } => {
+                Op::Attention { q, k, v, t, d, heads, max, total } => {
                     let hd = d / heads;
                     let sc = 1. / (hd as f32).sqrt();
-                    let qv = self.nodes[q].values.clone();
-                    let kv = self.nodes[k].values.clone();
-                    let vv = self.nodes[v].values.clone();
+                    let (qv, kv, vv) = (&self.nodes[q].values, &self.nodes[k].values, &self.nodes[v].values);
                     let mut dq = vec![0f32; t * d];
                     let mut dk = vec![0f32; t * d];
                     let mut dv = vec![0f32; t * d];
+                    let (mut p, mut dp) = (Vec::with_capacity(t), Vec::with_capacity(t));
                     for head in 0..heads {
+                        let h0 = head * hd;
                         for row in 0..t {
-                            let idx = (head * t + row) * t;
-                            let mut dp = vec![0f32; row + 1];
-                            let mut weighted = 0f32;
-                            for col in 0..=row {
-                                for j in 0..hd {
-                                    dp[col] +=
-                                        upstream[row * d + head * hd + j] * vv[col * d + head * hd + j];
-                                    dv[col * d + head * hd + j] +=
-                                        probs[idx + col] * upstream[row * d + head * hd + j];
-                                }
-                                weighted += dp[col] * probs[idx + col];
+                            // The same weights as the forward pass: exp(s - max) / total.
+                            Self::scores(qv, kv, row, h0, hd, d, sc, &mut p);
+                            let (m, tot) = (max[head * t + row], total[head * t + row]);
+                            for x in p.iter_mut() {
+                                *x = (*x - m).exp() / tot;
                             }
-                            for col in 0..=row {
-                                let g = probs[idx + col] * (dp[col] - weighted) * sc;
-                                for j in 0..hd {
-                                    dq[row * d + head * hd + j] += g * kv[col * d + head * hd + j];
-                                    dk[col * d + head * hd + j] += g * qv[row * d + head * hd + j];
-                                }
+                            let up = &upstream[row * d + h0..row * d + h0 + hd];
+                            dp.clear();
+                            let mut weighted = 0f32;
+                            for (col, &w) in p.iter().enumerate() {
+                                let g = super::linalg::dot(up, &vv[col * d + h0..col * d + h0 + hd]);
+                                super::linalg::axpy(&mut dv[col * d + h0..col * d + h0 + hd], w, up);
+                                weighted += g * w;
+                                dp.push(g);
+                            }
+                            for (col, (&w, &g)) in p.iter().zip(&dp).enumerate() {
+                                let g = w * (g - weighted) * sc;
+                                super::linalg::axpy(
+                                    &mut dq[row * d + h0..row * d + h0 + hd],
+                                    g,
+                                    &kv[col * d + h0..col * d + h0 + hd],
+                                );
+                                super::linalg::axpy(
+                                    &mut dk[col * d + h0..col * d + h0 + hd],
+                                    g,
+                                    &qv[row * d + h0..row * d + h0 + hd],
+                                );
                             }
                         }
                     }
@@ -550,6 +583,9 @@ impl<'a> Tape<'a> {
                     self.accum(logits, &probs);
                 }
             }
+            // Everything that used this node's output was processed before it (the backward
+            // pass runs in reverse order), so its activations are no longer needed.
+            self.nodes[id].values = Vec::new();
         }
     }
 }

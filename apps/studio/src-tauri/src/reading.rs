@@ -336,10 +336,10 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
     if !(10_000..=2_000_000_000).contains(&options.tokens)
         || !(1..=128).contains(&options.batch_size)
         || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
-        || !(16..=256).contains(&options.window)
+        || !(16..=yendory_engine::model::MAX_CONTEXT).contains(&options.window)
     {
         return Err("Choose 10,000 or more tokens, a batch size of 1-128, a learning rate up to 0.01 \
-                    and a window of 16-256 tokens"
+                    and a window of at least 16 tokens (it is cut to the model's context)"
             .into());
     }
     let info = load_info(&app, &options.corpus_id)?;
