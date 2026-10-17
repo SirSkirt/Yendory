@@ -559,6 +559,33 @@ impl Bicameral {
         let value = self.add_gradients(ids, features.to_vec(), targets, mask, abl, &mut grads, 1.);
         Ok((value, grads))
     }
+    /// The row's loss as [`Bicameral::loss_and_gradients`] computes it, without the backward
+    /// pass (held-out checks and scores need only the loss: about a third of the work).
+    pub fn loss(
+        &self,
+        ids: &[TokenId],
+        targets: &[TokenId],
+        mask: &[f32],
+        abl: Ablation,
+    ) -> Result<f32, String> {
+        if ids.len() != targets.len()
+            || ids.len() != mask.len()
+            || ids.is_empty()
+            || ids.len() > self.config.max_tokens
+        {
+            return Err("Nova-2 training dimensions or context invalid".into());
+        }
+        if targets.iter().any(|&x| x as usize >= self.config.vocab) {
+            return Err("Invalid target token".into());
+        }
+        let feats = self.features(ids)?;
+        let mut t = tape::Tape::new(&self.weights, None);
+        let h = self.forward_hidden(&mut t, ids, feats, ids.len(), abl);
+        let targets = targets.iter().map(|&v| v as usize).collect::<Vec<_>>();
+        let (embed, bias) = (self.param(&mut t, "embed"), self.param(&mut t, "out_bias"));
+        let loss = t.head_xent(h, embed, bias, self.config.d, self.config.vocab, &targets, mask);
+        Ok(t.values(loss)[0])
+    }
     /// Like [`Bicameral::loss_and_gradients`], but ADDS `scale ×` the gradient into `grads`
     /// (one buffer reused across rows) and returns the row's loss.
     pub fn accumulate_loss_and_gradients(

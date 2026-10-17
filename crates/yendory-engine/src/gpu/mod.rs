@@ -122,6 +122,8 @@ pub struct Gpu {
     dummies: Vec<wgpu::Buffer>,
     align: u64,
     timestamps: bool,
+    /// The first GPU error reported by the driver or wgpu (instead of a panic).
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl std::fmt::Debug for Gpu {
@@ -219,6 +221,16 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("{}: {e}", info.name))?;
+        // GPU errors are recorded and returned by the next operation that checks, instead of
+        // wgpu's default of panicking (which would end the training thread without a word).
+        let error: Arc<Mutex<Option<String>>> = Arc::default();
+        let sink = error.clone();
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+            let mut slot = sink.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.is_none() {
+                *slot = Some(e.to_string());
+            }
+        }));
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("yendory kernels"),
             source: wgpu::ShaderSource::Wgsl(include_str!("kernels.wgsl").into()),
@@ -278,7 +290,10 @@ impl Gpu {
             })
             .collect();
         let align = (limits.min_uniform_buffer_offset_alignment as u64).max(PARAM_BYTES);
-        Ok(Gpu { device, queue, info, limits, layout, pipelines, dummies, align, timestamps })
+        if let Some(e) = error.lock().unwrap().take() {
+            return Err(format!("{}: {e}", info.name));
+        }
+        Ok(Gpu { device, queue, info, limits, layout, pipelines, dummies, align, timestamps, error })
     }
 
     /// "NVIDIA GeForce RTX 2070 SUPER (Dx12)".
@@ -336,6 +351,14 @@ impl Gpu {
         Ok(bytemuck::cast_slice::<u8, f32>(&bytes)[..floats].to_vec())
     }
 
+    /// The GPU error reported since the last check, if any.
+    fn check(&self) -> Result<(), String> {
+        match self.error.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            Some(e) => Err(format!("GPU error: {e}")),
+            None => Ok(()),
+        }
+    }
+
     /// Copies the first `bytes` bytes of a buffer back to the CPU (waits for the GPU).
     fn read_bytes(&self, buffer: &wgpu::Buffer, bytes: u64) -> Result<Vec<u8>, String> {
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -358,6 +381,8 @@ impl Gpu {
             view.to_vec()
         };
         staging.unmap();
+        // Every result passes through here: an error during the work it depends on fails it.
+        self.check()?;
         Ok(out)
     }
 }
@@ -520,6 +545,8 @@ pub(crate) struct GpuGraph<'a> {
     upload_bytes: u64,
     /// Which of `bufs` are input buffers.
     inputs: Vec<usize>,
+    /// Loss only: no gradients are recorded.
+    forward_only: bool,
 }
 
 impl<'a> GpuGraph<'a> {
@@ -537,6 +564,7 @@ impl<'a> GpuGraph<'a> {
             ids: None,
             upload_bytes: 0,
             inputs: Vec::new(),
+            forward_only: false,
         }
     }
 
@@ -751,13 +779,20 @@ impl<'a> GpuGraph<'a> {
             let p = [vocab as u32, rc as u32, r0 as u32, 0, bits(denom), bits(1.)];
             let wg = groups(rc * 256);
             self.dispatch(K::Xent, &[Some(logits), Some(mask), Some(losses)], Some(targets), &p, wg);
+            if self.forward_only {
+                continue;
+            }
             // d embed += gᵀ · h, d bias += column sums of g, d h = g · embed
             self.gemm((logits, 0, 1, vocab), (hb, r0 * d, d, 1), (B::Grads, ea), vocab, d, rc, true);
             self.colsum(logits, None, None, vocab, rc, ba);
             self.gemm((logits, 0, vocab, 1), (B::Weights, ea, d, 1), (dh, r0 * d), rc, d, vocab, false);
         }
         self.release(logits);
-        self.accum(h, dh, true);
+        if self.forward_only {
+            self.release(dh);
+        } else {
+            self.accum(h, dh, true);
+        }
         losses
     }
 
@@ -1189,6 +1224,7 @@ impl GpuModel {
         rows: &[Row],
         abl: Ablation,
         denom: Option<f32>,
+        gradients: bool,
     ) -> Result<(GpuGraph<'a>, B, usize), String> {
         if rows.is_empty() {
             return Err("Empty training batch".into());
@@ -1224,14 +1260,19 @@ impl GpuModel {
         }
         let denom = denom.unwrap_or_else(|| mask.iter().map(|&m| m as f64).sum::<f64>().max(1.) as f32);
         let mut g = GpuGraph::new(&self.gpu, pool, t);
-        g.fill(B::Grads, 0, self.n, 0.);
+        if gradients {
+            g.fill(B::Grads, 0, self.n, 0.);
+        }
         let h = model.forward_hidden(&mut g, &ids, features, t, abl);
         let tb = g.upload(bytemuck::cast_slice(&targets).to_vec(), targets.len());
         let mb = g.upload(bytemuck::cast_slice(&mask).to_vec(), mask.len());
         let embed = g.parameter("embed", model.slot_range("embed"));
         let bias = g.parameter("out_bias", model.slot_range("out_bias"));
+        g.forward_only = !gradients;
         let losses = g.head_xent(h, embed, bias, c.d, c.vocab, tb, mb, denom);
-        g.backward();
+        if gradients {
+            g.backward();
+        }
         Ok((g, losses, total))
     }
 
@@ -1385,7 +1426,7 @@ impl GpuModel {
     ) -> Result<(f32, Vec<f32>), String> {
         let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
         let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None)?;
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None, true)?;
             self.run(&mut g);
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             let grads = self.gpu.read(&self.grads, self.n)?;
@@ -1444,7 +1485,7 @@ impl GpuModel {
         let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
         let result = (|| {
             let started = std::time::Instant::now();
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None)?;
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None, true)?;
             let (gx, gy, _) = groups(self.n);
             let parts = (gx * gy) as usize;
             g.dispatch(K::Sumsq, &[Some(B::Grads), Some(B::Partial)], None, &[self.n as u32], (gx, gy, 1));
@@ -1525,12 +1566,43 @@ impl GpuModel {
     ) -> Result<(f32, Vec<f32>), String> {
         let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
         let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, Some(denom))?;
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, Some(denom), true)?;
             self.run(&mut g);
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             let grads = self.gpu.read(&self.grads, self.n)?;
             g.finish();
             Ok((loss as f32, grads))
+        })();
+        *self.pool.lock().unwrap() = pool;
+        result
+    }
+
+    /// The mean loss of rows with the weights on the GPU, exactly as
+    /// `learn::batch_loss` computes it, without gradients (held-out checks during GPU training).
+    /// Rows are computed `chunk` at a time.
+    pub fn mean_loss(
+        &self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        chunk: usize,
+    ) -> Result<f32, String> {
+        if rows.is_empty() {
+            return Ok(0.);
+        }
+        // Each row's loss enters with its weight, divided by the total weight of all rows.
+        let denom = rows.iter().map(|r| r.mask.iter().map(|&m| m as f64).sum::<f64>()).sum::<f64>().max(1.);
+        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
+        let result = (|| {
+            let mut total = 0f64;
+            for part in rows.chunks(chunk.max(1)) {
+                let (mut g, losses, n) =
+                    self.record(&mut pool, model, part, abl, Some(denom as f32), false)?;
+                self.run(&mut g);
+                total += self.gpu.read(self.buffer(&g, losses), n)?.iter().map(|&x| x as f64).sum::<f64>();
+                g.finish();
+            }
+            Ok(total as f32)
         })();
         *self.pool.lock().unwrap() = pool;
         result

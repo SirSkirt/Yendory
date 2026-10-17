@@ -189,6 +189,19 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
     Ok(meta)
 }
 
+/// Runs training work so that a crash inside it (a panic) becomes an error the app reports,
+/// instead of a thread that ends silently and leaves the app waiting.
+fn guarded<T>(work: impl FnOnce() -> Res<T>) -> Res<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|p| {
+        let text = p
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "unknown error".into());
+        Err(format!("Training stopped unexpectedly: {text}. The last saved model is unchanged."))
+    })
+}
+
 fn not_teaching(studio: &Studio) -> Res<()> {
     if studio.teaching.load(Ordering::Acquire) {
         return Err("Wait until teaching has finished (or stop it) first".into());
@@ -1177,7 +1190,8 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             }
             Ok(())
         };
-        let result = teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop);
+        let result =
+            guarded(|| teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop));
         // Persist the per-file records (learned or not) and the final metadata.
         let finished = match result {
             Ok(r) => {

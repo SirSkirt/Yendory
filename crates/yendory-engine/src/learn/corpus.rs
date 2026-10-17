@@ -8,7 +8,7 @@
 //! and the model returned is the best accepted checkpoint (the input model unchanged when no
 //! checkpoint ever improved on it).
 use super::lessons::{grow_vocabulary_from_texts, is_held_out};
-use super::{batch_loss_and_gradients, lr_schedule, Rng, Row};
+use super::{lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
 use serde::{Deserialize, Serialize};
@@ -365,15 +365,8 @@ fn dense_reliance(model: &Bicameral, rows: &[Row], loss: f32) -> Result<f32, Str
 }
 
 fn mean_loss_with(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
-    let mut total = 0f64;
-    let mut weight = 0f64;
-    for chunk in rows.chunks(16) {
-        let (l, _) = batch_loss_and_gradients(model, chunk, abl)?;
-        let w: f64 = chunk.iter().map(|r| r.mask.len() as f64).sum();
-        total += l as f64 * w;
-        weight += w;
-    }
-    Ok((total / weight.max(1.)) as f32)
+    // Forward passes only (held-out windows have every target weighted 1).
+    super::batch_loss(model, rows, abl)
 }
 
 /// The start of a held-out document, used as the sample prompt: up to the model's first turn
@@ -619,8 +612,16 @@ pub fn pretrain_mix(
         Ok(misses >= cfg.patience.max(1))
     };
     // Measures a checkpoint: held-out losses, Dense reliance and a sample per corpus.
-    let measure = |model: Bicameral, step: u64, tokens: u64, train_loss: f32| -> Result<Measured, String> {
-        let check = check(&model)?;
+    let measure = |model: Bicameral,
+                   step: u64,
+                   tokens: u64,
+                   train_loss: f32,
+                   measured: Option<Check>|
+     -> Result<Measured, String> {
+        let check = match measured {
+            Some(c) => c,
+            None => check(&model)?,
+        };
         let samples = prompts.iter().map(|prompt| sample(&model, prompt)).collect();
         Ok(Measured { model, step, tokens, train_loss, check, samples })
     };
@@ -685,9 +686,27 @@ pub fn pretrain_mix(
                 since_n = 0;
                 let snapshot = current.clone();
                 if trainer.on_gpu() {
+                    // The held-out losses on the GPU (seconds), the samples on a CPU thread
+                    // while the GPU keeps reading.
+                    let mut per = Vec::new();
+                    for rows in &probes {
+                        let gpu = |abl| {
+                            trainer
+                                .gpu_loss(&current, rows, abl)
+                                .unwrap_or_else(|| mean_loss_with(&current, rows, abl))
+                        };
+                        let l = gpu(Ablation::default())?;
+                        let cut = gpu(Ablation { no_afferent: true, ..Ablation::default() })?;
+                        per.push((l, cut - l));
+                    }
+                    let loss = per.iter().zip(&shares).map(|((l, _), s)| l * s).sum();
+                    let rel = per.iter().zip(&shares).map(|((_, r), s)| r * s).sum();
+                    let measured: Check = (loss, rel, per);
                     let measure = &measure;
-                    pending = Some(scope.spawn(move || measure(snapshot, step + 1, tokens, train_loss)));
-                } else if judge(measure(snapshot, step + 1, tokens, train_loss)?, observer)? {
+                    pending = Some(
+                        scope.spawn(move || measure(snapshot, step + 1, tokens, train_loss, Some(measured))),
+                    );
+                } else if judge(measure(snapshot, step + 1, tokens, train_loss, None)?, observer)? {
                     early_stop = true;
                     break;
                 }

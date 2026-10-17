@@ -113,6 +113,41 @@ pub fn batch_loss_and_gradients(
     Ok(((loss / denom) as f32, grads))
 }
 
+/// The mean loss of a batch exactly as [`batch_loss_and_gradients`] reports it, without
+/// computing gradients (forward passes only, rows in parallel threads).
+pub fn batch_loss(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
+    if rows.is_empty() {
+        return Ok(0.);
+    }
+    let threads = cpu_threads().min(rows.len());
+    let chunk = rows.len().div_ceil(threads);
+    let parts: Vec<Result<(f64, f64), String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = rows
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    let (mut loss, mut weight) = (0f64, 0f64);
+                    for row in part {
+                        let sum: f32 = row.mask.iter().sum();
+                        let l = model.loss(&row.ids, &row.targets, &row.mask, abl)?;
+                        loss += l as f64 * sum.max(1.) as f64;
+                        weight += sum as f64;
+                    }
+                    Ok((loss, weight))
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().expect("scoring thread panicked")).collect()
+    });
+    let (mut loss, mut weight) = (0f64, 0f64);
+    for p in parts {
+        let (l, w) = p?;
+        loss += l;
+        weight += w;
+    }
+    Ok((loss / weight.max(1.)) as f32)
+}
+
 /// Like [`batch_loss_and_gradients`] for a part of a batch: the loss and gradient sums are
 /// divided by `denom`, the whole batch's total weight, so the parts of a batch add up to the
 /// batch's mean (hybrid CPU + GPU training).
@@ -237,6 +272,15 @@ pub fn gpu_training() -> bool {
     device() != Device::Cpu
 }
 
+/// The message of a caught panic.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown error".into())
+}
+
 /// What happened to the chosen device during training (e.g. the GPU failed and training went
 /// on on the CPU), once; `None` when nothing happened.
 pub fn take_device_notice() -> Option<String> {
@@ -335,7 +379,11 @@ impl Trainer {
     ) -> Result<f32, String> {
         #[cfg(feature = "gpu")]
         if let Some(g) = self.gpu.as_mut() {
-            match g.train_step(model, rows, abl, lr, focus) {
+            let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                g.train_step(model, rows, abl, lr, focus)
+            }))
+            .unwrap_or_else(|p| Err(format!("GPU step failed: {}", panic_text(p))));
+            match step {
                 Ok(loss) => {
                     model.step = g.step;
                     self.dirty = true;
@@ -344,7 +392,9 @@ impl Trainer {
                 Err(e) => {
                     let g = self.gpu.take().unwrap();
                     let before = model.step;
-                    if let Err(read) = g.download(model) {
+                    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.download(model)))
+                        .unwrap_or_else(|p| Err(panic_text(p)));
+                    if let Err(read) = read {
                         return Err(format!(
                             "The GPU failed ({e}) and its training state could not be read back ({read}); \
                              the steps since the last check are lost, saved checkpoints are unchanged"
@@ -358,10 +408,33 @@ impl Trainer {
         }
         #[cfg(feature = "gpu")]
         if let Some(h) = self.hybrid.as_mut() {
-            match hybrid_step(h, model, rows, abl, lr, focus) {
-                Ok(loss) => return Ok(loss),
+            let before = model.step;
+            let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                hybrid_step(h, model, rows, abl, lr, focus)
+            }))
+            .unwrap_or_else(|p| Err(format!("hybrid step failed: {}", panic_text(p))));
+            match step {
+                Ok(loss) => {
+                    // The step is applied on the CPU; the GPU gets the new weights for the next.
+                    let upload =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.gpu.set_weights(model)))
+                            .unwrap_or_else(|p| Err(panic_text(p)));
+                    if let Err(e) = upload {
+                        // The model on the CPU is up to date: the step counts, the GPU stops.
+                        self.hybrid = None;
+                        notice(format!(
+                            "The GPU failed in hybrid training ({e}); training continued on the CPU"
+                        ));
+                    }
+                    return Ok(loss);
+                }
+                Err(e) if model.step != before => {
+                    return Err(format!(
+                        "The GPU failed in hybrid training ({e}) while the step was being applied"
+                    ));
+                }
                 Err(e) => {
-                    // The model is on the CPU in hybrid training: nothing is lost.
+                    // Nothing was applied and the model is on the CPU: nothing is lost.
                     self.hybrid = None;
                     notice(format!("The GPU failed in hybrid training ({e}); training continued on the CPU"));
                 }
@@ -381,6 +454,20 @@ impl Trainer {
         self.dirty = false;
         let _ = model;
         Ok(())
+    }
+
+    /// In GPU training: the mean loss of rows computed on the GPU with the weights there (the
+    /// same value as [`batch_loss`] on the synced model, much faster). `None` otherwise.
+    pub fn gpu_loss(&self, model: &Bicameral, rows: &[Row], abl: Ablation) -> Option<Result<f32, String>> {
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu.as_ref().map(|g| g.mean_loss(model, rows, abl, 8))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = (model, rows, abl);
+            None
+        }
     }
 
     /// GPU memory training uses (GPU and hybrid training).
@@ -410,8 +497,8 @@ impl Trainer {
 
 /// One hybrid step: the GPU computes the gradient of the first rows, the CPU (at the same
 /// time) that of the others, both divided by the whole batch's weight; their sum is the
-/// batch's gradient, and the CPU takes the AdamW step (exactly as CPU training) and sends the
-/// new weights to the GPU. The split follows the measured speeds.
+/// batch's gradient, and the CPU takes the AdamW step (exactly as CPU training); the caller
+/// then sends the new weights to the GPU. The split follows the measured speeds.
 #[cfg(feature = "gpu")]
 fn hybrid_step(
     h: &mut Hybrid,
@@ -451,7 +538,10 @@ fn hybrid_step(
             batch_part_loss_and_gradients(model_ref, cpu_rows, abl, denom).map(Some)
         };
         let cpu_secs = t.elapsed().as_secs_f64();
-        (gpu_job.join().unwrap_or_else(|_| (Err("GPU thread failed".into()), 0.)), (cpu, cpu_secs))
+        (
+            gpu_job.join().unwrap_or_else(|p| (Err(format!("GPU thread failed: {}", panic_text(p))), 0.)),
+            (cpu, cpu_secs),
+        )
     });
     let (gpu_part, cpu_part) = (gpu_part?, cpu_part?);
     let mut loss = 0f32;
@@ -463,7 +553,6 @@ fn hybrid_step(
         }
     }
     model.adam_step(&grads, lr, focus)?;
-    h.gpu.set_weights(model)?;
     // Speeds in tokens per second, smoothed; the next split balances the two finishing times.
     let gpu_tokens: usize = tokens[..split].iter().sum();
     let cpu_tokens = total - gpu_tokens;

@@ -20,7 +20,7 @@
 //! given to the model at inference.
 use super::eval::{evaluate, sample_per_kind, Report};
 use super::lessons::{grow_vocabulary, Item, Kind};
-use super::{batch_loss_and_gradients, encode_item, lr_schedule, Rng, Row};
+use super::{encode_item, lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -404,18 +404,8 @@ pub(super) fn batch_loss_and_gradients_loss(
     rows: &[Row],
     abl: Ablation,
 ) -> Result<f32, String> {
-    if rows.is_empty() {
-        return Ok(0.);
-    }
-    let mut total = 0f64;
-    let mut weight = 0f64;
-    for chunk in rows.chunks(32) {
-        let (l, _) = batch_loss_and_gradients(model, chunk, abl)?;
-        let w: f64 = chunk.iter().map(|r| r.mask.iter().sum::<f32>() as f64).sum();
-        total += l as f64 * w.max(1.);
-        weight += w.max(1.);
-    }
-    Ok((total / weight) as f32)
+    // Forward passes only: the same mean as the training loss, without gradients.
+    super::batch_loss(model, rows, abl)
 }
 
 fn correct_set(r: &Report) -> Vec<bool> {

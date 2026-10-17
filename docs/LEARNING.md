@@ -425,11 +425,16 @@ between devices at any time without losing anything.
 **Failures.** If the GPU cannot be opened, training runs on the CPU and the Studio says why.
 If a GPU step fails during a run, the model is read back from the GPU and training continues on
 the CPU (in hybrid training nothing needs reading back); if the GPU's state cannot be read, the
-run stops with an error and saved checkpoints are untouched.
+run stops with an error and saved checkpoints are untouched. GPU errors the driver reports
+(validation errors, a lost device) and crashes inside a GPU step are caught and turned into this
+fallback with the error's text; they never end the training thread silently. In the Studio a
+crash anywhere in teaching, reading or a plan ends the run with a message, never a frozen page.
 
 **Both processors at once in GPU training**: lessons score each Foundation candidate on the CPU
-while the GPU trains the next; reading checks a checkpoint on the CPU while the GPU keeps
-reading. Talking, exams and grading run on the CPU. `learn::set_cpu_threads(n)` limits the
+while the GPU trains the next; reading computes a checkpoint's held-out losses on the GPU
+(forward passes only, seconds) and writes its samples on the CPU while the GPU keeps reading.
+Held-out losses on the CPU also run forward passes only (no gradients), about a third of the
+work of a training step. Talking, exams and grading run on the CPU. `learn::set_cpu_threads(n)` limits the
 CPU threads (0: all).
 
 **Kernels.** Matrix products use 64 x 64 tiles with each thread's 4 x 4 results in vector

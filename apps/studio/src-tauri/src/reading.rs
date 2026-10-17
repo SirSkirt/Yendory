@@ -816,7 +816,7 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
                 error: None,
             })
         };
-        let finished = run().unwrap_or_else(|e| ReadFinished {
+        let finished = guarded(run).unwrap_or_else(|e| ReadFinished {
             model: None,
             accepted: false,
             baseline_loss: 0.,

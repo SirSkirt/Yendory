@@ -68,6 +68,13 @@ fn gpu_gradients_and_steps_match_the_cpu() {
         println!("loss: GPU {gpu_loss} CPU {cpu_loss}");
         assert!((gpu_loss - cpu_loss).abs() < 1e-4 * cpu_loss.abs().max(1.));
         close("gradients", &gpu_grads, &cpu_grads);
+        // The loss alone (held-out checks): forward passes only, on the CPU and on the GPU, in
+        // parts of a few rows, the same mean as with gradients.
+        let cpu_only = yendory_engine::learn::batch_loss(&model, &rows, abl).unwrap();
+        assert!((cpu_only - cpu_loss).abs() < 1e-6 * cpu_loss.abs().max(1.), "{cpu_only} vs {cpu_loss}");
+        let gpu_only = g.mean_loss(&model, &rows, abl, 2).unwrap();
+        println!("loss only: GPU {gpu_only} CPU {cpu_only}");
+        assert!((gpu_only - cpu_loss).abs() < 1e-4 * cpu_loss.abs().max(1.), "{gpu_only} vs {cpu_loss}");
     }
     // Two AdamW steps with a focus: the same weights and optimizer state.
     for focus in [Focus::Joint, Focus::DenseAndInterconnect] {

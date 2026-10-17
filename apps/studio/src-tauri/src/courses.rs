@@ -793,7 +793,25 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
     let view = plan_view(&app, &plan);
     let stop = studio.stop.clone();
     std::thread::spawn(move || {
-        let plan = run_plan(&app, plan, meta, model, archive, &stop);
+        let id = plan.id.clone();
+        let plan = match guarded(|| Ok(run_plan(&app, plan, meta, model, archive, &stop))) {
+            Ok(p) => p,
+            // A crash: the plan as last saved, marked for attention with the reason.
+            Err(e) => match load_plan(&app, &id) {
+                Ok(mut p) => {
+                    p.status = PlanStatus::NeedsAttention;
+                    p.message = Some(e);
+                    let _ = save_plan(&app, &p);
+                    p
+                }
+                Err(_) => {
+                    let studio = app.state::<Studio>();
+                    studio.teaching.store(false, Ordering::Release);
+                    let _ = app.emit("device-notice", e);
+                    return;
+                }
+            },
+        };
         let studio = app.state::<Studio>();
         studio.teaching.store(false, Ordering::Release);
         if let Some(n) = yendory_engine::learn::take_device_notice() {
