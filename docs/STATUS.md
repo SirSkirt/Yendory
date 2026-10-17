@@ -118,6 +118,46 @@ slot from what the model already knows about the word's characters instead of at
 initialisation change in the trainer); report held-out loss per character alongside per token;
 rehearse earlier text after growth.
 
+### Teaching safeguards: strict, net, relative, both
+
+`examples/guard_compare.rs`: the same start checkpoint (a fresh 1.2M model taught lesson 01),
+the same two courses through the Course Builder pipeline (course 1: lessons 02A + 02B, course 2:
+03A + 03B), same settings and seeds; only the acceptance safeguards differ. Every lesson's
+held-out evaluation questions (never trained) are asked at the start, after each course and at
+the end; course grades are the first grade, before any remediation. One seed, one CPU thread.
+
+- **strict** (current default): a candidate is rejected if it loses any held-out answer, or if
+  earlier lessons' loss rises more than 0.02.
+- **net**: held-out answers may be lost if more are gained (`protect_answers_net`).
+- **relative**: earlier lessons' loss may rise up to 3% instead of 0.02, measured on 48 units
+  of earlier held-out text instead of 16 (`retention_relative`, `retention_units`).
+- **both**: net and relative together.
+
+| | strict | net | relative | both |
+|---|---|---|---|---|
+| Held-out answers right at the end (of 108; 3 at start) | 31 | **38** | 25 | **38** |
+| Gained / lost (answers right at the start that were lost) | 29 / 1 | 35 / **0** | 23 / 1 | 36 / 1 |
+| Course 1 lessons: right after course 1 → after course 2 | 24 → 22 | 29 → 23 | 21 → 18 | 29 → 24 |
+| Course 2 lessons right at the end (of 62) | 9 | **15** | 7 | 14 |
+| Held-out loss at the end, 02A / 02B / 03A / 03B (start 3.05 / 2.64 / 2.45 / 2.28) | 1.17 / 0.94 / 0.89 / 0.87 | **1.16 / 0.84 / 0.79 / 0.72** | 1.55 / 1.20 / 0.90 / 0.82 | 1.23 / 0.86 / 0.86 / 0.78 |
+| Course grade, course 1 / course 2 (pass mark 0.70) | 0.55 / 0.15 | **0.65 / 0.22** | 0.51 / 0.11 | 0.64 / 0.21 |
+| Lesson passes, course passes | 0, 0 | 0, 0 | 0, 0 | 0, 0 |
+
+Findings:
+
+- **net** ended ahead of strict on every lesson (answers and held-out loss), lost none of the
+  answers the model had at the start, and had the best course grades. It also forgets more
+  of course 1 during course 2 (29 → 23 against 24 → 22) but still ends above strict on it.
+- **relative** did worse than strict on every measure. Why is not understood yet, so it stays
+  off. **both** is about net, with one answer lost, so the relative part adds nothing here.
+- Nothing passed under any safeguard: no lesson and no course reached its pass mark on the
+  first grade. Progress (more answers, lower loss) and passing are separate here, as intended.
+- One seed and small question sets (21-33 per lesson): differences of one or two answers are
+  noise. The gap between net and strict (7 answers, every lesson in the same direction) is the
+  only clear one. Times are not comparable (the runs shared the CPU differently).
+
+No default was changed: strict stays the default until net is confirmed with another seed.
+
 ## Decisions still open
 
 | # | Decision | Status |
