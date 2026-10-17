@@ -620,8 +620,56 @@ for (const sel of document.querySelectorAll("#stageMap select")) {
   sel.value = STAGE_DEFAULT[sel.dataset.cat];
 }
 $("readMode").addEventListener("change", () => { $("stageMap").hidden = $("readMode").value !== "bicameral"; });
+// The Reading page's settings are remembered between runs of the app.
+const READ_FIELDS = ["readTokens", "readBatch", "readRate", "readWindow", "readMaxWords", "readMode", "genDifficulty", "genMb", "importCategory"];
+let readSettingsLoaded = false;
+let readSaveTimer = null;
+function readSettings() {
+  const values = {};
+  for (const id of READ_FIELDS) values[id] = $(id).value;
+  const stages = {};
+  for (const sel of document.querySelectorAll("#stageMap select")) stages[sel.dataset.cat] = sel.value;
+  const families = {};
+  for (const i of document.querySelectorAll("#familyList input")) families[i.value] = i.checked;
+  // Ticks and shares of the corpora still on this device.
+  const corpora = {};
+  for (const c of corporaList) if (mix[c.id]) corpora[c.id] = { read: !!mix[c.id].read, share: mix[c.id].share };
+  return { values, readWords: $("readWords").checked, stages, families, corpora };
+}
+function saveReadSettings() {
+  if (!readSettingsLoaded) return;  // never overwrite saved settings with the page's defaults
+  clearTimeout(readSaveTimer);
+  readSaveTimer = setTimeout(() => {
+    invoke("save_page_settings", { page: "reading", settings: readSettings() }).catch(e => log("ERROR", e));
+  }, 400);
+}
+function applyReadSettings(saved) {
+  if (saved && typeof saved === "object") {
+    for (const id of READ_FIELDS) {
+      const v = saved.values?.[id];
+      if (v == null) continue;
+      const input = $(id);
+      // A select keeps its value only if the option still exists.
+      if (input.tagName === "SELECT" ? [...input.options].some(o => o.value === v) : v !== "") input.value = v;
+    }
+    if (typeof saved.readWords === "boolean") $("readWords").checked = saved.readWords;
+    for (const sel of document.querySelectorAll("#stageMap select")) {
+      const v = saved.stages?.[sel.dataset.cat];
+      if (STAGE_OPTIONS.some(([o]) => o === v)) sel.value = v;
+    }
+    for (const i of document.querySelectorAll("#familyList input")) {
+      if (typeof saved.families?.[i.value] === "boolean") i.checked = saved.families[i.value];
+    }
+    for (const [id, m] of Object.entries(saved.corpora || {})) {
+      if (m && typeof m === "object") mix[id] = { read: !!m.read, share: Math.min(100, Math.max(1, Number(m.share) || 25)) };
+    }
+  }
+  $("stageMap").hidden = $("readMode").value !== "bicameral";
+  readSettingsLoaded = true;
+}
+for (const ev of ["input", "change"]) $("page-reading").addEventListener(ev, saveReadSettings);
 async function refreshCorpora() { corporaList = await invoke("corpora"); renderCorpora(); }
-function pick(id) { (mix[id] ??= { read: true, share: 25 }).read = true; }
+function pick(id) { (mix[id] ??= { read: true, share: 25 }).read = true; saveReadSettings(); }
 $("importCorpus").addEventListener("click", safe(async () => {
   say("Reading the file…");
   const c = await invoke("import_corpus", { category: $("importCategory").value });
@@ -946,7 +994,9 @@ async function boot() {
   renderSources();
   familiesList = await invoke("practice_families");
   renderFamilies();
+  applyReadSettings(await invoke("page_settings", { page: "reading" }).catch(() => null));
   await refreshCorpora();
+  updateReadNote();
   const s = await invoke("status");
   showActive(s.active);
   setTeaching(s.teaching);

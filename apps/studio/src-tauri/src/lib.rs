@@ -468,9 +468,29 @@ fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> 
 }
 
 fn write_setting(app: &AppHandle, key: &str, value: serde_json::Value) -> Res<()> {
+    // One writer at a time, so two settings saved together both stay.
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut settings = read_settings(app);
     settings.insert(key.into(), value);
     write_atomic(&settings_file(app)?, &serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
+}
+
+/// Form settings the pages remember between runs (only these keys; other settings have their
+/// own commands).
+const PAGE_SETTINGS: &[&str] = &["reading"];
+
+#[tauri::command]
+fn page_settings(app: AppHandle, page: String) -> Option<serde_json::Value> {
+    PAGE_SETTINGS.contains(&page.as_str()).then(|| read_settings(&app).get(&page).cloned()).flatten()
+}
+
+#[tauri::command]
+fn save_page_settings(app: AppHandle, page: String, settings: serde_json::Value) -> Res<()> {
+    if !PAGE_SETTINGS.contains(&page.as_str()) || !settings.is_object() {
+        return Err("Unknown page settings".into());
+    }
+    write_setting(&app, &page, settings)
 }
 
 fn device_choice(app: &AppHandle) -> String {
@@ -1432,6 +1452,8 @@ pub fn run() {
             set_training_device,
             set_cpu_threads,
             benchmark_training,
+            page_settings,
+            save_page_settings,
             courses::list_courses,
             courses::create_course,
             courses::course_detail,
