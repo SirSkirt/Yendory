@@ -28,21 +28,24 @@ enum K {
     EmbedBack,
     Gemm,
     AddBias,
-    Colsum,
+    ColsumPart,
+    ColsumFinish,
     RowInv,
     Norm,
     NormBackX,
-    NormBackG,
     Rope,
     Attention,
     AttentionBackQ,
     AttentionBackKv,
+    Attention32,
+    AttentionBackQ32,
+    AttentionBackKv32,
     Xent,
     Sumsq,
     NormFinish,
     Adam,
 }
-const KERNELS: [(K, &str); 22] = [
+const KERNELS: [(K, &str); 25] = [
     (K::Fill, "fill"),
     (K::AddInto, "add_into"),
     (K::Binary, "binary"),
@@ -52,20 +55,56 @@ const KERNELS: [(K, &str); 22] = [
     (K::EmbedBack, "embed_back"),
     (K::Gemm, "gemm"),
     (K::AddBias, "add_bias"),
-    (K::Colsum, "colsum"),
+    (K::ColsumPart, "colsum_part"),
+    (K::ColsumFinish, "colsum_finish"),
     (K::RowInv, "row_inv"),
     (K::Norm, "norm"),
     (K::NormBackX, "norm_back_x"),
-    (K::NormBackG, "norm_back_g"),
     (K::Rope, "rope"),
     (K::Attention, "attention"),
     (K::AttentionBackQ, "attention_back_q"),
     (K::AttentionBackKv, "attention_back_kv"),
+    (K::Attention32, "attention32"),
+    (K::AttentionBackQ32, "attention_back_q32"),
+    (K::AttentionBackKv32, "attention_back_kv32"),
     (K::Xent, "xent"),
     (K::Sumsq, "sumsq"),
     (K::NormFinish, "norm_finish"),
     (K::Adam, "adam"),
 ];
+fn kernel_name(k: K) -> &'static str {
+    KERNELS.iter().find(|e| e.0 == k).map_or("?", |e| e.1)
+}
+
+/// GPU time of one kind of kernel in a profiled step.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct KernelTime {
+    pub kernel: String,
+    /// Dispatches of this kernel in the step.
+    pub count: usize,
+    pub ms: f64,
+}
+
+/// Where a training step's time goes, and how much GPU memory training uses.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct StepProfile {
+    pub tokens: usize,
+    pub loss: f32,
+    /// CPU: preparing the step (character features, input data, recording every operation).
+    pub cpu_prepare_ms: f64,
+    /// Sum of the kernels' GPU times.
+    pub gpu_ms: f64,
+    /// Wall time of the profiled run (longer than a normal step: kernels are timed one by one).
+    pub timed_run_ms: f64,
+    pub dispatches: usize,
+    /// Kernel kinds, slowest first.
+    pub kernels: Vec<KernelTime>,
+    /// GPU timestamps were used (otherwise each kernel was timed from submission to completion).
+    pub timestamps: bool,
+    pub upload_bytes: u64,
+    pub memory_bytes: u64,
+}
+
 const F32_SLOTS: usize = 7;
 /// Bytes of kernel parameters per dispatch (16 u32).
 const PARAM_BYTES: u64 = 64;
@@ -82,6 +121,7 @@ pub struct Gpu {
     pipelines: HashMap<K, wgpu::ComputePipeline>,
     dummies: Vec<wgpu::Buffer>,
     align: u64,
+    timestamps: bool,
 }
 
 impl std::fmt::Debug for Gpu {
@@ -100,18 +140,53 @@ fn rank(t: wgpu::DeviceType) -> u8 {
     }
 }
 
+/// Which graphics API the GPU is driven through. The kernels and the training logic are the
+/// same for every API (wgpu translates the compute shaders); only the driver path differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Api {
+    /// DirectX 12 on Windows (then Vulkan); the platform's primary API elsewhere.
+    Auto,
+    Dx12,
+    Vulkan,
+    Metal,
+}
+impl Api {
+    pub fn name(self) -> &'static str {
+        match self {
+            Api::Auto => "automatic",
+            Api::Dx12 => "DirectX 12",
+            Api::Vulkan => "Vulkan",
+            Api::Metal => "Metal",
+        }
+    }
+    fn backends(self) -> wgpu::Backends {
+        match self {
+            Api::Auto if cfg!(windows) => wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
+            Api::Auto => wgpu::Backends::PRIMARY,
+            Api::Dx12 => wgpu::Backends::DX12,
+            Api::Vulkan => wgpu::Backends::VULKAN,
+            Api::Metal => wgpu::Backends::METAL,
+        }
+    }
+}
+
 impl Gpu {
     /// Opens the best GPU: a discrete card first, then an integrated one. A software adapter
     /// (a CPU emulating a GPU) is used only when `allow_software` is set (tests); it would be
     /// slower than training on the CPU directly.
     pub fn open(allow_software: bool) -> Result<Gpu, String> {
+        Gpu::open_with(Api::Auto, allow_software)
+    }
+
+    /// Opens the best GPU through one graphics API (or says why it cannot be used).
+    pub fn open_with(api: Api, allow_software: bool) -> Result<Gpu, String> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
-        if std::env::var_os("WGPU_BACKEND").is_none() {
-            desc.backends = if cfg!(windows) {
-                wgpu::Backends::DX12 | wgpu::Backends::VULKAN
-            } else {
-                wgpu::Backends::PRIMARY
-            };
+        if cfg!(feature = "dxc") {
+            desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::StaticDxc;
+        }
+        if std::env::var_os("WGPU_BACKEND").is_none() || api != Api::Auto {
+            desc.backends = api.backends();
         }
         let instance = wgpu::Instance::new(desc);
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
@@ -122,15 +197,25 @@ impl Gpu {
             let i = a.get_info();
             (rank(i.device_type), u8::from(i.backend != wgpu::Backend::Dx12))
         });
-        let adapter = adapters.into_iter().next().ok_or("No GPU found")?;
+        let adapter = adapters.into_iter().next().ok_or_else(|| match api {
+            Api::Auto => "No GPU found".to_string(),
+            other => format!("No GPU can be used through {}", other.name()),
+        })?;
         let info = adapter.get_info();
         let limits = adapter.limits();
         if limits.max_storage_buffers_per_shader_stage < 8 {
             return Err(format!("{}: too few storage buffers per shader", info.name));
         }
+        // GPU timestamps, when the driver has them, let the profiler time every kernel.
+        let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("yendory"),
             required_limits: limits.clone(),
+            required_features: if timestamps {
+                wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            },
             ..Default::default()
         }))
         .map_err(|e| format!("{}: {e}", info.name))?;
@@ -193,12 +278,33 @@ impl Gpu {
             })
             .collect();
         let align = (limits.min_uniform_buffer_offset_alignment as u64).max(PARAM_BYTES);
-        Ok(Gpu { device, queue, info, limits, layout, pipelines, dummies, align })
+        Ok(Gpu { device, queue, info, limits, layout, pipelines, dummies, align, timestamps })
     }
 
     /// "NVIDIA GeForce RTX 2070 SUPER (Dx12)".
     pub fn name(&self) -> String {
         format!("{} ({:?})", self.info.name, self.info.backend)
+    }
+
+    /// The graphics card's name.
+    pub fn adapter_name(&self) -> String {
+        self.info.name.clone()
+    }
+
+    /// The graphics API in use and, for DirectX 12, the shader compiler.
+    pub fn api_name(&self) -> String {
+        match self.info.backend {
+            wgpu::Backend::Dx12 if cfg!(feature = "dxc") => "DirectX 12 (DXC)".into(),
+            wgpu::Backend::Dx12 => "DirectX 12".into(),
+            wgpu::Backend::Vulkan => "Vulkan".into(),
+            wgpu::Backend::Metal => "Metal".into(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// The driver, as the graphics API reports it.
+    pub fn driver(&self) -> String {
+        format!("{} {}", self.info.driver, self.info.driver_info).trim().to_string()
     }
 
     /// The largest number of floats one buffer may hold on this GPU.
@@ -226,7 +332,12 @@ impl Gpu {
     }
 
     fn read(&self, buffer: &wgpu::Buffer, floats: usize) -> Result<Vec<f32>, String> {
-        let bytes = (floats.max(1) * 4) as u64;
+        let bytes = self.read_bytes(buffer, (floats.max(1) * 4) as u64)?;
+        Ok(bytemuck::cast_slice::<u8, f32>(&bytes)[..floats].to_vec())
+    }
+
+    /// Copies the first `bytes` bytes of a buffer back to the CPU (waits for the GPU).
+    fn read_bytes(&self, buffer: &wgpu::Buffer, bytes: u64) -> Result<Vec<u8>, String> {
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: bytes,
@@ -244,22 +355,40 @@ impl Gpu {
         rx.recv().map_err(|e| e.to_string())?.map_err(|e| format!("GPU read failed: {e}"))?;
         let out = {
             let view = staging.get_mapped_range(..).map_err(|e| format!("GPU read failed: {e:?}"))?;
-            bytemuck::cast_slice::<u8, f32>(&view)[..floats].to_vec()
+            view.to_vec()
         };
         staging.unmap();
         Ok(out)
     }
 }
 
-static SHARED: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
+type Opened = HashMap<Api, Result<Arc<Gpu>, String>>;
+static SHARED: OnceLock<Mutex<Opened>> = OnceLock::new();
+static API: Mutex<Api> = Mutex::new(Api::Auto);
 
-/// The GPU, opened once per process (or why there is none). A software adapter is used only
-/// when `YENDORY_GPU_SOFTWARE=1` is set (tests on machines without a graphics card).
+/// Chooses the graphics API [`shared`] opens the GPU through.
+pub fn set_api(api: Api) {
+    *API.lock().unwrap() = api;
+}
+pub fn api() -> Api {
+    *API.lock().unwrap()
+}
+
+/// The GPU through the chosen API, opened once per process and API (or why there is none). A
+/// software adapter is used only when `YENDORY_GPU_SOFTWARE=1` is set (tests on machines
+/// without a graphics card).
 pub fn shared() -> Result<Arc<Gpu>, String> {
-    SHARED
-        .get_or_init(|| {
+    shared_with(api())
+}
+
+/// The GPU through one API, opened once per process.
+pub fn shared_with(api: Api) -> Result<Arc<Gpu>, String> {
+    let mut opened = SHARED.get_or_init(Default::default).lock().unwrap();
+    opened
+        .entry(api)
+        .or_insert_with(|| {
             let software = std::env::var("YENDORY_GPU_SOFTWARE").is_ok_and(|v| v == "1");
-            Gpu::open(software).map(Arc::new)
+            Gpu::open_with(api, software).map(Arc::new)
         })
         .clone()
 }
@@ -292,12 +421,19 @@ struct Dispatch {
 #[derive(Default)]
 struct Pool {
     free: HashMap<u64, Vec<wgpu::Buffer>>,
+    /// Buffers for input data (written before a step runs), kept apart from the working
+    /// buffers so an input never shares memory with anything the step computes.
+    inputs: HashMap<u64, Vec<wgpu::Buffer>>,
 }
 
 fn groups(threads: usize) -> (u32, u32, u32) {
     let g = threads.div_ceil(256).max(1);
     let x = g.min(65535);
     (x as u32, g.div_ceil(x) as u32, 1)
+}
+/// Workgroups of the attention kernels: 64 rows of one (sequence, head) each.
+fn attention_groups(count: usize, t: usize) -> (u32, u32, u32) {
+    (t.div_ceil(64) as u32, (count / t.max(1)) as u32, 1)
 }
 fn bits(x: f32) -> u32 {
     x.to_bits()
@@ -306,15 +442,56 @@ fn bits(x: f32) -> u32 {
 #[derive(Clone)]
 enum Op {
     Input,
-    Embed { table: usize, d: usize },
-    Linear { input: usize, weight: usize, bias: Option<usize>, rows: usize, cols: usize, out: usize },
-    Add { a: usize, b: usize },
-    Mul { a: usize, b: usize },
-    Silu { src: usize },
-    Sigmoid { src: usize },
-    Norm { src: usize, gain: usize, d: usize, inv: B },
-    Rope { src: usize, heads: usize, d: usize, base: f32 },
-    Attention { q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize, stats: B },
+    /// `segs`: the rows sorted by token (see the `embed_back` kernel), `nseg` tokens.
+    Embed {
+        table: usize,
+        d: usize,
+        segs: B,
+        nseg: usize,
+    },
+    Linear {
+        input: usize,
+        weight: usize,
+        bias: Option<usize>,
+        rows: usize,
+        cols: usize,
+        out: usize,
+    },
+    Add {
+        a: usize,
+        b: usize,
+    },
+    Mul {
+        a: usize,
+        b: usize,
+    },
+    Silu {
+        src: usize,
+    },
+    Sigmoid {
+        src: usize,
+    },
+    Norm {
+        src: usize,
+        gain: usize,
+        d: usize,
+        inv: B,
+    },
+    Rope {
+        src: usize,
+        heads: usize,
+        d: usize,
+        base: f32,
+    },
+    Attention {
+        q: usize,
+        k: usize,
+        v: usize,
+        t: usize,
+        d: usize,
+        heads: usize,
+        stats: B,
+    },
 }
 
 struct Node {
@@ -339,6 +516,10 @@ pub(crate) struct GpuGraph<'a> {
     uploads: Vec<(usize, Vec<u8>)>,
     ops: Vec<Dispatch>,
     ids: Option<B>,
+    /// Bytes of input data uploaded for this step.
+    upload_bytes: u64,
+    /// Which of `bufs` are input buffers.
+    inputs: Vec<usize>,
 }
 
 impl<'a> GpuGraph<'a> {
@@ -354,6 +535,8 @@ impl<'a> GpuGraph<'a> {
             uploads: Vec::new(),
             ops: Vec::new(),
             ids: None,
+            upload_bytes: 0,
+            inputs: Vec::new(),
         }
     }
 
@@ -384,19 +567,35 @@ impl<'a> GpuGraph<'a> {
         for i in 0..self.bufs.len() {
             self.release(B::Step(i));
         }
+        for i in std::mem::take(&mut self.inputs) {
+            let buf = self.bufs[i].clone();
+            self.pool.inputs.entry(buf.size()).or_default().push(buf);
+        }
     }
 
     /// Input data (features, token ids, targets, loss weights) in a buffer of its own: it is
     /// written before the step runs, so it must not share memory with anything the step reuses.
+    /// Input buffers come from their own pool (sizes rounded up to a power of two, so batches
+    /// of similar size reuse them) and return to it when the step finishes.
     fn upload(&mut self, mut bytes: Vec<u8>, _floats: usize) -> B {
         bytes.resize(bytes.len().max(16), 0);
-        let buf = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("input"),
-            contents: &bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        self.upload_bytes += bytes.len() as u64;
+        let size = (bytes.len() as u64).next_power_of_two().max(256);
+        let buf = match self.pool.inputs.get_mut(&size).and_then(Vec::pop) {
+            Some(b) => b,
+            None => self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("input"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+        };
         self.bufs.push(buf);
-        self.released.push(true); // never returned to the pool
+        self.released.push(true); // returned to the input pool by `finish`
+        self.inputs.push(self.bufs.len() - 1);
+        self.uploads.push((self.bufs.len() - 1, bytes));
         B::Step(self.bufs.len() - 1)
     }
 
@@ -453,6 +652,31 @@ impl<'a> GpuGraph<'a> {
         ];
         let g = (n.div_ceil(64) as u32, m.div_ceil(64) as u32, 1);
         self.dispatch(K::Gemm, &[Some(a.0), Some(b.0), Some(c.0)], None, &p, g);
+    }
+
+    /// Adds the column sums of `src` (rows x n) into the gradients at `off`: plain sums, or with
+    /// `x` and `inv` an RMS norm's gain gradient (sum of src * x * inv(row)). Rows are summed in
+    /// parallel chunks, then the chunks.
+    fn colsum(&mut self, src: B, x: Option<B>, inv: Option<B>, n: usize, rows: usize, off: usize) {
+        const CHUNK: usize = 64;
+        let chunks = rows.div_ceil(CHUNK).max(1);
+        let part = self.alloc(chunks * n);
+        let mode = u32::from(x.is_some());
+        self.dispatch(
+            K::ColsumPart,
+            &[Some(src), x, Some(part), inv],
+            None,
+            &[n as u32, rows as u32, CHUNK as u32, mode],
+            (n.div_ceil(256) as u32, chunks as u32, 1),
+        );
+        self.dispatch(
+            K::ColsumFinish,
+            &[Some(part), Some(B::Grads)],
+            None,
+            &[n as u32, chunks as u32, off as u32],
+            groups(n),
+        );
+        self.release(part);
     }
 
     /// Adds `delta` (a buffer of the node's length) into the node's gradient. `owned`: the
@@ -523,30 +747,13 @@ impl<'a> GpuGraph<'a> {
                 &[(rc * vocab) as u32, vocab as u32, ba as u32],
                 groups(rc * vocab),
             );
-            let p = |mode: u32| [vocab as u32, rc as u32, r0 as u32, mode, bits(denom), bits(1.)];
-            self.dispatch(
-                K::Xent,
-                &[Some(logits), Some(mask), Some(losses)],
-                Some(targets),
-                &p(0),
-                groups(rc),
-            );
-            self.dispatch(
-                K::Xent,
-                &[Some(logits), Some(mask), Some(losses)],
-                Some(targets),
-                &p(1),
-                groups(rc),
-            );
+            // One workgroup per row: the row's loss, and the logits become their gradient.
+            let p = [vocab as u32, rc as u32, r0 as u32, 0, bits(denom), bits(1.)];
+            let wg = groups(rc * 256);
+            self.dispatch(K::Xent, &[Some(logits), Some(mask), Some(losses)], Some(targets), &p, wg);
             // d embed += gᵀ · h, d bias += column sums of g, d h = g · embed
             self.gemm((logits, 0, 1, vocab), (hb, r0 * d, d, 1), (B::Grads, ea), vocab, d, rc, true);
-            self.dispatch(
-                K::Colsum,
-                &[Some(logits), Some(B::Grads)],
-                None,
-                &[vocab as u32, rc as u32, ba as u32],
-                groups(vocab),
-            );
+            self.colsum(logits, None, None, vocab, rc, ba);
             self.gemm((logits, 0, vocab, 1), (B::Weights, ea, d, 1), (dh, r0 * d), rc, d, vocab, false);
         }
         self.release(logits);
@@ -619,15 +826,15 @@ impl<'a> GpuGraph<'a> {
                     );
                     self.accum(src, g, true);
                 }
-                Op::Embed { table, d } => {
+                Op::Embed { table, d, segs, nseg } => {
                     let a = self.nodes[table].param.unwrap().0;
                     let rows = n / d;
                     self.dispatch(
                         K::EmbedBack,
                         &[Some(up), Some(B::Grads)],
-                        self.ids,
-                        &[d as u32, rows as u32, a as u32],
-                        groups(d),
+                        Some(segs),
+                        &[d as u32, nseg as u32, a as u32, rows as u32],
+                        groups(nseg * d),
                     );
                 }
                 Op::Linear { input, weight, bias, rows, cols, out } => {
@@ -637,13 +844,7 @@ impl<'a> GpuGraph<'a> {
                     self.gemm((up, 0, 1, out), (x, 0, cols, 1), (B::Grads, wa), out, cols, rows, true);
                     if let Some(b) = bias {
                         let ba = self.nodes[b].param.unwrap().0;
-                        self.dispatch(
-                            K::Colsum,
-                            &[Some(up), Some(B::Grads)],
-                            None,
-                            &[out as u32, rows as u32, ba as u32],
-                            groups(out),
-                        );
+                        self.colsum(up, None, None, out, rows, ba);
                     }
                     // dX = G · W
                     let dx = self.alloc(rows * cols);
@@ -663,13 +864,7 @@ impl<'a> GpuGraph<'a> {
                         &p,
                         groups(rows),
                     );
-                    self.dispatch(
-                        K::NormBackG,
-                        &[Some(up), Some(x), None, Some(inv), Some(B::Grads)],
-                        None,
-                        &p,
-                        groups(d),
-                    );
+                    self.colsum(up, Some(x), Some(inv), d, rows, ga);
                     self.release(inv);
                     self.accum(src, dx, true);
                 }
@@ -685,21 +880,27 @@ impl<'a> GpuGraph<'a> {
                     let (qb, kb, vb) = (self.at(q).0, self.at(k).0, self.at(v).0);
                     let sc = 1. / ((d / heads) as f32).sqrt();
                     let p = [count as u32, t as u32, d as u32, heads as u32, bits(sc)];
+                    let wg = attention_groups(count, t);
                     let dq = self.alloc(n);
+                    let (kq, kkv) = if d / heads == 32 {
+                        (K::AttentionBackQ32, K::AttentionBackKv32)
+                    } else {
+                        (K::AttentionBackQ, K::AttentionBackKv)
+                    };
                     self.dispatch(
-                        K::AttentionBackQ,
+                        kq,
                         &[Some(up), Some(qb), Some(kb), Some(vb), Some(stats), Some(dq)],
                         None,
                         &p,
-                        groups(count),
+                        wg,
                     );
                     let (dk, dv) = (self.alloc(n), self.alloc(n));
                     self.dispatch(
-                        K::AttentionBackKv,
+                        kkv,
                         &[Some(up), Some(qb), Some(kb), Some(vb), Some(stats), Some(dk), Some(dv)],
                         None,
                         &p,
-                        groups(count),
+                        wg,
                     );
                     self.release(stats);
                     self.accum(q, dq, true);
@@ -746,6 +947,21 @@ impl Graph for GpuGraph<'_> {
         let u: Vec<u32> = ids.iter().map(|&i| i as u32).collect();
         let ib = self.upload(bytemuck::cast_slice(&u).to_vec(), u.len());
         self.ids = Some(ib);
+        // Rows sorted by token, for the gradient (one thread per token and column).
+        let mut order: Vec<u32> = (0..u.len() as u32).collect();
+        order.sort_by_key(|&r| u[r as usize]);
+        let mut starts = Vec::new();
+        let mut tokens = Vec::new();
+        for (k, &r) in order.iter().enumerate() {
+            if k == 0 || u[r as usize] != u[order[k - 1] as usize] {
+                starts.push(k as u32);
+                tokens.push(u[r as usize]);
+            }
+        }
+        starts.push(order.len() as u32);
+        let nseg = tokens.len();
+        let seg_data: Vec<u32> = order.into_iter().chain(starts).chain(tokens).collect();
+        let segs = self.upload(bytemuck::cast_slice(&seg_data).to_vec(), seg_data.len());
         let n = ids.len() * d;
         let out = self.alloc(n);
         let a = self.nodes[table].param.unwrap().0;
@@ -756,7 +972,7 @@ impl Graph for GpuGraph<'_> {
             &[n as u32, d as u32, a as u32],
             groups(n),
         );
-        self.node(out, n, Op::Embed { table, d })
+        self.node(out, n, Op::Embed { table, d, segs, nseg })
     }
     fn linear(&mut self, x: usize, w: usize, b: Option<usize>, in_dim: usize, out_dim: usize) -> usize {
         let rows = self.nodes[x].len / in_dim;
@@ -849,12 +1065,13 @@ impl Graph for GpuGraph<'_> {
         let stats = self.alloc(3 * count);
         let sc = 1. / ((d / heads) as f32).sqrt();
         let p = [count as u32, t as u32, d as u32, heads as u32, bits(sc)];
+        let kernel = if d / heads == 32 { K::Attention32 } else { K::Attention };
         self.dispatch(
-            K::Attention,
+            kernel,
             &[Some(qb), Some(kb), Some(vb), Some(out), Some(stats)],
             None,
             &p,
-            groups(count),
+            attention_groups(count, t),
         );
         self.node(out, n, Op::Attention { q, k, v, t, d, heads, stats })
     }
@@ -875,6 +1092,7 @@ pub struct GpuModel {
     /// AdamW steps taken (the model's `step`).
     pub step: u64,
     pool: Mutex<Pool>,
+    last_upload_bytes: std::sync::atomic::AtomicU64,
 }
 
 fn focus_mask(f: Focus) -> u32 {
@@ -930,6 +1148,7 @@ impl GpuModel {
             step: model.step,
             gpu: gpu.clone(),
             pool: Mutex::new(Pool::default()),
+            last_upload_bytes: Default::default(),
         })
     }
 
@@ -969,6 +1188,7 @@ impl GpuModel {
         model: &Bicameral,
         rows: &[Row],
         abl: Ablation,
+        denom: Option<f32>,
     ) -> Result<(GpuGraph<'a>, B, usize), String> {
         if rows.is_empty() {
             return Err("Empty training batch".into());
@@ -1002,7 +1222,7 @@ impl GpuModel {
             mask.extend(r.mask.iter().copied().chain(std::iter::repeat(0.).take(pad)));
             features.extend(f?.into_iter().chain(std::iter::repeat(0.).take(pad * width)));
         }
-        let denom = mask.iter().map(|&m| m as f64).sum::<f64>().max(1.) as f32;
+        let denom = denom.unwrap_or_else(|| mask.iter().map(|&m| m as f64).sum::<f64>().max(1.) as f32);
         let mut g = GpuGraph::new(&self.gpu, pool, t);
         g.fill(B::Grads, 0, self.n, 0.);
         let h = model.forward_hidden(&mut g, &ids, features, t, abl);
@@ -1016,6 +1236,14 @@ impl GpuModel {
     }
 
     fn run(&self, g: &mut GpuGraph) {
+        // Without profiling nothing in `run_timed` can fail.
+        let _ = self.run_timed(g, None);
+    }
+
+    /// Submits the recorded step. With `times`, every dispatch's GPU time is measured (with GPU
+    /// timestamps when the driver has them, otherwise by running dispatches one at a time) and
+    /// appended as (kernel, milliseconds).
+    fn run_timed(&self, g: &mut GpuGraph, times: Option<&mut Vec<(K, f64)>>) -> Result<(), String> {
         let gpu = &*self.gpu;
         for (i, bytes) in std::mem::take(&mut g.uploads) {
             gpu.queue.write_buffer(&g.bufs[i], 0, &bytes);
@@ -1059,17 +1287,92 @@ impl GpuModel {
                 })
             })
             .collect();
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = enc.begin_compute_pass(&Default::default());
-            for (i, (d, bg)) in g.ops.iter().zip(&groups).enumerate() {
-                pass.set_pipeline(&gpu.pipelines[&d.k]);
-                pass.set_bind_group(0, bg, &[(i as u64 * stride) as u32]);
-                pass.dispatch_workgroups(d.groups.0, d.groups.1, d.groups.2);
+        let result = match times {
+            None => {
+                let mut enc = gpu.device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = enc.begin_compute_pass(&Default::default());
+                    for (i, (d, bg)) in g.ops.iter().zip(&groups).enumerate() {
+                        pass.set_pipeline(&gpu.pipelines[&d.k]);
+                        pass.set_bind_group(0, bg, &[(i as u64 * stride) as u32]);
+                        pass.dispatch_workgroups(d.groups.0, d.groups.1, d.groups.2);
+                    }
+                }
+                gpu.queue.submit([enc.finish()]);
+                Ok(())
             }
-        }
-        gpu.queue.submit([enc.finish()]);
+            Some(times) if gpu.timestamps => {
+                // One pass per dispatch, its start and end time written by the GPU.
+                let period = gpu.queue.get_timestamp_period() as f64;
+                let mut result = Ok(());
+                for (c, chunk) in g.ops.chunks(2048).enumerate() {
+                    let count = (chunk.len() * 2) as u32;
+                    let set = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
+                        label: Some("kernel times"),
+                        ty: wgpu::QueryType::Timestamp,
+                        count,
+                    });
+                    let resolve = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("kernel times"),
+                        size: count as u64 * 8,
+                        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    });
+                    let mut enc = gpu.device.create_command_encoder(&Default::default());
+                    for (j, d) in chunk.iter().enumerate() {
+                        let i = c * 2048 + j;
+                        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: None,
+                            timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
+                                query_set: &set,
+                                beginning_of_pass_write_index: Some(2 * j as u32),
+                                end_of_pass_write_index: Some(2 * j as u32 + 1),
+                            }),
+                        });
+                        pass.set_pipeline(&gpu.pipelines[&d.k]);
+                        pass.set_bind_group(0, &groups[i], &[(i as u64 * stride) as u32]);
+                        pass.dispatch_workgroups(d.groups.0, d.groups.1, d.groups.2);
+                    }
+                    enc.resolve_query_set(&set, 0..count, &resolve, 0);
+                    gpu.queue.submit([enc.finish()]);
+                    match gpu.read_bytes(&resolve, count as u64 * 8) {
+                        Ok(bytes) => {
+                            let ticks: &[u64] = bytemuck::cast_slice(&bytes);
+                            for (j, d) in chunk.iter().enumerate() {
+                                let ns = ticks[2 * j + 1].saturating_sub(ticks[2 * j]) as f64 * period;
+                                times.push((d.k, ns / 1e6));
+                            }
+                        }
+                        Err(e) => result = Err(e),
+                    }
+                }
+                result
+            }
+            Some(times) => {
+                // No GPU timestamps: one dispatch at a time, timed from submission to completion
+                // (includes the submission cost, so small kernels look slower than they are).
+                let mut result = Ok(());
+                for (i, (d, bg)) in g.ops.iter().zip(&groups).enumerate() {
+                    let mut enc = gpu.device.create_command_encoder(&Default::default());
+                    {
+                        let mut pass = enc.begin_compute_pass(&Default::default());
+                        pass.set_pipeline(&gpu.pipelines[&d.k]);
+                        pass.set_bind_group(0, bg, &[(i as u64 * stride) as u32]);
+                        pass.dispatch_workgroups(d.groups.0, d.groups.1, d.groups.2);
+                    }
+                    let t = std::time::Instant::now();
+                    gpu.queue.submit([enc.finish()]);
+                    if let Err(e) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
+                        result = Err(format!("GPU: {e}"));
+                        break;
+                    }
+                    times.push((d.k, t.elapsed().as_secs_f64() * 1e3));
+                }
+                result
+            }
+        };
         g.ops.clear();
+        result
     }
 
     /// Mean loss and gradient of a batch (no update): the same as
@@ -1082,7 +1385,7 @@ impl GpuModel {
     ) -> Result<(f32, Vec<f32>), String> {
         let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
         let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl)?;
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None)?;
             self.run(&mut g);
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             let grads = self.gpu.read(&self.grads, self.n)?;
@@ -1104,13 +1407,44 @@ impl GpuModel {
         lr: f32,
         focus: Focus,
     ) -> Result<f32, String> {
+        self.step_with(model, rows, abl, lr, focus, None).map(|(loss, _)| loss)
+    }
+
+    /// One training step like [`GpuModel::train_step`], measured: where the time goes (CPU
+    /// preparation, GPU time of every kernel) and how much GPU memory training uses. The step
+    /// is a real step (the weights change).
+    pub fn profile_step(
+        &mut self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        lr: f32,
+        focus: Focus,
+    ) -> Result<StepProfile, String> {
+        let mut p = StepProfile::default();
+        let (loss, _) = self.step_with(model, rows, abl, lr, focus, Some(&mut p))?;
+        p.loss = loss;
+        p.memory_bytes = self.memory_bytes();
+        Ok(p)
+    }
+
+    fn step_with(
+        &mut self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        lr: f32,
+        focus: Focus,
+        profile: Option<&mut StepProfile>,
+    ) -> Result<(f32, ()), String> {
         if !lr.is_finite() || lr <= 0. {
             return Err("Invalid learning rate".into());
         }
         let step = self.step + 1;
         let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
         let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl)?;
+            let started = std::time::Instant::now();
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None)?;
             let (gx, gy, _) = groups(self.n);
             let parts = (gx * gy) as usize;
             g.dispatch(K::Sumsq, &[Some(B::Grads), Some(B::Partial)], None, &[self.n as u32], (gx, gy, 1));
@@ -1134,15 +1468,91 @@ impl GpuModel {
                 &p,
                 (gx, gy, 1),
             );
-            self.run(&mut g);
+            let recorded = started.elapsed();
+            let upload_bytes: u64 = g.upload_bytes;
+            self.last_upload_bytes.store(upload_bytes, std::sync::atomic::Ordering::Relaxed);
+            match profile {
+                None => self.run(&mut g),
+                Some(prof) => {
+                    let mut times = Vec::new();
+                    let t = std::time::Instant::now();
+                    self.run_timed(&mut g, Some(&mut times))?;
+                    prof.dispatches = times.len();
+                    let mut by: Vec<(K, usize, f64)> = Vec::new();
+                    for (k, ms) in times {
+                        match by.iter_mut().find(|e| e.0 == k) {
+                            Some(e) => {
+                                e.1 += 1;
+                                e.2 += ms;
+                            }
+                            None => by.push((k, 1, ms)),
+                        }
+                    }
+                    by.sort_by(|a, b| b.2.total_cmp(&a.2));
+                    prof.gpu_ms = by.iter().map(|e| e.2).sum();
+                    prof.kernels = by
+                        .into_iter()
+                        .map(|(k, count, ms)| KernelTime { kernel: kernel_name(k).into(), count, ms })
+                        .collect();
+                    prof.cpu_prepare_ms = recorded.as_secs_f64() * 1e3;
+                    prof.timed_run_ms = t.elapsed().as_secs_f64() * 1e3;
+                    prof.timestamps = self.gpu.timestamps;
+                    prof.upload_bytes = upload_bytes;
+                    prof.tokens = rows.iter().map(|r| r.ids.len()).sum();
+                }
+            }
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             g.finish();
             Ok(loss as f32)
         })();
         *self.pool.lock().unwrap() = pool;
+        let result = result.map(|l| (l, ()));
         if result.is_ok() {
             self.step = step;
         }
         result
+    }
+
+    /// The loss and gradient of part of a batch, divided by `denom` (the whole batch's total
+    /// weight), so the parts of a batch add up to its mean (hybrid CPU + GPU training). No
+    /// update is made.
+    pub fn part_loss_and_gradients(
+        &self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        denom: f32,
+    ) -> Result<(f32, Vec<f32>), String> {
+        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
+        let result = (|| {
+            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, Some(denom))?;
+            self.run(&mut g);
+            let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
+            let grads = self.gpu.read(&self.grads, self.n)?;
+            g.finish();
+            Ok((loss as f32, grads))
+        })();
+        *self.pool.lock().unwrap() = pool;
+        result
+    }
+
+    /// Replaces the weights on the GPU with the model's (hybrid training: the CPU takes the
+    /// optimizer step).
+    pub fn set_weights(&mut self, model: &Bicameral) -> Result<(), String> {
+        if model.weights.len() != self.n {
+            return Err("The model's shape changed since it was copied to the GPU".into());
+        }
+        self.gpu.queue.write_buffer(&self.weights, 0, bytemuck::cast_slice(&model.weights));
+        self.step = model.step;
+        Ok(())
+    }
+
+    /// GPU memory this model's training uses: weights, gradients, AdamW state, and the step's
+    /// working buffers (kept between steps for reuse), plus the last step's input data.
+    pub fn memory_bytes(&self) -> u64 {
+        let model = 5 * self.n as u64 * 4;
+        let p = self.pool.lock().unwrap();
+        let pool: u64 = p.free.iter().chain(&p.inputs).map(|(size, v)| size * v.len() as u64).sum();
+        model + pool
     }
 }

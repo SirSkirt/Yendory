@@ -204,3 +204,51 @@ fn reading_and_lessons_train_on_the_gpu() {
     assert_eq!(pick(&c), pick(&g), "the same candidates are selected");
     assert!((c.final_score.heldout_loss - g.final_score.heldout_loss).abs() < 2e-3);
 }
+
+/// Hybrid training (part of each batch on the GPU, the rest on the CPU, gradients added, the
+/// CPU takes the AdamW step) trains the same model as the CPU: the same weights and optimizer
+/// state after several steps, with a whole-brain and a Stage A (Dense + interconnect) focus.
+#[test]
+fn hybrid_steps_match_the_cpu() {
+    use yendory_engine::learn::{set_device, Device, Trainer};
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    if yendory_engine::learn::gpu_name().is_err() {
+        println!("no GPU available; skipped");
+        return;
+    }
+    let mut start = Bicameral::with_config(Config::default(), 5);
+    for _ in 0..2 {
+        start.train_text("U: Where is the key?\nN: In the box.\n", 3e-3, Focus::Joint).unwrap();
+    }
+    let rows = rows(&start);
+    for focus in [Focus::Joint, Focus::DenseAndInterconnect] {
+        let train = |device: Device| {
+            set_device(device);
+            let mut m = start.clone();
+            let mut t = Trainer::new(&m);
+            let mut losses = Vec::new();
+            for _ in 0..4 {
+                losses.push(t.step(&mut m, &rows, Ablation::default(), 2e-3, focus).unwrap());
+            }
+            t.sync(&mut m).unwrap();
+            let share = t.gpu_share();
+            set_device(Device::Cpu);
+            (m, losses, share)
+        };
+        let (cpu, cpu_losses, _) = train(Device::Cpu);
+        let (hyb, hyb_losses, share) = train(Device::Hybrid(yendory_engine::gpu::Api::Auto));
+        println!(
+            "{focus:?}: losses CPU {cpu_losses:?} hybrid {hyb_losses:?}; GPU share after 4 steps {share:?}"
+        );
+        assert!(share.is_some(), "hybrid training was used");
+        for (a, b) in cpu_losses.iter().zip(&hyb_losses) {
+            assert!((a - b).abs() < 1e-4 * a.abs().max(1.), "{a} vs {b}");
+        }
+        assert_eq!(hyb.step, cpu.step);
+        close(&format!("hybrid weights ({focus:?})"), &hyb.weights, &cpu.weights);
+        close("hybrid momentum", &hyb.momentum, &cpu.momentum);
+        if focus == Focus::DenseAndInterconnect {
+            assert_eq!(hyb.group_values(Focus::Left), start.group_values(Focus::Left), "transformer frozen");
+        }
+    }
+}

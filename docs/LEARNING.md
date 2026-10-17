@@ -396,28 +396,60 @@ exam minimum; training settings are not part of it). A revised course always get
 An unchanged failed version gets **one** manual override (warned and recorded in the history);
 after that it must be revised. Failed and earlier runs are kept for comparison.
 
-## Training on the GPU (`gpu`, `learn::Trainer`)
+## Training on the GPU (`gpu`, `learn::Trainer`, `learn::bench`)
 
 With the `gpu` feature (the Studio enables it), training steps can run on the graphics card
-through wgpu: DirectX 12 or Vulkan on Windows, Vulkan on Linux, Metal on macOS. Every training
-operation is a compute shader (forward and backward, the fused output layer and cross-entropy,
-AdamW with focus masks and gradient clipping); the model's forward pass is written once over a
-`Graph` trait that both the CPU tape and the GPU graph implement. Weights, gradients and AdamW
-state stay on the card during a run; they are copied back before every check and save.
+through wgpu. Every device trains the same network and the same `.nnova2` model: weights,
+optimizer state and step belong to the model, wherever they are computed, so a model can move
+between devices at any time without losing anything.
 
-`learn::set_gpu_training(true)` chooses the GPU when one can be opened (the CPU otherwise);
-`learn::set_cpu_threads(n)` limits the CPU threads (0: all). Both processors work at once:
+**Devices** (`learn::set_device`):
 
-- **Lessons**: every Foundation candidate of an epoch starts from the same accepted model, so
-  while the GPU trains the next candidate, a CPU thread scores the previous one. Candidates are
-  still judged in order.
-- **Reading**: at each check the GPU keeps reading while the CPU measures the checkpoint
-  (held-out losses, Dense reliance, samples). Each check is judged before the next one starts,
-  so the same checkpoints are accepted and early stopping happens at the same check.
-- Talking, exams and grading run on the CPU.
+- **CPU**: `batch_loss_and_gradients` + `adam_step`.
+- **GPU — DirectX 12 / Vulkan / Metal** (`Device::Gpu(Api)`): one set of compute shaders
+  (`gpu/kernels.wgsl`) and one recording of the network (the model's forward pass written once
+  over the `Graph` trait), translated by wgpu for the chosen API. On Windows both DirectX 12
+  and Vulkan are offered; the Windows build carries Microsoft's DXC shader compiler (feature
+  `dxc`), because without it DirectX 12 falls back to the old FXC compiler, which compiles the
+  kernels' loops poorly. Weights, gradients and AdamW state stay on the card during a run and
+  are copied back before every check and save.
+- **Hybrid — CPU + GPU** (experimental, `Device::Hybrid(Api)`): data-parallel. Each batch's
+  rows are split between the GPU and the CPU in proportion to their measured speed (adjusted
+  after every step); both compute their part's loss and gradient divided by the whole batch's
+  weight, the parts are added (the batch's exact mean gradient), the CPU takes the AdamW step
+  exactly as CPU training does, and the new weights are sent to the GPU. Splitting the brain
+  itself (Dense on one device, the transformer on the other) was considered and left out:
+  the hemispheres exchange activations in every block, so every step would cross the PCIe bus
+  dozens of times each way.
 
-Results equal the CPU's within float rounding (see docs/STATUS.md). `YENDORY_GPU_SOFTWARE=1`
-also allows a software GPU, for tests.
+**Failures.** If the GPU cannot be opened, training runs on the CPU and the Studio says why.
+If a GPU step fails during a run, the model is read back from the GPU and training continues on
+the CPU (in hybrid training nothing needs reading back); if the GPU's state cannot be read, the
+run stops with an error and saved checkpoints are untouched.
+
+**Both processors at once in GPU training**: lessons score each Foundation candidate on the CPU
+while the GPU trains the next; reading checks a checkpoint on the CPU while the GPU keeps
+reading. Talking, exams and grading run on the CPU. `learn::set_cpu_threads(n)` limits the
+CPU threads (0: all).
+
+**Kernels.** Matrix products use 64 x 64 tiles with each thread's 4 x 4 results in vector
+registers. Attention takes 64 query rows of one sequence and head per workgroup and reads keys
+and values in tiles through workgroup memory, with a single-pass (running-maximum) softmax; for
+the head size every Yendory size uses (32) the kernels hold a head in eight vec4 registers
+instead of indexed per-thread arrays. The output layer's loss uses one 256-thread workgroup per
+row; bias and norm-gain gradients sum rows in parallel chunks; the embedding gradient sums each
+token's rows in parallel (rows sorted by token on the CPU). Input buffers are reused between
+steps. All of this computes the same values as the CPU, only in a different order of
+additions (see docs/STATUS.md).
+
+**Benchmark** (`learn::bench::run`, Studio: Models → "Benchmark training on this computer").
+The open model's copy is trained on every available device with identical batches (the Reading
+settings' batch size and window): tokens per second, time per step, GPU memory, the hybrid
+split it settled on, and the first step's loss compared with the CPU's (a device that disagrees
+is never chosen). The fastest GPU is also profiled: CPU time preparing a step and the GPU time
+of every kernel (GPU timestamps when the driver has them). The training device "Auto" then uses
+the fastest measured device; hybrid is only chosen if it measured fastest.
+`examples/gpu_profile.rs` and `examples/train_bench.rs` do the same from the command line.
 
 ## Yendory Nexus: actions and results (`nexus`)
 

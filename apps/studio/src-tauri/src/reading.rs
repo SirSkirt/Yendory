@@ -833,6 +833,9 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
                 "tokens": finished.tokens, "stopped": finished.stopped, "error": finished.error}),
         );
         studio.teaching.store(false, Ordering::Release);
+        if let Some(n) = yendory_engine::learn::take_device_notice() {
+            let _ = app.emit("device-notice", n);
+        }
         let _ = app.emit("read-finished", &finished);
     });
     Ok(())

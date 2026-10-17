@@ -19,7 +19,14 @@ bytemuck = { version = "1", optional = true, features = ["derive"] }
 
 [features]
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+# DirectX 12 with Microsoft's current shader compiler (DXC) built in, instead of falling back to
+# the old FXC compiler when dxcompiler.dll is not installed. Only affects Windows (MSVC) builds.
+dxc = ["gpu", "wgpu/static-dxc"]
 
 [[example]]
 name = "gpu_check"
+required-features = ["gpu"]
+
+[[example]]
+name = "gpu_profile"
 required-features = ["gpu"]

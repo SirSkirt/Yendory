@@ -796,6 +796,9 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
         let plan = run_plan(&app, plan, meta, model, archive, &stop);
         let studio = app.state::<Studio>();
         studio.teaching.store(false, Ordering::Release);
+        if let Some(n) = yendory_engine::learn::take_device_notice() {
+            let _ = app.emit("device-notice", n);
+        }
         let _ = app.emit("plan-finished", plan_view(&app, &plan));
     });
     Ok(view)

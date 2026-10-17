@@ -25,6 +25,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = "2"
 yendory-engine = { path = "../../../crates/yendory-engine", features = ["gpu"] }
 
+# Windows: DirectX 12 with the DXC shader compiler built in (instead of the old FXC fallback).
+[target.'cfg(all(windows, target_env = "msvc", not(target_arch = "aarch64")))'.dependencies]
+yendory-engine = { path = "../../../crates/yendory-engine", features = ["gpu", "dxc"] }
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

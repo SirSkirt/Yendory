@@ -409,14 +409,33 @@ struct Speed {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DeviceOption {
+    /// "cpu", "gpu-dx12", "gpu-vulkan", "hybrid-vulkan", ...
+    id: String,
+    label: String,
+    /// The hardware it uses, or why it cannot be used.
+    detail: String,
+    available: bool,
+    experimental: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DeviceInfo {
-    /// "auto", "gpu" or "cpu".
+    /// The setting: "auto" or one of the options' ids.
     choice: String,
-    /// The GPU found, or why there is none.
+    options: Vec<DeviceOption>,
+    /// Where training runs now (an option's id) and its description.
+    active: String,
+    active_name: String,
+    /// Why the choice could not be followed (e.g. Vulkan unavailable), if so.
+    note: Option<String>,
+    /// The last training benchmark, if any.
+    benchmark: Option<serde_json::Value>,
+    /// Kept for older frontends: "gpu" or "cpu", and the GPU's name or why there is none.
+    training_on: String,
     gpu: Option<String>,
     gpu_error: Option<String>,
-    /// Where training runs now.
-    training_on: String,
     /// CPU threads chosen (0: all) and the processor's total.
     cpu_threads: usize,
     cpu_total: usize,
@@ -453,17 +472,108 @@ fn thread_choice(app: &AppHandle) -> usize {
     read_settings(app).get("cpuThreads").and_then(|d| d.as_u64()).unwrap_or(0) as usize
 }
 
-/// Applies a device choice and reports where training runs.
-fn apply_device(choice: &str, threads: usize) -> DeviceInfo {
+fn stored_benchmark(app: &AppHandle) -> Option<serde_json::Value> {
+    read_settings(app).get("benchmark").cloned()
+}
+
+use yendory_engine::gpu::Api;
+use yendory_engine::learn::Device;
+
+fn device_id(d: Device) -> String {
+    let api = |a: Api| match a {
+        Api::Auto => "",
+        Api::Dx12 => "-dx12",
+        Api::Vulkan => "-vulkan",
+        Api::Metal => "-metal",
+    };
+    match d {
+        Device::Cpu => "cpu".into(),
+        Device::Gpu(a) => format!("gpu{}", api(a)),
+        Device::Hybrid(a) => format!("hybrid{}", api(a)),
+    }
+}
+
+fn parse_device(id: &str) -> Option<Device> {
+    let api = |rest: &str| match rest {
+        "" => Some(Api::Auto),
+        "-dx12" => Some(Api::Dx12),
+        "-vulkan" => Some(Api::Vulkan),
+        "-metal" => Some(Api::Metal),
+        _ => None,
+    };
+    if id == "cpu" {
+        Some(Device::Cpu)
+    } else if let Some(r) = id.strip_prefix("gpu") {
+        api(r).map(Device::Gpu)
+    } else if let Some(r) = id.strip_prefix("hybrid") {
+        api(r).map(Device::Hybrid)
+    } else {
+        None
+    }
+}
+
+fn device_label(d: Device) -> String {
+    match d {
+        Device::Cpu => "CPU".into(),
+        Device::Gpu(Api::Auto) => "GPU".into(),
+        Device::Gpu(a) => format!("GPU — {}", a.name()),
+        Device::Hybrid(Api::Auto) => "Hybrid — CPU + GPU (experimental)".into(),
+        Device::Hybrid(a) => format!("Hybrid — CPU + GPU, {} (experimental)", a.name()),
+    }
+}
+
+/// Applies a device choice ("auto": the last benchmark's fastest, else the GPU when there is
+/// one, else the CPU) and reports every option and where training runs.
+fn apply_device(choice: &str, threads: usize, benchmark: Option<serde_json::Value>) -> DeviceInfo {
+    use yendory_engine::learn::bench::{candidates, device_name};
     yendory_engine::learn::set_cpu_threads(threads);
+    let options: Vec<DeviceOption> = candidates()
+        .into_iter()
+        .map(|d| {
+            let name = device_name(d);
+            DeviceOption {
+                id: device_id(d),
+                label: device_label(d),
+                available: name.is_ok(),
+                detail: name.unwrap_or_else(|e| e),
+                experimental: matches!(d, Device::Hybrid(_)),
+            }
+        })
+        .collect();
+    let available = |d: Device| options.iter().any(|o| o.id == device_id(d) && o.available);
     let gpu = yendory_engine::learn::gpu_name();
-    let on_gpu = choice != "cpu" && gpu.is_ok();
-    yendory_engine::learn::set_gpu_training(on_gpu);
+    let mut note = None;
+    let wanted = if choice == "auto" {
+        let fastest = benchmark
+            .as_ref()
+            .and_then(|b| b.get("result")?.get("fastest").cloned())
+            .and_then(|f| serde_json::from_value::<Device>(f).ok())
+            .filter(|&d| available(d));
+        fastest.unwrap_or(if gpu.is_ok() { Device::Gpu(Api::Auto) } else { Device::Cpu })
+    } else {
+        parse_device(choice).unwrap_or(Device::Cpu)
+    };
+    let active = match wanted {
+        Device::Cpu => Device::Cpu,
+        d if available(d) || (d == Device::Gpu(Api::Auto) && gpu.is_ok()) => d,
+        d => {
+            let why = yendory_engine::learn::bench::device_name(d).err().unwrap_or_default();
+            note = Some(format!("{} cannot be used ({why}); training runs on the CPU.", device_label(d)));
+            Device::Cpu
+        }
+    };
+    yendory_engine::learn::set_device(active);
+    let active_name = yendory_engine::learn::bench::device_name(active).unwrap_or_else(|_| "CPU".into());
     DeviceInfo {
         choice: choice.into(),
+        options,
+        active: device_id(active),
+        active_name,
+        note,
+        benchmark,
+        training_on: if active == Device::Cpu { "cpu".into() } else { "gpu".into() },
         gpu: gpu.as_ref().ok().cloned(),
         gpu_error: gpu.err(),
-        training_on: if on_gpu { "gpu".into() } else { "cpu".into() },
         cpu_threads: threads,
         cpu_total: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
     }
@@ -471,8 +581,8 @@ fn apply_device(choice: &str, threads: usize) -> DeviceInfo {
 
 #[tauri::command]
 async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
-    let (choice, threads) = (device_choice(&app), thread_choice(&app));
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+    let (choice, threads, bench) = (device_choice(&app), thread_choice(&app), stored_benchmark(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
         .await
         .map_err(|e| e.to_string())
 }
@@ -480,18 +590,14 @@ async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
 #[tauri::command]
 async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: String) -> Res<DeviceInfo> {
     not_teaching(&studio)?;
-    if !["auto", "gpu", "cpu"].contains(&choice.as_str()) {
-        return Err("Choose auto, gpu or cpu".into());
+    if choice != "auto" && parse_device(&choice).is_none() {
+        return Err("Unknown training device".into());
     }
     write_setting(&app, "trainingDevice", choice.clone().into())?;
-    let threads = thread_choice(&app);
-    let info = tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+    let (threads, bench) = (thread_choice(&app), stored_benchmark(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
         .await
-        .map_err(|e| e.to_string())?;
-    if info.choice == "gpu" && info.training_on != "gpu" {
-        return Err(format!("No GPU can be used: {}", info.gpu_error.clone().unwrap_or_default()));
-    }
-    Ok(info)
+        .map_err(|e| e.to_string())
 }
 
 /// Limits the CPU threads Yendory uses (0: all), e.g. to keep some free for other work.
@@ -499,10 +605,62 @@ async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: 
 async fn set_cpu_threads(app: AppHandle, studio: State<'_, Studio>, threads: usize) -> Res<DeviceInfo> {
     not_teaching(&studio)?;
     write_setting(&app, "cpuThreads", threads.into())?;
-    let choice = device_choice(&app);
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+    let (choice, bench) = (device_choice(&app), stored_benchmark(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Benchmarks training of the open model on every device with identical batches (the model is
+/// not changed), saves the result and returns the device information (Auto then follows the
+/// fastest device that computes the same loss as the CPU).
+#[tauri::command]
+async fn benchmark_training(
+    app: AppHandle,
+    studio: State<'_, Studio>,
+    rows: usize,
+    tokens: usize,
+    steps: usize,
+) -> Res<DeviceInfo> {
+    if !(1..=128).contains(&rows)
+        || !(16..=yendory_engine::model::MAX_CONTEXT).contains(&tokens)
+        || !(1..=20).contains(&steps)
+    {
+        return Err("Choose 1-128 rows, at least 16 tokens per row and 1-20 steps".into());
+    }
+    let (meta, model) = with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone())))?;
+    if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("Wait until teaching or reading has finished".into());
+    }
+    let tokens = tokens.min(model.config.max_tokens);
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let batch = yendory_engine::learn::bench::sample_rows(&model, rows, tokens);
+        let devices = yendory_engine::learn::bench::candidates();
+        yendory_engine::learn::bench::run(&model, &batch, steps, &devices, &mut |d| {
+            let _ = app2.emit("benchmark-progress", d.to_string());
+        })
+    })
+    .await;
+    studio.teaching.store(false, Ordering::Release);
+    let result = result.map_err(|e| e.to_string())?;
+    let record = serde_json::json!({
+        "time": now(),
+        "model": meta.name,
+        "parameters": model_parameters(&studio),
+        "rows": rows,
+        "tokens": tokens,
+        "result": result,
+    });
+    write_setting(&app, "benchmark", record.clone())?;
+    let (choice, threads) = (device_choice(&app), thread_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, Some(record)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn model_parameters(studio: &Studio) -> usize {
+    with_active(studio, |a| Ok(a.model.parameter_count())).unwrap_or(0)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1043,6 +1201,9 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             serde_json::json!({"type": "course_finished", "time": now(), "stopped": finished.stopped, "error": finished.error}),
         );
         studio.teaching.store(false, Ordering::Release);
+        if let Some(n) = yendory_engine::learn::take_device_notice() {
+            let _ = app.emit("device-notice", n);
+        }
         let _ = app.emit("teach-finished", &finished);
     });
     Ok(())
@@ -1256,6 +1417,7 @@ pub fn run() {
             training_device,
             set_training_device,
             set_cpu_threads,
+            benchmark_training,
             courses::list_courses,
             courses::create_course,
             courses::course_detail,

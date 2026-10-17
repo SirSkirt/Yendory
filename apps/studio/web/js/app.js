@@ -160,12 +160,60 @@ function showDevice(d) {
     }));
   }
   threads.value = String(d.cpuThreads >= d.cpuTotal ? 0 : d.cpuThreads);
-  $("deviceNote").textContent = d.trainingOn === "gpu"
-    ? `Training runs on ${d.gpu}; at the same time the CPU scores lesson candidates and checks reading. Talking and exams run on the CPU.`
-    : d.gpu ? `Training runs on the CPU (GPU available: ${d.gpu}).` : `Training runs on the CPU: ${/^no gpu found\.?$/i.test(d.gpuError || "") ? "no GPU found" : "no GPU can be used (" + d.gpuError + ")"}.`;
+  if (d.options) {
+    const fastest = d.benchmark?.result?.fastest;
+    const sel = $("deviceChoice");
+    sel.replaceChildren(el("option", { value: "auto" }, fastest ? "Auto: the fastest measured" : "Auto: the GPU when there is one"),
+      ...d.options.map(o => el("option", { value: o.id, disabled: o.available ? null : "", title: o.detail }, o.available ? o.label : `${o.label} — not available`)));
+    sel.value = d.choice;
+    const runs = d.active === "cpu" ? "the CPU" : d.activeName;
+    const parallel = d.active.startsWith("gpu") ? "; at the same time the CPU scores lesson candidates and checks reading" : d.active.startsWith("hybrid") ? "; each batch is split between them by their measured speed" : "";
+    $("deviceNote").textContent = `Training runs on ${runs}${parallel}.` + (d.note ? " " + d.note : "") + " Talking and exams run on the CPU.";
+    showBenchmark(d.benchmark);
+  } else {
+    $("deviceChoice").value = d.choice;
+    $("deviceNote").textContent = d.trainingOn === "gpu" ? `Training runs on ${d.gpu}.` : "Training runs on the CPU.";
+  }
   renderSizes();
 }
-const deviceLabel = () => deviceInfo?.trainingOn === "gpu" ? ` · on ${deviceInfo.gpu}` : " · on the CPU";
+const deviceLabel = () => !deviceInfo || deviceInfo.active === "cpu" || deviceInfo.trainingOn === "cpu" ? " · on the CPU" : ` · on ${deviceInfo.activeName || deviceInfo.gpu}`;
+// The last training benchmark: every device's speed on identical batches, and where the GPU's
+// time goes.
+function showBenchmark(b) {
+  const box = $("benchResult");
+  box.hidden = !b;
+  if (!b) return;
+  const r = b.result;
+  const label = d => deviceInfo?.options?.find(o => JSON.stringify(o.id) === JSON.stringify(devId(d)))?.label || devId(d);
+  const best = r.fastest ? devId(r.fastest) : null;
+  const rows = r.results.map(x => el("tr", { class: devId(x.device) === best ? "current-row" : "" },
+    el("td", {}, el("div", {}, label(x.device)), el("div", { class: "note" }, x.name)),
+    el("td", { class: "num" }, x.error ? "—" : fmt(Math.round(x.tokens_per_second))),
+    el("td", { class: "num" }, x.error ? "—" : `${fmt(Math.round(x.ms_per_step))} ms`),
+    el("td", { class: "num" }, x.gpu_memory_bytes ? mb(x.gpu_memory_bytes) : "—"),
+    el("td", { class: "num" }, x.gpu_share == null ? "—" : `${Math.round(100 * x.gpu_share)}% GPU`),
+    el("td", {}, x.error ? el("span", { class: "bad" }, x.error) : x.loss_difference == null ? "reference" : Math.abs(x.loss_difference) < 1e-3 ? el("span", { class: "ok" }, `same (Δ ${x.loss_difference.toExponential(1)})`) : el("span", { class: "bad" }, `differs by ${x.loss_difference.toFixed(4)}`))));
+  const p = r.profile;
+  box.replaceChildren(
+    el("p", { class: "note" }, `Measured ${new Date(b.time * 1000).toLocaleString()} with ${b.model} (${fmt(b.parameters)} parameters): batches of ${b.rows} rows × ${fmt(b.tokens)} tokens, ${r.steps} steps after warm-up. ${best ? "Fastest: " + label(r.fastest) + (deviceInfo?.choice === "auto" ? " (Auto uses it)." : ".") : ""}`),
+    el("table", { class: "ledger compact" }, el("thead", {}, el("tr", {}, el("th", {}, "Device"), el("th", { class: "num" }, "Tokens/s"), el("th", { class: "num" }, "Per step"), el("th", { class: "num" }, "GPU memory"), el("th", { class: "num" }, "Split"), el("th", {}, "Loss vs CPU"))), el("tbody", {}, ...rows)),
+    p ? el("details", {}, el("summary", {}, "Where the fastest GPU's time goes"),
+      el("p", { class: "note" }, `CPU preparing the step: ${p.cpu_prepare_ms.toFixed(0)} ms · GPU kernels: ${p.gpu_ms.toFixed(0)} ms over ${fmt(p.dispatches)} dispatches${p.timestamps ? " (GPU timestamps)" : " (timed one by one, includes submission cost)"} · GPU memory ${mb(p.memory_bytes)}`),
+      el("table", { class: "ledger compact" }, el("tbody", {}, ...p.kernels.slice(0, 12).map(k => el("tr", {}, el("td", { class: "mono" }, k.kernel), el("td", { class: "num" }, `${k.count}×`), el("td", { class: "num" }, `${k.ms.toFixed(1)} ms`), el("td", { class: "num" }, `${(100 * k.ms / Math.max(p.gpu_ms, 1e-9)).toFixed(1)}%`)))))) : "");
+}
+function devId(d) {
+  if (!d || d.kind === "cpu") return "cpu";
+  const api = { auto: "", dx12: "-dx12", vulkan: "-vulkan", metal: "-metal" }[d.api] ?? "";
+  return d.kind + api;
+}
+$("benchTraining").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open a model first: the benchmark trains a copy of it");
+  const rows = Number($("readBatch").value) || 8, tokens = Math.min(Number($("readWindow").value) || 128, active.context);
+  $("benchTraining").disabled = true;
+  $("benchNote").textContent = "Benchmarking… (each device trains the same batches; this takes a few minutes)";
+  try { showDevice(await invoke("benchmark_training", { rows, tokens, steps: 3 })); say("Benchmark finished."); }
+  finally { $("benchTraining").disabled = false; $("benchNote").textContent = "Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest."; }
+}, "Benchmark"));
 $("deviceChoice").addEventListener("change", safe(async () => {
   try { showDevice(await invoke("set_training_device", { choice: $("deviceChoice").value })); }
   catch (e) { if (deviceInfo) $("deviceChoice").value = deviceInfo.choice; throw e; }
@@ -892,6 +940,8 @@ async function boot() {
   await tauri.event.listen("read-event", ev => { try { onReadEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("read-finished", ev => onReadFinished(ev.payload));
   await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));
+  await tauri.event.listen("benchmark-progress", ev => { $("benchNote").textContent = `Benchmarking: ${ev.payload}…`; });
+  await tauri.event.listen("device-notice", ev => { log("WARN", ev.payload); say(ev.payload); });
   sourcesList = await invoke("corpus_sources");
   renderSources();
   familiesList = await invoke("practice_families");

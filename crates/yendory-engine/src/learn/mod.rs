@@ -1,6 +1,7 @@
 //! Learning: lesson parsing, training rows, batched gradients, the learning-rate schedule and
 //! held-out evaluation. Reference behaviour: `reference/lessons.py` and
 //! `reference/train_lessons.py` (the pipeline that trained the step-19,000 checkpoint).
+pub mod bench;
 pub mod corpus;
 pub mod course;
 pub mod curriculum;
@@ -15,6 +16,7 @@ use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
 pub use lessons::{grow_vocabulary, parse_lesson, Item, Kind, Segment};
+use serde::{Deserialize, Serialize};
 
 /// Small deterministic generator (SplitMix64) for batch sampling and windows. Training runs are
 /// reproducible from their seed; the stream is not Python's, so runs are not step-identical to
@@ -103,6 +105,37 @@ pub fn batch_loss_and_gradients(
     rows: &[Row],
     abl: Ablation,
 ) -> Result<(f32, Vec<f32>), String> {
+    let (loss, weight, mut grads) = batch_sums(model, rows, abl)?;
+    let denom = weight.max(1.);
+    for g in &mut grads {
+        *g = (*g as f64 / denom) as f32;
+    }
+    Ok(((loss / denom) as f32, grads))
+}
+
+/// Like [`batch_loss_and_gradients`] for a part of a batch: the loss and gradient sums are
+/// divided by `denom`, the whole batch's total weight, so the parts of a batch add up to the
+/// batch's mean (hybrid CPU + GPU training).
+pub fn batch_part_loss_and_gradients(
+    model: &Bicameral,
+    rows: &[Row],
+    abl: Ablation,
+    denom: f64,
+) -> Result<(f32, Vec<f32>), String> {
+    let (loss, _, mut grads) = batch_sums(model, rows, abl)?;
+    for g in &mut grads {
+        *g = (*g as f64 / denom) as f32;
+    }
+    Ok(((loss / denom) as f32, grads))
+}
+
+/// The total weight of a batch's targets (the mean loss's denominator), at least 1.
+pub fn batch_weight(rows: &[Row]) -> f64 {
+    rows.iter().map(|r| r.mask.iter().map(|&m| m as f64).sum::<f64>()).sum::<f64>().max(1.)
+}
+
+/// Unnormalised loss, total weight and gradient sum of a batch.
+fn batch_sums(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<Partial, String> {
     if rows.is_empty() {
         return Err("Empty training batch".into());
     }
@@ -146,11 +179,7 @@ pub fn batch_loss_and_gradients(
             *a += b;
         }
     }
-    let denom = weight.max(1.);
-    for g in &mut grads {
-        *g = (*g as f64 / denom) as f32;
-    }
-    Ok(((loss / denom) as f32, grads))
+    Ok((loss, weight, grads))
 }
 
 /// Where training steps run. The GPU is used only when the Engine is built with the `gpu`
@@ -171,15 +200,51 @@ pub fn cpu_threads() -> usize {
     }
 }
 
-static USE_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Where training steps run. Every device trains the same network and the same `.nnova2`
+/// model: weights, optimizer state and step are the model's, wherever they are computed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", tag = "kind", content = "api")]
+pub enum Device {
+    Cpu,
+    /// The GPU through a graphics API (DirectX 12, Vulkan, Metal or automatic).
+    #[cfg(feature = "gpu")]
+    Gpu(crate::gpu::Api),
+    /// Experimental: each batch is split between the GPU and the CPU (in proportion to their
+    /// measured speed); their gradients are added and the CPU takes the AdamW step.
+    #[cfg(feature = "gpu")]
+    Hybrid(crate::gpu::Api),
+}
 
-/// Train on the GPU (when there is one) or on the CPU.
+static DEVICE: std::sync::Mutex<Device> = std::sync::Mutex::new(Device::Cpu);
+static NOTICE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn set_device(d: Device) {
+    *DEVICE.lock().unwrap() = d;
+}
+pub fn device() -> Device {
+    *DEVICE.lock().unwrap()
+}
+
+/// Train on the GPU (automatic API) or on the CPU.
 pub fn set_gpu_training(on: bool) {
-    USE_GPU.store(on, std::sync::atomic::Ordering::Release);
+    #[cfg(feature = "gpu")]
+    set_device(if on { Device::Gpu(crate::gpu::Api::Auto) } else { Device::Cpu });
+    #[cfg(not(feature = "gpu"))]
+    let _ = on;
 }
 
 pub fn gpu_training() -> bool {
-    USE_GPU.load(std::sync::atomic::Ordering::Acquire)
+    device() != Device::Cpu
+}
+
+/// What happened to the chosen device during training (e.g. the GPU failed and training went
+/// on on the CPU), once; `None` when nothing happened.
+pub fn take_device_notice() -> Option<String> {
+    NOTICE.lock().unwrap().take()
+}
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+fn notice(text: String) {
+    *NOTICE.lock().unwrap() = Some(text);
 }
 
 /// The GPU training would use ("NVIDIA GeForce RTX 2070 SUPER (Dx12)"), or why there is none.
@@ -194,34 +259,56 @@ pub fn gpu_name() -> Result<String, String> {
     }
 }
 
+/// Splits batches between the GPU and the CPU in proportion to their measured speed.
+#[cfg(feature = "gpu")]
+struct Hybrid {
+    gpu: crate::gpu::GpuModel,
+    /// Share of a batch's tokens given to the GPU (adjusted after every step).
+    gpu_share: f64,
+}
+
 /// Runs training steps on the chosen device. On the GPU the model's weights live on the card
 /// between steps; [`Trainer::sync`] copies them back before the CPU reads them (checks,
-/// scoring, saving). On the CPU each step is `batch_loss_and_gradients` + `adam_step`.
+/// scoring, saving). On the CPU each step is `batch_loss_and_gradients` + `adam_step`. In
+/// hybrid training the model stays on the CPU and the GPU computes part of each gradient.
 pub struct Trainer {
     #[cfg(feature = "gpu")]
     gpu: Option<crate::gpu::GpuModel>,
+    #[cfg(feature = "gpu")]
+    hybrid: Option<Hybrid>,
     dirty: bool,
 }
 
 impl Trainer {
-    /// A trainer for `model`, on the GPU when GPU training is on and the model fits.
+    /// A trainer for `model` on the chosen device. When the GPU cannot be used (none, or the
+    /// model does not fit) the CPU trains, and [`take_device_notice`] says why.
     pub fn new(model: &Bicameral) -> Trainer {
+        #[cfg_attr(not(feature = "gpu"), allow(unused_mut))]
+        let mut t = Trainer {
+            #[cfg(feature = "gpu")]
+            gpu: None,
+            #[cfg(feature = "gpu")]
+            hybrid: None,
+            dirty: false,
+        };
         #[cfg(feature = "gpu")]
-        if gpu_training() {
-            if let Ok(gpu) = crate::gpu::shared() {
-                if let Ok(m) = crate::gpu::GpuModel::upload(&gpu, model) {
-                    return Trainer { gpu: Some(m), dirty: false };
+        match device() {
+            Device::Cpu => {}
+            Device::Gpu(api) | Device::Hybrid(api) => {
+                let opened =
+                    crate::gpu::shared_with(api).and_then(|g| crate::gpu::GpuModel::upload(&g, model));
+                match (opened, device()) {
+                    (Ok(m), Device::Gpu(_)) => t.gpu = Some(m),
+                    (Ok(m), _) => t.hybrid = Some(Hybrid { gpu: m, gpu_share: 0.5 }),
+                    (Err(e), _) => notice(format!("Training on the CPU: the GPU cannot be used ({e})")),
                 }
             }
         }
         let _ = model;
-        Trainer {
-            #[cfg(feature = "gpu")]
-            gpu: None,
-            dirty: false,
-        }
+        t
     }
 
+    /// Training runs on the GPU alone (so the CPU is free for checks meanwhile).
     pub fn on_gpu(&self) -> bool {
         #[cfg(feature = "gpu")]
         {
@@ -234,7 +321,10 @@ impl Trainer {
     }
 
     /// One step on a batch; returns its mean loss. On the GPU, `model`'s weights are not
-    /// updated until [`Trainer::sync`] (its step counter is).
+    /// updated until [`Trainer::sync`] (its step counter is). If the GPU fails, the model is
+    /// brought back from the GPU when possible and training continues on the CPU; if the GPU's
+    /// state cannot be read back, the step fails and the model keeps its last synced state
+    /// (nothing saved is touched).
     pub fn step(
         &mut self,
         model: &mut Bicameral,
@@ -245,17 +335,44 @@ impl Trainer {
     ) -> Result<f32, String> {
         #[cfg(feature = "gpu")]
         if let Some(g) = self.gpu.as_mut() {
-            let loss = g.train_step(model, rows, abl, lr, focus)?;
-            model.step = g.step;
-            self.dirty = true;
-            return Ok(loss);
+            match g.train_step(model, rows, abl, lr, focus) {
+                Ok(loss) => {
+                    model.step = g.step;
+                    self.dirty = true;
+                    return Ok(loss);
+                }
+                Err(e) => {
+                    let g = self.gpu.take().unwrap();
+                    let before = model.step;
+                    if let Err(read) = g.download(model) {
+                        return Err(format!(
+                            "The GPU failed ({e}) and its training state could not be read back ({read}); \
+                             the steps since the last check are lost, saved checkpoints are unchanged"
+                        ));
+                    }
+                    self.dirty = false;
+                    let _ = before;
+                    notice(format!("The GPU failed ({e}); training continued on the CPU"));
+                }
+            }
+        }
+        #[cfg(feature = "gpu")]
+        if let Some(h) = self.hybrid.as_mut() {
+            match hybrid_step(h, model, rows, abl, lr, focus) {
+                Ok(loss) => return Ok(loss),
+                Err(e) => {
+                    // The model is on the CPU in hybrid training: nothing is lost.
+                    self.hybrid = None;
+                    notice(format!("The GPU failed in hybrid training ({e}); training continued on the CPU"));
+                }
+            }
         }
         let (loss, grads) = batch_loss_and_gradients(model, rows, abl)?;
         model.adam_step(&grads, lr, focus)?;
         Ok(loss)
     }
 
-    /// Brings `model` up to date with the GPU (nothing to do on the CPU).
+    /// Brings `model` up to date with the GPU (nothing to do on the CPU or in hybrid training).
     pub fn sync(&mut self, model: &mut Bicameral) -> Result<(), String> {
         #[cfg(feature = "gpu")]
         if let (Some(g), true) = (self.gpu.as_ref(), self.dirty) {
@@ -265,6 +382,101 @@ impl Trainer {
         let _ = model;
         Ok(())
     }
+
+    /// GPU memory training uses (GPU and hybrid training).
+    pub fn gpu_memory_bytes(&self) -> Option<u64> {
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu.as_ref().or(self.hybrid.as_ref().map(|h| &h.gpu)).map(|g| g.memory_bytes())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            None
+        }
+    }
+
+    /// Hybrid training: the share of each batch the GPU takes (measured speeds decide it).
+    pub fn gpu_share(&self) -> Option<f64> {
+        #[cfg(feature = "gpu")]
+        {
+            self.hybrid.as_ref().map(|h| h.gpu_share)
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            None
+        }
+    }
+}
+
+/// One hybrid step: the GPU computes the gradient of the first rows, the CPU (at the same
+/// time) that of the others, both divided by the whole batch's weight; their sum is the
+/// batch's gradient, and the CPU takes the AdamW step (exactly as CPU training) and sends the
+/// new weights to the GPU. The split follows the measured speeds.
+#[cfg(feature = "gpu")]
+fn hybrid_step(
+    h: &mut Hybrid,
+    model: &mut Bicameral,
+    rows: &[Row],
+    abl: Ablation,
+    lr: f32,
+    focus: Focus,
+) -> Result<f32, String> {
+    let denom = batch_weight(rows);
+    let tokens: Vec<usize> = rows.iter().map(|r| r.ids.len()).collect();
+    let total: usize = tokens.iter().sum();
+    // The GPU takes rows from the front until it has about its share of the tokens.
+    let mut split = 0;
+    let mut acc = 0;
+    while split < rows.len() && ((acc + tokens[split] / 2) as f64) < h.gpu_share * total as f64 {
+        acc += tokens[split];
+        split += 1;
+    }
+    let (gpu_rows, cpu_rows) = rows.split_at(split);
+    let model_ref: &Bicameral = model;
+    let gpu = &h.gpu;
+    let ((gpu_part, gpu_secs), (cpu_part, cpu_secs)) = std::thread::scope(|s| {
+        let gpu_job = s.spawn(move || {
+            let t = std::time::Instant::now();
+            let r = if gpu_rows.is_empty() {
+                Ok(None)
+            } else {
+                gpu.part_loss_and_gradients(model_ref, gpu_rows, abl, denom as f32).map(Some)
+            };
+            (r, t.elapsed().as_secs_f64())
+        });
+        let t = std::time::Instant::now();
+        let cpu = if cpu_rows.is_empty() {
+            Ok(None)
+        } else {
+            batch_part_loss_and_gradients(model_ref, cpu_rows, abl, denom).map(Some)
+        };
+        let cpu_secs = t.elapsed().as_secs_f64();
+        (gpu_job.join().unwrap_or_else(|_| (Err("GPU thread failed".into()), 0.)), (cpu, cpu_secs))
+    });
+    let (gpu_part, cpu_part) = (gpu_part?, cpu_part?);
+    let mut loss = 0f32;
+    let mut grads = vec![0f32; model.parameter_count()];
+    for (l, g) in [gpu_part, cpu_part].into_iter().flatten() {
+        loss += l;
+        for (a, b) in grads.iter_mut().zip(&g) {
+            *a += b;
+        }
+    }
+    model.adam_step(&grads, lr, focus)?;
+    h.gpu.set_weights(model)?;
+    // Speeds in tokens per second, smoothed; the next split balances the two finishing times.
+    let gpu_tokens: usize = tokens[..split].iter().sum();
+    let cpu_tokens = total - gpu_tokens;
+    if gpu_tokens > 0 && cpu_tokens > 0 && gpu_secs > 0. && cpu_secs > 0. {
+        let (g, c) = (gpu_tokens as f64 / gpu_secs, cpu_tokens as f64 / cpu_secs);
+        let target = g / (g + c);
+        h.gpu_share = (0.7 * h.gpu_share + 0.3 * target).clamp(0.02, 0.98);
+    } else if gpu_tokens == 0 {
+        h.gpu_share = (h.gpu_share + 0.1).min(0.98);
+    } else {
+        h.gpu_share = (h.gpu_share - 0.1).max(0.02);
+    }
+    Ok(loss)
 }
 
 /// Appends one JSON line to a record file (epoch records, events). Records are plain data for

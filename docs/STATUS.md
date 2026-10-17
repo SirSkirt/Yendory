@@ -31,6 +31,8 @@ has been checked, how, and what has not.
 | Matrix kernels (`model/linalg.rs`: packed panels, 4×16 register tiles, 8-lane dot products; safe Rust, no dependencies): same products as plain loops, only the order of additions differs | all compatibility tests above pass unchanged; one core reaches ~14 GFLOP/s (SSE2) |
 | **Nexus** (`tests/nexus.rs`): lessons with `Environment:` / `Action:` / `Result:` lines; marker characters in files and typed text removed; a small model taught a test-only environment looks before answering, reads the real result, changes the environment, and is refused a change without approval | pass; an untaught model takes no action |
 | **Flat epochs** (`tests/session.rs`): training continues from the best safe candidate through epochs that improve too little to be accepted; the accepted model then includes those epochs' steps; a candidate that loses an answer restores the best checkpoint | pass |
+| **GPU kernels rewritten for speed** (tiled attention with a single-pass softmax, vec4 register matrix products, parallel column sums, per-token embedding gradient, one workgroup per row for the loss): on lavapipe at 8M / 1,024 context, rows of 600, 503 and 406 tokens (`examples/gpu_check.rs`) | loss equal to 7 digits; gradients within 9e-7 of the largest; weights after two steps within 5e-7; reading and Foundation lessons on the GPU accept the same checkpoints and candidates as the CPU; a step 2.7x faster than before on the same software GPU |
+| **Hybrid CPU + GPU training** (`tests/gpu.rs`): four steps with whole-brain and Stage A focus | the same losses as CPU training to 7 digits; weights within 2e-7; Stage A leaves the transformer untouched |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 | **GPU training** (`--features gpu`, `tests/gpu.rs`, run in CI on a software GPU, lavapipe): loss, every gradient and two AdamW steps (Joint and Dense-only focus) against the CPU; reading and a Foundation lesson on the GPU, with the CPU checking at the same time | loss equal to 6 digits; gradients within 1.7e-6 (largest 2.6); weights within 5e-7; the same checkpoints, candidates and early stop as on the CPU |
 
@@ -50,8 +52,9 @@ CI (this container cannot reach their hosts). Not checked: the Windows installer
 
 ## Not verified
 
-- GPU training has not run on a real graphics card (only the software GPU in CI and in this
-  container); its speed on an RTX 2070 Super under DirectX 12 is still to be measured.
+- GPU and hybrid training have not run on a real graphics card here (only the software GPU in
+  CI and in this container). Their speed on a real card, and whether DirectX 12 (DXC) or
+  Vulkan is faster there, is for the Studio's training benchmark to measure.
 - Nothing here has run on Android or in a Windows app. CI builds and tests the library on
   Ubuntu and Windows only.
 - Training dynamics over many steps (a long Rust run vs a long reference run). One gradient and

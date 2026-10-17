@@ -55,14 +55,17 @@
     <div class="line-form">
       <label for="deviceChoice">Training device</label>
       <select id="deviceChoice">
-        <option value="auto">Auto: the GPU when there is one</option>
-        <option value="gpu">GPU</option>
-        <option value="cpu">CPU only</option>
+        <option value="auto">Auto</option>
       </select>
       <label for="threadChoice">CPU threads</label>
       <select id="threadChoice"><option value="0">All</option></select>
       <span class="note" id="deviceNote">Looking for a GPU…</span>
     </div>
+    <div class="line-form">
+      <button type="button" id="benchTraining">Benchmark training on this computer</button>
+      <span class="note" id="benchNote">Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest.</span>
+    </div>
+    <div id="benchResult" hidden></div>
     <table class="ledger compact" id="sizeTable">
       <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">Transformer · dense · interconnect</th><th class="num">File</th><th class="num">Memory: talking · reading · teaching</th><th>Speed on this device</th></tr></thead>
       <tbody></tbody>
