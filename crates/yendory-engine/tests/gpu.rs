@@ -144,6 +144,29 @@ fn reading_and_lessons_train_on_the_gpu() {
         );
     }
     close("weights after reading", &gpu.model.weights, &cpu.model.weights);
+    // Early stopping: checks run on the CPU while the GPU reads, yet reading stops at the
+    // same check as when every check runs inline.
+    let strict = PretrainConfig { evaluations: 12, patience: 1, min_loss_improvement: 0.05, ..cfg.clone() };
+    let early = |gpu: bool| {
+        set_gpu_training(gpu);
+        let r = pretrain(&start, &corpus, &strict, &mut |_| {}, &mut |_| Ok(()), &AtomicBool::new(false))
+            .unwrap();
+        set_gpu_training(false);
+        r
+    };
+    let (ce, ge) = (early(false), early(true));
+    println!(
+        "early stop: CPU {} checks ({}), GPU {} checks ({})",
+        ce.evaluations.len(),
+        ce.early_stop,
+        ge.evaluations.len(),
+        ge.early_stop
+    );
+    assert_eq!(ce.early_stop, ge.early_stop);
+    assert_eq!(
+        ce.evaluations.iter().map(|e| e.accepted).collect::<Vec<_>>(),
+        ge.evaluations.iter().map(|e| e.accepted).collect::<Vec<_>>()
+    );
 
     let lesson = parse_lesson(
         &std::fs::read_to_string(concat!(

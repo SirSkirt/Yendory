@@ -423,6 +423,17 @@ fn focus_of(stage: Option<crate::learn::session::EducationStage>) -> Focus {
     }
 }
 
+/// A checkpoint and its held-out check: overall loss, overall Dense reliance and per-corpus
+/// values, with a sample per corpus.
+struct Measured {
+    model: Bicameral,
+    step: u64,
+    tokens: u64,
+    train_loss: f32,
+    check: (f32, f32, Vec<(f32, f32)>),
+    samples: Vec<String>,
+}
+
 /// Reads several corpora interleaved, each batch from one corpus in proportion to the shares
 /// (so earlier corpora are not forgotten while later ones are read). Each corpus is read in its
 /// own stage (`MixPart::stage`, bicameral reading) or by the whole brain. The held-out loss is
@@ -546,93 +557,148 @@ pub fn pretrain_mix(
     let mut tokens = 0u64;
     // Interleaving: each step takes the corpus furthest behind its share.
     let mut owed = vec![0f32; parts.len()];
-    let mut trainer = super::Trainer::new(&current);
-    for step in 0..steps {
-        if stop.load(Ordering::Acquire) {
-            stopped = true;
-            break;
+    // Judges a measured checkpoint in order: accept it if it is better (and, in bicameral
+    // reading, still uses Dense), report it, and say whether reading should stop early.
+    let mut judge = |m: Measured, observer: &mut dyn FnMut(&PretrainEvent)| -> Result<bool, String> {
+        let (held_out_loss, reliance, per) = m.check;
+        // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
+        let keeps_dense = !bicameral
+            || best_reliance <= GUARDED_RELIANCE
+            || reliance >= cfg.keep_dense_reliance * best_reliance;
+        let improves = held_out_loss.is_finite() && held_out_loss < best_loss - cfg.min_loss_improvement;
+        let accepted = improves && keeps_dense;
+        let reason = if accepted {
+            None
+        } else if !improves {
+            Some(format!("not better than {best_loss:.4} by at least {}", cfg.min_loss_improvement))
+        } else {
+            Some(format!(
+                "better, but Dense's contribution fell from {best_reliance:.3} to {reliance:.3} (bicameral guard)"
+            ))
+        };
+        if accepted {
+            best_loss = held_out_loss;
+            best_reliance = reliance;
+            on_accepted(&m.model)?;
+            best = Some(m.model);
+            misses = 0;
+        } else {
+            misses += 1;
         }
-        for (o, s) in owed.iter_mut().zip(&shares) {
-            *o += s;
-        }
-        let k = (0..parts.len()).max_by(|&a, &b| owed[a].total_cmp(&owed[b]).then(b.cmp(&a))).unwrap_or(0);
-        owed[k] -= 1.;
-        let train = &trains[k];
-        let rows: Vec<Row> =
-            (0..cfg.batch_size).map(|_| window_row(train, rng.below(train.len() - window), window)).collect();
-        let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
-        let loss = trainer.step(&mut current, &rows, Ablation::default(), lr, focus_of(parts[k].stage))?;
-        if !loss.is_finite() {
-            return Err("Training diverged (loss is not finite); try a lower learning rate".into());
-        }
-        tokens += tokens_per_step;
-        since_eval += loss as f64;
-        since_n += 1;
-        observer(&PretrainEvent::Batch { step: step + 1, steps, tokens, loss, learning_rate: lr, part: k });
+        let part_evals: Vec<PartEvaluation> = parts
+            .iter()
+            .zip(&per)
+            .zip(&prompts)
+            .zip(m.samples)
+            .map(|(((p, &(l, r)), prompt), sample)| PartEvaluation {
+                name: p.name.clone(),
+                category: p.category,
+                held_out_loss: l,
+                dense_reliance: r,
+                sample_prompt: prompt.clone(),
+                sample,
+            })
+            .collect();
+        let e = Evaluation {
+            step: m.step,
+            tokens: m.tokens,
+            train_loss: m.train_loss,
+            held_out_loss,
+            best_loss,
+            accepted,
+            dense_reliance: reliance,
+            sample_prompt: part_evals[0].sample_prompt.clone(),
+            sample: part_evals[0].sample.clone(),
+            parts: part_evals,
+            reason,
+        };
+        observer(&PretrainEvent::Evaluated(e.clone()));
+        evaluations.push(e);
+        Ok(misses >= cfg.patience.max(1))
+    };
+    // Measures a checkpoint: held-out losses, Dense reliance and a sample per corpus.
+    let measure = |model: Bicameral, step: u64, tokens: u64, train_loss: f32| -> Result<Measured, String> {
+        let check = check(&model)?;
+        let samples = prompts.iter().map(|prompt| sample(&model, prompt)).collect();
+        Ok(Measured { model, step, tokens, train_loss, check, samples })
+    };
 
-        if (step + 1) % eval_every == 0 || step + 1 == steps {
-            trainer.sync(&mut current)?;
-            let (held_out_loss, reliance, per) = check(&current)?;
-            // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
-            let keeps_dense = !bicameral
-                || best_reliance <= GUARDED_RELIANCE
-                || reliance >= cfg.keep_dense_reliance * best_reliance;
-            let improves = held_out_loss.is_finite() && held_out_loss < best_loss - cfg.min_loss_improvement;
-            let accepted = improves && keeps_dense;
-            let reason = if accepted {
-                None
-            } else if !improves {
-                Some(format!("not better than {best_loss:.4} by at least {}", cfg.min_loss_improvement))
-            } else {
-                Some(format!(
-                    "better, but Dense's contribution fell from {best_reliance:.3} to {reliance:.3} (bicameral guard)"
-                ))
-            };
-            if accepted {
-                best_loss = held_out_loss;
-                best_reliance = reliance;
-                best = Some(current.clone());
-                misses = 0;
-                on_accepted(&current)?;
-            } else {
-                misses += 1;
+    // With GPU training the CPU checks each checkpoint while the GPU keeps reading; the
+    // checkpoints and their results are the same as checking inline, and each check is
+    // judged before the next one starts, so early stopping happens at the same check.
+    let mut trainer = super::Trainer::new(&current);
+    std::thread::scope(|scope| -> Result<(), String> {
+        let mut pending: Option<std::thread::ScopedJoinHandle<'_, Result<Measured, String>>> = None;
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<Measured, String>>| {
+            h.join().map_err(|_| "A held-out check failed".to_string())?
+        };
+        for step in 0..steps {
+            if stop.load(Ordering::Acquire) {
+                stopped = true;
+                break;
             }
-            let part_evals: Vec<PartEvaluation> = parts
-                .iter()
-                .zip(&per)
-                .zip(&prompts)
-                .map(|((p, &(l, r)), prompt)| PartEvaluation {
-                    name: p.name.clone(),
-                    category: p.category,
-                    held_out_loss: l,
-                    dense_reliance: r,
-                    sample_prompt: prompt.clone(),
-                    sample: sample(&current, prompt),
-                })
-                .collect();
-            let e = Evaluation {
-                step: step + 1,
-                tokens,
-                train_loss: (since_eval / since_n.max(1) as f64) as f32,
-                held_out_loss,
-                best_loss,
-                accepted,
-                dense_reliance: reliance,
-                sample_prompt: part_evals[0].sample_prompt.clone(),
-                sample: part_evals[0].sample.clone(),
-                parts: part_evals,
-                reason,
-            };
-            observer(&PretrainEvent::Evaluated(e.clone()));
-            evaluations.push(e);
-            since_eval = 0.;
-            since_n = 0;
-            if misses >= cfg.patience.max(1) {
+            let checked = pending.as_ref().is_some_and(|h| h.is_finished());
+            if checked && judge(join(pending.take().unwrap())?, observer)? {
                 early_stop = true;
                 break;
             }
+            for (o, s) in owed.iter_mut().zip(&shares) {
+                *o += s;
+            }
+            let k =
+                (0..parts.len()).max_by(|&a, &b| owed[a].total_cmp(&owed[b]).then(b.cmp(&a))).unwrap_or(0);
+            owed[k] -= 1.;
+            let train = &trains[k];
+            let rows: Vec<Row> = (0..cfg.batch_size)
+                .map(|_| window_row(train, rng.below(train.len() - window), window))
+                .collect();
+            let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
+            let loss =
+                trainer.step(&mut current, &rows, Ablation::default(), lr, focus_of(parts[k].stage))?;
+            if !loss.is_finite() {
+                return Err("Training diverged (loss is not finite); try a lower learning rate".into());
+            }
+            tokens += tokens_per_step;
+            since_eval += loss as f64;
+            since_n += 1;
+            observer(&PretrainEvent::Batch {
+                step: step + 1,
+                steps,
+                tokens,
+                loss,
+                learning_rate: lr,
+                part: k,
+            });
+
+            if (step + 1) % eval_every == 0 || step + 1 == steps {
+                if let Some(h) = pending.take() {
+                    if judge(join(h)?, observer)? {
+                        early_stop = true;
+                        break;
+                    }
+                }
+                trainer.sync(&mut current)?;
+                let train_loss = (since_eval / since_n.max(1) as f64) as f32;
+                since_eval = 0.;
+                since_n = 0;
+                let snapshot = current.clone();
+                if trainer.on_gpu() {
+                    let measure = &measure;
+                    pending = Some(scope.spawn(move || measure(snapshot, step + 1, tokens, train_loss)));
+                } else if judge(measure(snapshot, step + 1, tokens, train_loss)?, observer)? {
+                    early_stop = true;
+                    break;
+                }
+            }
         }
-    }
+        if let Some(h) = pending.take() {
+            // The last checkpoint (or the one being checked when reading stopped) still counts.
+            if judge(join(h)?, observer)? && !stopped {
+                early_stop = true;
+            }
+        }
+        Ok(())
+    })?;
     let accepted = best.is_some();
     observer(&PretrainEvent::Finished { accepted, best_loss, tokens, stopped, early_stop });
     Ok(PretrainResult {

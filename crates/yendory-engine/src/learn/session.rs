@@ -396,6 +396,138 @@ pub fn teach(
     teach_with(model, lesson, None, archive, cfg, observer, stop)
 }
 
+/// The best candidate of an epoch so far: index, model, score, correct answers, report.
+type Best = (usize, Bicameral, Score, Vec<bool>, Report);
+
+/// A candidate's three reports: the score, the held-out replies and the earlier-lesson panel.
+type Scored = (Score, Report, Report);
+
+/// A candidate being scored on a CPU thread while the GPU trains the next one.
+struct Pending<'s> {
+    ci: usize,
+    focus: Focus,
+    train_loss: f32,
+    scoring: std::thread::ScopedJoinHandle<'s, (Bicameral, Result<Scored, String>)>,
+}
+
+/// What a candidate is judged against during one epoch.
+struct Judge<'a> {
+    cfg: &'a SessionConfig,
+    epoch: u32,
+    baseline: &'a Score,
+    base_panel_correct: &'a [bool],
+}
+
+impl Judge<'_> {
+    /// Judges a scored candidate: records why it is or is not eligible, reports it, and keeps
+    /// it as the epoch's best when it improves on the accepted model and on earlier candidates.
+    #[allow(clippy::too_many_arguments)]
+    fn judge(
+        &self,
+        ci: usize,
+        focus: Focus,
+        train_loss: f32,
+        cand: Bicameral,
+        (s, report, panel): Scored,
+        accepted_score: &Score,
+        accepted_correct: &[bool],
+        best: &mut Option<Best>,
+        records: &mut Vec<CandidateRecord>,
+        observer: &mut dyn FnMut(&Event),
+    ) {
+        let (cfg, epoch, baseline, base_panel_correct) =
+            (self.cfg, self.epoch, self.baseline, self.base_panel_correct);
+        let mut reasons = Vec::new();
+        let mut rejections = Vec::new();
+        let tol = cfg.heldout_loss_tolerance;
+        if !s.heldout_loss.is_finite()
+            || s.heldout_loss > baseline.heldout_loss + tol
+            || s.heldout_loss > accepted_score.heldout_loss + tol
+        {
+            rejections.push(Rejection::HeldoutLossRose);
+        }
+        if !s.heldout_loss.is_finite() {
+            reasons.push("held-out loss is not finite".to_string());
+        }
+        if s.heldout_loss > baseline.heldout_loss + tol {
+            reasons.push(format!(
+                "held-out loss {:.4} exceeds the lesson-start {:.4} + {tol}",
+                s.heldout_loss, baseline.heldout_loss
+            ));
+        }
+        if s.heldout_loss > accepted_score.heldout_loss + tol {
+            reasons.push(format!(
+                "held-out loss {:.4} exceeds the accepted {:.4} + {tol}",
+                s.heldout_loss, accepted_score.heldout_loss
+            ));
+        }
+        if let (Some(now), Some(before)) = (s.retention_loss, baseline.retention_loss) {
+            if now > before + cfg.retention_loss_tolerance {
+                rejections.push(Rejection::EarlierLessonsLoss);
+                reasons.push(format!(
+                    "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {}",
+                    cfg.retention_loss_tolerance
+                ));
+            }
+        }
+        let lost_panel =
+            base_panel_correct.iter().zip(correct_set(&panel)).filter(|(b, n)| **b && !*n).count();
+        if lost_panel > 0 {
+            rejections.push(Rejection::EarlierAnswersLost);
+            reasons.push(format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced"));
+        }
+        let now_correct = correct_set(&report);
+        if cfg.protect_correct_answers {
+            let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
+            if lost > 0 {
+                rejections.push(Rejection::AnswersLost);
+                reasons.push(format!("lost {lost} held-out answer(s) the accepted model produced"));
+            }
+        }
+        // Bicameral education: keep the model using Dense. A candidate whose measured Dense
+        // contribution falls below the kept share of the accepted model's is rejected.
+        if let (Some(now), Some(before)) = (s.dense_reliance, accepted_score.dense_reliance) {
+            if before > 0.01 && now < cfg.keep_dense_reliance * before {
+                rejections.push(Rejection::DenseUnused);
+                reasons.push(format!(
+                    "Dense's contribution fell from {before:.4} to {now:.4} (held-out loss rise with Dense cut)"
+                ));
+            }
+        }
+        let eligible = reasons.is_empty();
+        let improves = s.exact_correct > accepted_score.exact_correct
+            || (s.exact_correct == accepted_score.exact_correct
+                && s.heldout_loss < accepted_score.heldout_loss - cfg.min_loss_improvement);
+        if eligible && !improves {
+            rejections.push(Rejection::NoImprovement);
+            reasons.push(format!(
+                "no meaningful improvement (same or fewer exact answers, held-out loss not {} lower)",
+                cfg.min_loss_improvement
+            ));
+        }
+        let better_than_best = best.as_ref().map_or(true, |(_, _, b, _, _)| {
+            s.exact_correct > b.exact_correct
+                || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
+        });
+        let record = CandidateRecord {
+            epoch,
+            focus: focus_name(focus).into(),
+            train_loss,
+            score: s.clone(),
+            eligible,
+            reasons,
+            rejections,
+            selected: false,
+            step: cand.step,
+        };
+        observer(&Event::Candidate(record.clone()));
+        records.push(record);
+        if eligible && improves && better_than_best {
+            *best = Some((ci, cand, s, now_correct, report));
+        }
+    }
+}
+
 /// Like [`teach`], but trains on `practice` (a chosen selection of the lesson's training units,
 /// repeats allowed) instead of all of them. Held-out probes and vocabulary still come from the
 /// whole lesson, so scores stay comparable between attempts.
@@ -531,119 +663,98 @@ pub fn teach_with(
         }
 
         let mut records = Vec::new();
-        let mut best: Option<(usize, Bicameral, Score, Vec<bool>, Report)> = None;
-        for (ci, &focus) in foci.iter().enumerate() {
-            let mut cand = accepted.clone();
-            let mut trainer = super::Trainer::new(&cand);
-            let mut losses = 0f64;
-            for (b, rows) in plan.iter().enumerate() {
-                if stop.load(Ordering::Acquire) {
-                    stopped = true;
-                    break 'epochs;
+        let mut best: Option<Best> = None;
+        // With GPU training the CPU scores each candidate while the GPU trains the next one
+        // (every candidate of an epoch starts from the same accepted model). Candidates are
+        // still judged one by one in order, so the result is the same as scoring inline.
+        let interrupted = std::thread::scope(|scope| -> Result<bool, String> {
+            let mut pending: Option<Pending> = None;
+            for (ci, &focus) in foci.iter().enumerate() {
+                let mut cand = accepted.clone();
+                let mut trainer = super::Trainer::new(&cand);
+                let mut losses = 0f64;
+                for (b, rows) in plan.iter().enumerate() {
+                    if stop.load(Ordering::Acquire) {
+                        return Ok(true);
+                    }
+                    let step = (epoch as u64 - 1) * batches_per_epoch as u64 + b as u64;
+                    let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1);
+                    let loss = trainer.step(&mut cand, rows, Ablation::default(), lr, focus)?;
+                    losses += loss as f64;
+                    observer(&Event::Batch {
+                        epoch,
+                        focus: focus_name(focus).into(),
+                        batch: b + 1,
+                        batches: plan.len(),
+                        loss,
+                        learning_rate: lr,
+                    });
                 }
-                let step = (epoch as u64 - 1) * batches_per_epoch as u64 + b as u64;
-                let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1);
-                let loss = trainer.step(&mut cand, rows, Ablation::default(), lr, focus)?;
-                losses += loss as f64;
-                observer(&Event::Batch {
-                    epoch,
-                    focus: focus_name(focus).into(),
-                    batch: b + 1,
-                    batches: plan.len(),
-                    loss,
-                    learning_rate: lr,
-                });
-            }
-            trainer.sync(&mut cand)?;
-            let (s, report, panel) = score(&cand, &probes, dense)?;
-            let mut reasons = Vec::new();
-            let mut rejections = Vec::new();
-            let tol = cfg.heldout_loss_tolerance;
-            if !s.heldout_loss.is_finite()
-                || s.heldout_loss > baseline.heldout_loss + tol
-                || s.heldout_loss > accepted_score.heldout_loss + tol
-            {
-                rejections.push(Rejection::HeldoutLossRose);
-            }
-            if !s.heldout_loss.is_finite() {
-                reasons.push("held-out loss is not finite".to_string());
-            }
-            if s.heldout_loss > baseline.heldout_loss + tol {
-                reasons.push(format!(
-                    "held-out loss {:.4} exceeds the lesson-start {:.4} + {tol}",
-                    s.heldout_loss, baseline.heldout_loss
-                ));
-            }
-            if s.heldout_loss > accepted_score.heldout_loss + tol {
-                reasons.push(format!(
-                    "held-out loss {:.4} exceeds the accepted {:.4} + {tol}",
-                    s.heldout_loss, accepted_score.heldout_loss
-                ));
-            }
-            if let (Some(now), Some(before)) = (s.retention_loss, baseline.retention_loss) {
-                if now > before + cfg.retention_loss_tolerance {
-                    rejections.push(Rejection::EarlierLessonsLoss);
-                    reasons.push(format!(
-                        "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {}",
-                        cfg.retention_loss_tolerance
-                    ));
+                trainer.sync(&mut cand)?;
+                let train_loss = (losses / plan.len().max(1) as f64) as f32;
+                if let Some(p) = pending.take() {
+                    let (cand, scored) = p.scoring.join().map_err(|_| "Scoring a candidate failed")?;
+                    let j =
+                        Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                    j.judge(
+                        p.ci,
+                        p.focus,
+                        p.train_loss,
+                        cand,
+                        scored?,
+                        &accepted_score,
+                        &accepted_correct,
+                        &mut best,
+                        &mut records,
+                        observer,
+                    );
                 }
-            }
-            let lost_panel =
-                base_panel_correct.iter().zip(correct_set(&panel)).filter(|(b, n)| **b && !*n).count();
-            if lost_panel > 0 {
-                rejections.push(Rejection::EarlierAnswersLost);
-                reasons.push(format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced"));
-            }
-            let now_correct = correct_set(&report);
-            if cfg.protect_correct_answers {
-                let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
-                if lost > 0 {
-                    rejections.push(Rejection::AnswersLost);
-                    reasons.push(format!("lost {lost} held-out answer(s) the accepted model produced"));
-                }
-            }
-            // Bicameral education: keep the model using Dense. A candidate whose measured Dense
-            // contribution falls below the kept share of the accepted model's is rejected.
-            if let (Some(now), Some(before)) = (s.dense_reliance, accepted_score.dense_reliance) {
-                if before > 0.01 && now < cfg.keep_dense_reliance * before {
-                    rejections.push(Rejection::DenseUnused);
-                    reasons.push(format!(
-                        "Dense's contribution fell from {before:.4} to {now:.4} (held-out loss rise with Dense cut)"
-                    ));
+                let probes = &probes;
+                if trainer.on_gpu() {
+                    let scoring = scope.spawn(move || {
+                        let scored = score(&cand, probes, dense);
+                        (cand, scored)
+                    });
+                    pending = Some(Pending { ci, focus, train_loss, scoring });
+                } else {
+                    let scored = score(&cand, probes, dense)?;
+                    let j =
+                        Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                    j.judge(
+                        ci,
+                        focus,
+                        train_loss,
+                        cand,
+                        scored,
+                        &accepted_score,
+                        &accepted_correct,
+                        &mut best,
+                        &mut records,
+                        observer,
+                    );
                 }
             }
-            let eligible = reasons.is_empty();
-            let improves = s.exact_correct > accepted_score.exact_correct
-                || (s.exact_correct == accepted_score.exact_correct
-                    && s.heldout_loss < accepted_score.heldout_loss - cfg.min_loss_improvement);
-            if eligible && !improves {
-                rejections.push(Rejection::NoImprovement);
-                reasons.push(format!(
-                    "no meaningful improvement (same or fewer exact answers, held-out loss not {} lower)",
-                    cfg.min_loss_improvement
-                ));
+            if let Some(p) = pending.take() {
+                let (cand, scored) = p.scoring.join().map_err(|_| "Scoring a candidate failed")?;
+                let j = Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                j.judge(
+                    p.ci,
+                    p.focus,
+                    p.train_loss,
+                    cand,
+                    scored?,
+                    &accepted_score,
+                    &accepted_correct,
+                    &mut best,
+                    &mut records,
+                    observer,
+                );
             }
-            let better_than_best = best.as_ref().map_or(true, |(_, _, b, _, _)| {
-                s.exact_correct > b.exact_correct
-                    || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
-            });
-            let record = CandidateRecord {
-                epoch,
-                focus: focus_name(focus).into(),
-                train_loss: (losses / plan.len().max(1) as f64) as f32,
-                score: s.clone(),
-                eligible,
-                reasons,
-                rejections,
-                selected: false,
-                step: cand.step,
-            };
-            observer(&Event::Candidate(record.clone()));
-            records.push(record);
-            if eligible && improves && better_than_best {
-                best = Some((ci, cand, s, now_correct, report));
-            }
+            Ok(false)
+        })?;
+        if interrupted {
+            stopped = true;
+            break 'epochs;
         }
 
         let selected = best.map(|(ci, cand, s, correct, report)| {
