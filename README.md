@@ -40,7 +40,9 @@ cargo test --release
 
 This runs the golden-vector tests and checks the Rust Engine against the numpy reference on a
 real trained checkpoint (logits, KV-cached and uncached greedy generation, gradients, byte-exact
-checkpoint round trip). See [docs/STATUS.md](docs/STATUS.md) for what is and is not verified.
+checkpoint round trip). GPU training is behind the `gpu` feature:
+`cargo test --release --features gpu --test gpu` checks it against the CPU (set
+`YENDORY_GPU_SOFTWARE=1` to use a software GPU). See [docs/STATUS.md](docs/STATUS.md) for what is and is not verified.
 
 ## Principles
 

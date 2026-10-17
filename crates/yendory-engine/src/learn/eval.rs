@@ -158,7 +158,7 @@ type Indexed = Vec<(usize, Vec<Outcome>)>;
 
 /// Evaluates the given (normally held-out) items in parallel threads.
 pub fn evaluate(model: &Bicameral, items: &[&Item], abl: Ablation) -> Result<Report, String> {
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(items.len().max(1));
+    let threads = super::cpu_threads().min(items.len().max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<Result<Indexed, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)

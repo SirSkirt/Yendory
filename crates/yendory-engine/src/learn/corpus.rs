@@ -310,7 +310,7 @@ pub struct PretrainResult {
 
 /// Encodes documents into one token stream, each document followed by a blank line.
 fn encode_stream(model: &Bicameral, docs: &[String]) -> Result<Vec<TokenId>, String> {
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).max(1);
+    let threads = super::cpu_threads().max(1);
     let chunk = docs.len().div_ceil(threads).max(1);
     let parts: Vec<Result<Vec<TokenId>, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = docs

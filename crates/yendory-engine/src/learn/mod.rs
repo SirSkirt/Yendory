@@ -106,7 +106,7 @@ pub fn batch_loss_and_gradients(
     if rows.is_empty() {
         return Err("Empty training batch".into());
     }
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(rows.len());
+    let threads = cpu_threads().min(rows.len());
     let chunk = rows.len().div_ceil(threads);
     let parts: Vec<Result<Partial, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = rows
@@ -155,6 +155,22 @@ pub fn batch_loss_and_gradients(
 
 /// Where training steps run. The GPU is used only when the Engine is built with the `gpu`
 /// feature, the user chose it and a GPU could be opened; otherwise the CPU trains.
+static CPU_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Limits the CPU threads training, scoring and checks use (0: all of the processor's).
+pub fn set_cpu_threads(n: usize) {
+    CPU_THREADS.store(n, std::sync::atomic::Ordering::Release);
+}
+
+/// The CPU threads to use: the chosen limit, or every thread the processor has.
+pub fn cpu_threads() -> usize {
+    let all = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    match CPU_THREADS.load(std::sync::atomic::Ordering::Acquire) {
+        0 => all,
+        n => n.min(all),
+    }
+}
+
 static USE_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Train on the GPU (when there is one) or on the CPU.

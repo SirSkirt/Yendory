@@ -365,6 +365,29 @@ exam minimum; training settings are not part of it). A revised course always get
 An unchanged failed version gets **one** manual override (warned and recorded in the history);
 after that it must be revised. Failed and earlier runs are kept for comparison.
 
+## Training on the GPU (`gpu`, `learn::Trainer`)
+
+With the `gpu` feature (the Studio enables it), training steps can run on the graphics card
+through wgpu: DirectX 12 or Vulkan on Windows, Vulkan on Linux, Metal on macOS. Every training
+operation is a compute shader (forward and backward, the fused output layer and cross-entropy,
+AdamW with focus masks and gradient clipping); the model's forward pass is written once over a
+`Graph` trait that both the CPU tape and the GPU graph implement. Weights, gradients and AdamW
+state stay on the card during a run; they are copied back before every check and save.
+
+`learn::set_gpu_training(true)` chooses the GPU when one can be opened (the CPU otherwise);
+`learn::set_cpu_threads(n)` limits the CPU threads (0: all). Both processors work at once:
+
+- **Lessons**: every Foundation candidate of an epoch starts from the same accepted model, so
+  while the GPU trains the next candidate, a CPU thread scores the previous one. Candidates are
+  still judged in order.
+- **Reading**: at each check the GPU keeps reading while the CPU measures the checkpoint
+  (held-out losses, Dense reliance, samples). Each check is judged before the next one starts,
+  so the same checkpoints are accepted and early stopping happens at the same check.
+- Talking, exams and grading run on the CPU.
+
+Results equal the CPU's within float rounding (see docs/STATUS.md). `YENDORY_GPU_SOFTWARE=1`
+also allows a software GPU, for tests.
+
 ## Measurements (`Bicameral::measure`)
 
 For the brain visualizer and diagnostics, measured from a real forward pass of the last prompt

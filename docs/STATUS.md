@@ -30,6 +30,7 @@ has been checked, how, and what has not.
 | **Selectable vocabulary**: 32-bit token ids; hash-indexed tokenizer (equal to the original scanning encoder on 6,000 random strings); output layer + cross-entropy computed a few rows at a time (equal to the unfused path); a Nova-2-size model with a 100,000-word vocabulary and ids up to 70,130 recomputed by the numpy reference in CI; resizing keeps every existing logit bit-identical; vocabulary limits add slots only for learned words | logits within 7e-7, loss identical to 6 decimals |
 | Matrix kernels (`model/linalg.rs`: packed panels, 4×16 register tiles, 8-lane dot products; safe Rust, no dependencies): same products as plain loops, only the order of additions differs | all compatibility tests above pass unchanged; one core reaches ~14 GFLOP/s (SSE2) |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
+| **GPU training** (`--features gpu`, `tests/gpu.rs`, run in CI on a software GPU, lavapipe): loss, every gradient and two AdamW steps (Joint and Dense-only focus) against the CPU; reading and a Foundation lesson on the GPU, with the CPU checking at the same time | loss equal to 6 digits; gradients within 1.7e-6 (largest 2.6); weights within 5e-7; the same checkpoints, candidates and early stop as on the CPU |
 
 ## Yendory Studio (apps/studio)
 
@@ -47,6 +48,8 @@ CI (this container cannot reach their hosts). Not checked: the Windows installer
 
 ## Not verified
 
+- GPU training has not run on a real graphics card (only the software GPU in CI and in this
+  container); its speed on an RTX 2070 Super under DirectX 12 is still to be measured.
 - Nothing here has run on Android or in a Windows app. CI builds and tests the library on
   Ubuntu and Windows only.
 - Training dynamics over many steps (a long Rust run vs a long reference run). One gradient and

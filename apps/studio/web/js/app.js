@@ -149,8 +149,18 @@ let deviceInfo = null;
 function showDevice(d) {
   deviceInfo = d;
   $("deviceChoice").value = d.choice;
+  const threads = $("threadChoice");
+  if (threads.options.length !== d.cpuTotal) {
+    threads.replaceChildren(...[0, ...Array.from({ length: d.cpuTotal - 1 }, (_, i) => i + 1)].map(n => {
+      const o = document.createElement("option");
+      o.value = n;
+      o.textContent = n === 0 ? `All ${d.cpuTotal}` : String(n);
+      return o;
+    }));
+  }
+  threads.value = String(d.cpuThreads >= d.cpuTotal ? 0 : d.cpuThreads);
   $("deviceNote").textContent = d.trainingOn === "gpu"
-    ? `Training runs on ${d.gpu}. Talking, checks and exams run on the CPU.`
+    ? `Training runs on ${d.gpu}; at the same time the CPU scores lesson candidates and checks reading. Talking and exams run on the CPU.`
     : d.gpu ? `Training runs on the CPU (GPU available: ${d.gpu}).` : `Training runs on the CPU: no GPU found (${d.gpuError}).`;
   renderSizes();
 }
@@ -159,6 +169,10 @@ $("deviceChoice").addEventListener("change", safe(async () => {
   try { showDevice(await invoke("set_training_device", { choice: $("deviceChoice").value })); }
   catch (e) { if (deviceInfo) $("deviceChoice").value = deviceInfo.choice; throw e; }
 }, "Training device"));
+$("threadChoice").addEventListener("change", safe(async () => {
+  try { showDevice(await invoke("set_cpu_threads", { threads: Number($("threadChoice").value) })); }
+  catch (e) { if (deviceInfo) $("threadChoice").value = String(deviceInfo.cpuThreads); throw e; }
+}, "CPU threads"));
 function renderSizes() {
   const body = $("sizeTable").tBodies[0];
   body.replaceChildren(...sizes.map(s => {

@@ -417,23 +417,45 @@ struct DeviceInfo {
     gpu_error: Option<String>,
     /// Where training runs now.
     training_on: String,
+    /// CPU threads chosen (0: all) and the processor's total.
+    cpu_threads: usize,
+    cpu_total: usize,
 }
 
 fn settings_file(app: &AppHandle) -> Res<PathBuf> {
     Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("settings.json"))
 }
 
-fn device_choice(app: &AppHandle) -> String {
+fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
     settings_file(app)
         .ok()
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v.get("trainingDevice").and_then(|d| d.as_str()).map(String::from))
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn write_setting(app: &AppHandle, key: &str, value: serde_json::Value) -> Res<()> {
+    let mut settings = read_settings(app);
+    settings.insert(key.into(), value);
+    write_atomic(&settings_file(app)?, &serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
+}
+
+fn device_choice(app: &AppHandle) -> String {
+    read_settings(app)
+        .get("trainingDevice")
+        .and_then(|d| d.as_str())
+        .map(String::from)
         .unwrap_or_else(|| "auto".into())
 }
 
+fn thread_choice(app: &AppHandle) -> usize {
+    read_settings(app).get("cpuThreads").and_then(|d| d.as_u64()).unwrap_or(0) as usize
+}
+
 /// Applies a device choice and reports where training runs.
-fn apply_device(choice: &str) -> DeviceInfo {
+fn apply_device(choice: &str, threads: usize) -> DeviceInfo {
+    yendory_engine::learn::set_cpu_threads(threads);
     let gpu = yendory_engine::learn::gpu_name();
     let on_gpu = choice != "cpu" && gpu.is_ok();
     yendory_engine::learn::set_gpu_training(on_gpu);
@@ -442,13 +464,17 @@ fn apply_device(choice: &str) -> DeviceInfo {
         gpu: gpu.as_ref().ok().cloned(),
         gpu_error: gpu.err(),
         training_on: if on_gpu { "gpu".into() } else { "cpu".into() },
+        cpu_threads: threads,
+        cpu_total: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
     }
 }
 
 #[tauri::command]
 async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
-    let choice = device_choice(&app);
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice)).await.map_err(|e| e.to_string())
+    let (choice, threads) = (device_choice(&app), thread_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -457,15 +483,26 @@ async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: 
     if !["auto", "gpu", "cpu"].contains(&choice.as_str()) {
         return Err("Choose auto, gpu or cpu".into());
     }
-    write_atomic(
-        &settings_file(&app)?,
-        &serde_json::to_vec_pretty(&serde_json::json!({"trainingDevice": choice})).map_err(|e| e.to_string())?,
-    )?;
-    let info = tauri::async_runtime::spawn_blocking(move || apply_device(&choice)).await.map_err(|e| e.to_string())?;
+    write_setting(&app, "trainingDevice", choice.clone().into())?;
+    let threads = thread_choice(&app);
+    let info = tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+        .await
+        .map_err(|e| e.to_string())?;
     if info.choice == "gpu" && info.training_on != "gpu" {
         return Err(format!("No GPU can be used: {}", info.gpu_error.clone().unwrap_or_default()));
     }
     Ok(info)
+}
+
+/// Limits the CPU threads Yendory uses (0: all), e.g. to keep some free for other work.
+#[tauri::command]
+async fn set_cpu_threads(app: AppHandle, studio: State<'_, Studio>, threads: usize) -> Res<DeviceInfo> {
+    not_teaching(&studio)?;
+    write_setting(&app, "cpuThreads", threads.into())?;
+    let choice = device_choice(&app);
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1200,6 +1237,7 @@ pub fn run() {
             reading::read_corpus,
             training_device,
             set_training_device,
+            set_cpu_threads,
             courses::list_courses,
             courses::create_course,
             courses::course_detail,
