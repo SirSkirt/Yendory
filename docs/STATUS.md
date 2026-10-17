@@ -30,6 +30,7 @@ has been checked, how, and what has not.
 | **Selectable vocabulary**: 32-bit token ids; hash-indexed tokenizer (equal to the original scanning encoder on 6,000 random strings); output layer + cross-entropy computed a few rows at a time (equal to the unfused path); a Nova-2-size model with a 100,000-word vocabulary and ids up to 70,130 recomputed by the numpy reference in CI; resizing keeps every existing logit bit-identical; vocabulary limits add slots only for learned words | logits within 7e-7, loss identical to 6 decimals |
 | Matrix kernels (`model/linalg.rs`: packed panels, 4×16 register tiles, 8-lane dot products; safe Rust, no dependencies): same products as plain loops, only the order of additions differs | all compatibility tests above pass unchanged; one core reaches ~14 GFLOP/s (SSE2) |
 | **Nexus** (`tests/nexus.rs`): lessons with `Environment:` / `Action:` / `Result:` lines; marker characters in files and typed text removed; a small model taught a test-only environment looks before answering, reads the real result, changes the environment, and is refused a change without approval | pass; an untaught model takes no action |
+| **Flat epochs** (`tests/session.rs`): training continues from the best safe candidate through epochs that improve too little to be accepted; the accepted model then includes those epochs' steps; a candidate that loses an answer restores the best checkpoint | pass |
 | Step 19,000 (owner's lessons) — same checks | pass **locally only** (not published; see tests/compat/README.md) |
 | **GPU training** (`--features gpu`, `tests/gpu.rs`, run in CI on a software GPU, lavapipe): loss, every gradient and two AdamW steps (Joint and Dense-only focus) against the CPU; reading and a Foundation lesson on the GPU, with the CPU checking at the same time | loss equal to 6 digits; gradients within 1.7e-6 (largest 2.6); weights within 5e-7; the same checkpoints, candidates and early stop as on the CPU |
 
@@ -81,6 +82,38 @@ CI (this container cannot reach their hosts). Not checked: the Windows installer
    step-19,000 checkpoint was trained with `lessons.py`. The Engine implements `lessons.py`
    only; v1 code is not carried over. Parity with Nova's Foundation Training is listed in
    docs/LEARNING.md.
+
+## Under investigation
+
+### Vocabulary growth on a model that has already learned text
+
+When a lesson or reading adds word units, words the model had learned as characters become new
+tokens whose embedding and output rows start untrained. Measured with `examples/vocab_probe.rs`
+(1.2M model; owner's lesson 02A taught for 8 epochs with characters only; then the 35 words that
+lesson 02B adds, all of which occur in 02A, were grown; no training in between):
+
+| | 02A held-out, per token | 02A held-out, total (nats) |
+|---|---|---|
+| before growth | 1.325 (1,609 tokens) | 2,133 |
+| right after growth | 2.519 (1,081 tokens) | 2,723 (+28%) |
+| +1 epoch on 02A, with growth / without | 2.015 / 1.368 | 2,178 / 2,201 |
+| +8 epochs on 02A, with growth / without | 1.436 / 1.115 | 1,552 / 1,795 |
+
+Findings so far:
+
+- Growth costs a model about a quarter of what it knew about text containing the new words, at
+  once. Text it trains on again recovers within about one epoch and then does better than
+  without growth (fewer, more meaningful tokens). Text it does not see again (earlier lessons
+  without rehearsal) keeps the loss until those words are learned elsewhere.
+- Losses per token are not comparable across a vocabulary change (the same text has fewer
+  tokens afterwards). Within one session they are (the baseline is measured after growth), but
+  comparisons across sessions, e.g. a lesson's held-out loss before and after a later lesson
+  grew the vocabulary, mix two scales. A per-character measure would be comparable.
+
+Possible next steps (no change made yet; the architecture stays as it is): start a new word
+slot from what the model already knows about the word's characters instead of at random (an
+initialisation change in the trainer); report held-out loss per character alongside per token;
+rehearse earlier text after growth.
 
 ## Decisions still open
 

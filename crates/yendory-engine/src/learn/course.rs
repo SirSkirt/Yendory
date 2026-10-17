@@ -6,7 +6,7 @@
 //! right), not by whether some change was accepted. An attempt that does not pass is diagnosed
 //! (unstable, forgetting earlier lessons, not yet learned, or memorised without generalising)
 //! and the next attempt applies the remedy for that cause. See docs/LEARNING.md.
-use super::eval::evaluate;
+use super::eval::{evaluate, sample_per_kind};
 use super::lessons::{parse_lesson, Item, Kind};
 use super::session::{teach_with, Event, Rejection, Score, SessionConfig, SessionResult, Strategy};
 use crate::fingerprint::sha256_hex;
@@ -125,6 +125,13 @@ pub struct FileRecord {
     /// The pass mark this lesson was judged by.
     #[serde(default)]
     pub pass_mark: f32,
+    /// Learning progress apart from the pass mark: the share of the lesson's own (taught)
+    /// questions answered exactly right before and after this pass (a sample of up to 40 per
+    /// kind). A lesson can be learned from without its held-out questions reaching the pass mark.
+    #[serde(default)]
+    pub own_before: Option<f32>,
+    #[serde(default)]
+    pub own_after: Option<f32>,
 }
 fn first_pass() -> u32 {
     1
@@ -453,6 +460,8 @@ pub fn teach_course(
             pass,
             attempts: Vec::new(),
             pass_mark: cfg.pass_mark,
+            own_before: None,
+            own_after: None,
         };
         let duplicate =
             (pass == 1).then(|| seen.iter().find(|(h, _)| *h == sha256).map(|(_, n)| n.clone())).flatten();
@@ -481,6 +490,7 @@ pub fn teach_course(
                             .into(),
                     );
                 } else {
+                    record.own_before = own_rate(&current, &items).ok();
                     teach_lesson(
                         &mut current,
                         &mut archive,
@@ -495,6 +505,9 @@ pub fn teach_course(
                         on_learned,
                         stop,
                     )?;
+                    if !stopped {
+                        record.own_after = own_rate(&current, &items).ok();
+                    }
                     if record.outcome != FileOutcome::Passed && !stopped && record.error.is_none() {
                         record.outcome = if pass == 1 && cfg.retry.requeue {
                             queue.defer(index);
@@ -515,6 +528,15 @@ pub fn teach_course(
     }
     let files = finals.into_iter().flatten().collect();
     Ok(CourseResult { model: current, archive, files, stopped })
+}
+
+/// Share of the lesson's own training questions the model answers exactly right (up to 40 per
+/// kind, the same sample every time).
+pub(super) fn own_rate(model: &Bicameral, items: &[Item]) -> Result<f32, String> {
+    let taught: Vec<&Item> = items.iter().filter(|i| !i.held_out && i.kind != Kind::Prose).collect();
+    let sample = sample_per_kind(&taught, Some(40), 0x0_57A7);
+    let o = evaluate(model, &sample, Ablation::default())?.overall();
+    Ok(o.rate().unwrap_or(0.) as f32)
 }
 
 /// All attempts at one lesson in one pass. Sets `record.outcome` to Passed when the pass mark is

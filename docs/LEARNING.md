@@ -78,8 +78,11 @@ it, so it starts the lessons already knowing how English words and sentences go 
    128 tokens, batch 16, warmup then cosine learning rate).
 5. **Judge**: about 20 times over the run the held-out loss is measured on fixed held-out
    windows. A checkpoint is **accepted** only when it lowers the best held-out loss by at
-   least 0.002; every accepted checkpoint is saved. After 4 checks in a row without an
-   accepted checkpoint, reading stops early. The model returned is the best accepted
+   least 0.002; every accepted checkpoint is saved. Training continues through checks that are
+   not accepted (the best checkpoint is kept apart). After 6 checks in a row without an
+   accepted checkpoint, reading stops early. Each check scores at least 24 held-out windows
+   per corpus (192 shared between the corpora by default), so one corpus's result is not
+   decided by a handful of windows. The model returned is the best accepted
    checkpoint, or the original model (including its vocabulary) when none was accepted.
    Each check also records a greedy continuation of the start of a held-out document, written
    by the model, so progress can be read and not only measured.
@@ -145,14 +148,16 @@ never used when the model replies.
 
 ## Teaching sessions (`learn::session::teach`)
 
-One lesson at a time, starting from the accepted model.
+One lesson at a time. Two models are kept: the **accepted** model (the best validated
+checkpoint) and the **working** model that training continues from (weights, optimizer state
+and step). They are the same until an epoch is flat.
 
 1. Grow the vocabulary from the lesson's training text.
 2. Score the starting model (the **baseline**) on fixed probes chosen once for the session:
    held-out units of this lesson (up to 40 per kind), a panel of earlier-lesson held-out units
    (up to 8), and earlier-lesson held-out loss rows.
 3. For each epoch, build one batch plan (lesson units in a seeded order; with an archive, about
-   10% of rows rehearse earlier lessons). Then train candidates from the **accepted** model on
+   10% of rows rehearse earlier lessons). Then train candidates from the **working** model on
    that same plan:
    - Foundation on: **dense** (right), **transformer** (left), **interconnect**, **joint**.
      Only the optimizer's update mask differs; every pathway runs in every forward pass, and
@@ -164,10 +169,20 @@ One lesson at a time, starting from the accepted model.
    - every earlier-lesson panel answer the baseline produced is still produced;
    - (default on) every held-out answer of this lesson the accepted model produced is still produced.
 5. An eligible candidate **improves** when it gets more held-out answers exactly right, or the
-   same number with a lower held-out loss. The best improving candidate becomes the accepted
-   model. If none qualifies, the accepted model is kept.
-6. Stop after `patience` epochs (default 2) without a selection, or at the epoch limit.
-7. If nothing was ever selected, the original model is returned unchanged, including its
+   same number with a held-out loss at least 0.01 lower than the accepted model's
+   (`min_loss_improvement`). The best improving candidate becomes the accepted model and the
+   working model.
+6. **Flat epochs.** When no candidate improves enough but some are safe (eligible, only not
+   better enough yet), training continues from the best safe candidate: the epoch's learning
+   is kept in the working model, so improvement can build up over several epochs until it
+   passes the 0.01 threshold against the best checkpoint and is accepted. When no candidate is
+   safe (held-out loss rose more than 0.08, earlier lessons or answers lost, Dense unused), the
+   working model is **restored** to the accepted model. Each epoch records which it was
+   (`selected`, `continued`, `restored`, `flat_epochs`).
+7. Stop after `patience` flat epochs in a row (default 4; the Classroom's and a course's
+   "Flat epochs before stopping"), or at the epoch limit. The session's result is the
+   accepted model; training after the last accepted checkpoint is not kept.
+8. If nothing was ever accepted, the original model is returned unchanged, including its
    vocabulary and optimizer state.
 
 Every candidate of every epoch produces a `CandidateRecord` (focus, train loss, scores,
@@ -181,12 +196,12 @@ epoch in progress is discarded.
 | Neural Nova | Yendory Engine |
 |---|---|
 | Four complete-brain candidates (Dense / Transformer / Interconnect / Joint) cloned from the accepted checkpoint with optimizer state, same batches, only update masks differ | same |
-| Best eligible whole brain selected per epoch; rejected candidates discarded; lesson without improvement keeps its baseline | same |
+| Best eligible whole brain selected per epoch; rejected candidates discarded; lesson without improvement keeps its baseline | same, except that in a flat epoch training continues from the best safe candidate without accepting it (see Early stopping) |
 | Held-out loss tolerance 0.08 vs lesson-start baseline and last selection | same |
 | Earlier lessons' held-out loss tolerance (default 0.02) | same |
 | Earlier-lesson answer panel (4–8 units) must keep answers the baseline produced | same (8) |
 | Previously correct held-out answers must remain correct | same (`protect_correct_answers`, default on) |
-| Early stopping | `patience` epochs without selection (default 2) |
+| Early stopping | **changed**: training continues through flat epochs from the best safe candidate (the best checkpoint is kept apart); stop after 4 flat epochs in a row (configurable) |
 | Rehearsal of archived earlier lessons | ~10% of batch rows from the archive |
 | Autonomous probes: first character, 12-character prefix, self-conditioned likelihood (0.35 weight) | **not ported**: these were character-level measures of the v1 brain. The Engine scores full greedy replies and teacher-forced loss on word-unit tokens. |
 | Foundation V2 retries: gentler rate, then a changed strategy with 12 epochs, then both with 6 extra epochs | **replaced** by diagnosed retries: the remedy follows the cause (see Courses), and the rate is lowered only for unstable training; a lesson still not passed moves to the end of the queue |
@@ -248,7 +263,15 @@ ZIP is the frontend's job, `sort_files` orders by name). For every file the Engi
 - the outcome: `passed`, `deferred`, `unresolved`, `duplicate` (same content
   as an earlier file; not taught again), `failed` (with the reason, e.g. no held-out units or
   non-ASCII text; the course continues), or `stopped`;
-- the baseline and final scores.
+- the baseline and final scores;
+- **learning apart from the pass mark**: `own_before` / `own_after`, the share of the lesson's
+  own (taught) questions answered exactly right before and after (up to 40 per kind). Studio
+  shows held-out loss, held-out answers and own questions for every lesson, and points out
+  small held-out sets (fewer than 20 questions, each worth more than 5% of the score). A lesson
+  can be learned from without reaching its pass mark; the record shows both.
+
+Studio warns (and does not prevent) when a model that has not read anything is taught: without
+reading the model has no general English, so held-out questions that need it rarely pass.
 
 Learned files join the archive, so later files rehearse them and are guarded against forgetting them.
 

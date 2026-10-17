@@ -304,6 +304,9 @@ pub fn edit_course(app: AppHandle, id: String, edit: CourseEdit) -> Res<CourseVi
             if settings.time_limit_hours.is_some_and(|h| !(h > 0. && h <= 24. * 30.)) {
                 return Err("Choose a time limit of up to 720 hours".into());
             }
+            if !(1..=20).contains(&settings.flat_epochs) {
+                return Err("Choose 1 to 20 flat epochs".into());
+            }
             def.settings = settings;
         }
         CourseEdit::LessonPassMark { index, percent: p } => {

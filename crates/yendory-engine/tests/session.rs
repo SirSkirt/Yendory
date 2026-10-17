@@ -188,3 +188,45 @@ fn bicameral_education_stages_choose_candidates_and_measure_dense() {
     let r = teach(&start, &lesson, &archive, &plain, &mut |_| {}, &AtomicBool::new(false)).unwrap();
     assert!(r.baseline.dense_reliance.is_none());
 }
+
+/// Flat epochs: candidates that are safe but not better by the required amount are not thrown
+/// away. Training continues from the best of them (weights and Adam state), so improvement builds
+/// up over epochs until it is large enough to be accepted; the result is always the best
+/// accepted checkpoint.
+#[test]
+fn training_continues_through_flat_epochs() {
+    let text = std::fs::read_to_string(root().join("fixtures/lessons/sample_course_a.txt")).unwrap();
+    let lesson = parse_lesson(&text, "a.txt").unwrap();
+    let start = Bicameral::with_config(yendory_engine::Config::default(), 21);
+    // Slow steps and a threshold no single epoch reaches.
+    let cfg = SessionConfig {
+        epochs: 10,
+        foundation: false,
+        learning_rate: 2e-4,
+        min_loss_improvement: 0.3,
+        patience: 10,
+        eval_limit: Some(8),
+        ..SessionConfig::default()
+    };
+    let mut events = Vec::new();
+    let r =
+        teach(&start, &lesson, &[], &cfg, &mut |e| events.push(e.clone()), &AtomicBool::new(false)).unwrap();
+    let epochs: Vec<_> =
+        r.epochs.iter().map(|e| (e.selected.is_some(), e.continued.is_some(), e.flat_epochs)).collect();
+    println!("epochs (accepted, continued, flat): {epochs:?}");
+
+    let per_epoch = r.epochs[0].candidates[0].step - start.step;
+    // A flat stretch followed by an accepted epoch: the accepted model includes the flat
+    // epochs' training (it was not restarted from the last accepted model).
+    let flat = r.epochs.iter().position(|e| e.continued.is_some()).expect("a flat epoch");
+    let after = flat + r.epochs[flat..].iter().position(|e| e.selected.is_some()).expect("accepted after it");
+    let before_step = if flat == 0 { start.step } else { r.epochs[flat - 1].accepted_step };
+    for e in &r.epochs[flat..after] {
+        assert!(e.continued.is_some() && !e.restored, "flat epochs continue training");
+        assert_eq!(e.accepted_step, before_step, "nothing is accepted during the flat stretch");
+    }
+    assert_eq!(r.epochs[after].accepted_step, before_step + per_epoch * (after - flat + 1) as u64);
+    assert_eq!(r.epochs[after].flat_epochs, 0);
+    assert!(r.learned);
+    assert_eq!(r.final_score, r.epochs.last().unwrap().accepted_score);
+}

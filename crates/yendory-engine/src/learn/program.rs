@@ -237,6 +237,9 @@ pub enum ProgramEvent {
         name: String,
         outcome: FileOutcome,
         when_taught: f32,
+        /// The lesson's record: held-out and own-question progress apart from the pass mark.
+        #[serde(default)]
+        record: Option<Box<FileRecord>>,
     },
     Graded {
         after_attempt: u32,
@@ -368,6 +371,7 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         pass_mark: l.pass_mark,
         retry: RetryPolicy { retries: s.retries.min(3), requeue: s.requeue, ..RetryPolicy::default() },
         education: l.stage,
+        patience: s.flat_epochs.max(1),
         word_limit: opts.word_limit,
         seed,
         ..SessionConfig::default()
@@ -604,6 +608,8 @@ pub fn run_course(
                     pass,
                     attempts: Vec::new(),
                     pass_mark: lesson.pass_mark,
+                    own_before: super::course::own_rate(&current, &lesson.items).ok(),
+                    own_after: None,
                 };
                 let mut stopped = false;
                 let stage = lesson.stage;
@@ -630,6 +636,7 @@ pub fn run_course(
                 if let Some(e) = record.error.clone() {
                     return Err(format!("{}: {e}", lesson.name));
                 }
+                record.own_after = super::course::own_rate(&current, &lesson.items).ok();
                 if record.outcome != FileOutcome::Passed {
                     record.outcome = if pass == 1 && prep.settings.requeue {
                         run.queue.defer(index);
@@ -646,6 +653,7 @@ pub fn run_course(
                     name: lesson.name.clone(),
                     outcome: record.outcome,
                     when_taught: score,
+                    record: Some(Box::new(record.clone())),
                 });
                 run.records[index] = Some(record);
                 save(host, &current, &archive, run)?;

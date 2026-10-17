@@ -213,6 +213,7 @@
       <label>Batch size <input type="number" id="optBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="optRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
       <label>Pass mark (% of held-out questions exactly right) <input type="number" id="optPass" min="0" max="100" step="5" value="50"></label>
+      <label title="Training continues through epochs that improve too little to be accepted; the best checkpoint is kept and restored if training goes wrong">Flat epochs before stopping <input type="number" id="optFlat" min="1" max="20" value="4"></label>
       <label class="wide">Bicameral education (experimental)
         <select id="optEducation">
         <option value="off">Off: the whole brain learns together</option>
@@ -226,6 +227,7 @@
       <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
       <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
     </div>
+<p class="note warn" id="readFirstTeach" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
     <div class="actions">
       <button type="button" id="teach" class="primary">Teach</button>
       <button type="button" id="stopTeach" disabled>Stop</button>
@@ -298,6 +300,7 @@
         <label>Batch size <input type="number" id="cBatch" min="1" max="128"></label>
         <label>Learning rate <input type="number" id="cRate" min="0.000001" max="0.01" step="0.0001"></label>
         <label>Lesson retries (0-3) <input type="number" id="cRetries" min="0" max="3"></label>
+        <label>Flat epochs before stopping <input type="number" id="cFlat" min="1" max="20"></label>
         <label>Time limit (hours, empty = none) <input type="number" id="cTimeLimit" min="0.1" max="720" step="0.5"></label>
         <label class="check"><input type="checkbox" id="cFoundation"> Foundation: try each part of the lesson's stage on its own and together</label>
         <label class="check"><input type="checkbox" id="cRehearsal"> Rehearse earlier lessons</label>
@@ -326,6 +329,7 @@
         <tbody></tbody>
       </table>
       <div class="line-form"><select id="planAddCourse"></select><button type="button" id="planAdd">Add course</button></div>
+      <p class="note warn" id="readFirstPlan" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
       <div class="actions">
         <button type="button" id="planStart" class="primary">Start</button>
         <button type="button" id="planStop" disabled>Stop</button>

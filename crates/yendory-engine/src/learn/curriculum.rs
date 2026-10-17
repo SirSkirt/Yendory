@@ -214,6 +214,9 @@ pub struct CourseSettings {
     pub requeue: bool,
     /// Stop the plan when the course has taken longer than this.
     pub time_limit_hours: Option<f32>,
+    /// Epochs in a row without an accepted checkpoint before a lesson attempt ends; training
+    /// continues through them from the best safe candidate.
+    pub flat_epochs: u32,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -227,6 +230,7 @@ impl Default for CourseSettings {
             retries: 3,
             requeue: true,
             time_limit_hours: None,
+            flat_epochs: 4,
         }
     }
 }

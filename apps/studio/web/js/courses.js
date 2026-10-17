@@ -97,7 +97,7 @@ function showCourse(c) {
   $("cPretest").checked = c.pretest;
   const s = c.settings;
   $("cEpochs").value = s.epochs; $("cBatch").value = s.batch_size; $("cRate").value = s.learning_rate;
-  $("cRetries").value = s.retries; $("cTimeLimit").value = s.time_limit_hours ?? "";
+  $("cRetries").value = s.retries; $("cFlat").value = s.flat_epochs ?? 4; $("cTimeLimit").value = s.time_limit_hours ?? "";
   $("cFoundation").checked = s.foundation; $("cRehearsal").checked = s.rehearsal;
   $("cProtect").checked = s.protect_answers; $("cRequeue").checked = s.requeue;
   refreshCoursesQuiet();
@@ -131,7 +131,7 @@ for (const id of ["cExamMinOn", "cExamMin"]) $(id).addEventListener("change", sa
 $("cPretest").addEventListener("change", safe(() => edit({ type: "pretest", on: $("cPretest").checked }), "Pre-test"));
 for (const id of ["cEpochs", "cBatch", "cRate", "cRetries", "cTimeLimit", "cFoundation", "cRehearsal", "cProtect", "cRequeue"]) $(id).addEventListener("change", safe(() => edit({ type: "settings", settings: {
   epochs: Number($("cEpochs").value), batch_size: Number($("cBatch").value), learning_rate: Number($("cRate").value),
-  retries: Number($("cRetries").value), time_limit_hours: $("cTimeLimit").value === "" ? null : Number($("cTimeLimit").value),
+  retries: Number($("cRetries").value), flat_epochs: Number($("cFlat").value), time_limit_hours: $("cTimeLimit").value === "" ? null : Number($("cTimeLimit").value),
   foundation: $("cFoundation").checked, rehearsal: $("cRehearsal").checked, protect_answers: $("cProtect").checked, requeue: $("cRequeue").checked,
 } }), "Training settings"));
 
@@ -290,7 +290,7 @@ function onPlanEvent({ planId, event: e }) {
   if (e.type === "lesson_taught") {
     live.taught += e.outcome === "deferred" ? 0 : 1;
     $("planBar").style.width = (100 * Math.min(1, live.taught / Math.max(1, live.lessons))).toFixed(1) + "%";
-    planLog(`${e.name}: ${OUTCOME_LABEL[e.outcome] || e.outcome}, ${percent(e.when_taught)} of its evaluation questions right.`, OUTCOME_CLASS[e.outcome]);
+    planLog(`${e.name}: ${OUTCOME_LABEL[e.outcome] || e.outcome}, ${percent(e.when_taught)} of its evaluation questions right.${e.record && learningText(e.record) ? " " + learningText(e.record) + "." : ""}`, OUTCOME_CLASS[e.outcome]);
   } else if (e.type === "graded") {
     const g = e.grade;
     planLog(`${e.after_attempt ? `After remediation ${e.after_attempt}` : "Course grade"}: ${percent(g.grade)} (required ${percent(g.required)}) — ${g.passed ? "passed" : "not passed"}${g.failed_lessons.length ? `; below their mark: ${g.failed_lessons.join(", ")}` : ""}.`, g.passed ? "ok" : "warn");

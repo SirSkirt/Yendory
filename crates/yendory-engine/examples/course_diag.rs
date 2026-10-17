@@ -31,15 +31,20 @@ fn main() {
                 println!("[{:.0?}] file {index} attempt {attempt} lr {learning_rate} epochs {epochs} remedy {remedy:?}", t.elapsed())
             }
             CourseEvent::Diagnosed { attempt, diagnosis, .. } => println!("   diagnosed after {attempt}: {diagnosis:?}"),
+            CourseEvent::Session { event: Event::Candidate(c), .. } if !c.reasons.is_empty() => {
+                println!("      {} rejected: {:?}", c.focus, c.reasons)
+            }
             CourseEvent::Session { event: Event::Epoch(ep), .. } => println!(
-                "   epoch {} selected {:?} loss {:.3} exact {}/{}",
-                ep.epoch, ep.selected, ep.accepted_score.heldout_loss, ep.accepted_score.exact_correct, ep.accepted_score.exact_total
+                "   epoch {} selected {:?} continued {:?} restored {} loss {:.3} exact {}/{}",
+                ep.epoch, ep.selected, ep.continued, ep.restored, ep.accepted_score.heldout_loss, ep.accepted_score.exact_correct, ep.accepted_score.exact_total
             ),
             CourseEvent::FileFinished(f) => println!(
-                "== {} pass {} -> {:?}: {:?} -> {:?}",
+                "== {} pass {} -> {:?} (own questions {:?} -> {:?}): {:?} -> {:?}",
                 f.name,
                 f.pass,
                 f.outcome,
+                f.own_before,
+                f.own_after,
                 f.baseline.as_ref().map(|s| (s.heldout_loss, s.exact_correct, s.exact_total)),
                 f.final_score.as_ref().map(|s| (s.heldout_loss, s.exact_correct, s.exact_total))
             ),

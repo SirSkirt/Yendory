@@ -901,6 +901,9 @@ struct TeachOptions {
     retries: bool,
     #[serde(default = "yes")]
     requeue: bool,
+    /// Epochs in a row without an accepted checkpoint before a lesson attempt ends.
+    #[serde(default = "default_flat_epochs")]
+    flat_epochs: u32,
     /// Experimental bicameral education stage ("dense", "transformer", "cooperative").
     #[serde(default)]
     education: Option<String>,
@@ -918,6 +921,9 @@ fn education_stage(name: Option<&str>) -> Res<Option<EducationStage>> {
 }
 fn yes() -> bool {
     true
+}
+fn default_flat_epochs() -> u32 {
+    4
 }
 fn default_pass_percent() -> f32 {
     50.
@@ -937,8 +943,12 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     if !(1..=50).contains(&options.epochs)
         || !(1..=128).contains(&options.batch_size)
         || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
+        || !(1..=20).contains(&options.flat_epochs)
     {
-        return Err("Choose 1-50 epochs, a batch size of 1-128 and a learning rate up to 0.01".into());
+        return Err(
+            "Choose 1-50 epochs, a batch size of 1-128, a learning rate up to 0.01 and 1-20 flat epochs"
+                .into(),
+        );
     }
     let files = studio.lessons.lock().unwrap().clone();
     if files.is_empty() {
@@ -958,6 +968,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
         protect_correct_answers: options.protect_answers,
         pass_mark: (options.pass_percent / 100.).clamp(0., 1.),
+        patience: options.flat_epochs,
         retry: RetryPolicy {
             retries: if options.retries { 3 } else { 0 },
             requeue: options.requeue,

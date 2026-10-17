@@ -132,7 +132,8 @@ pub struct PretrainConfig {
     pub learning_rate: f32,
     /// Evaluate the held-out loss this many times over the run (at least).
     pub evaluations: usize,
-    /// Held-out windows scored at each evaluation.
+    /// Held-out windows scored at each evaluation (shared between the corpora of a mix, at
+    /// least 24 each, fewer only when a corpus's held-out text is shorter).
     pub eval_windows: usize,
     /// A checkpoint is accepted only if it lowers the best held-out loss by at least this much.
     pub min_loss_improvement: f32,
@@ -163,9 +164,9 @@ impl Default for PretrainConfig {
             window: 128,
             learning_rate: 1e-3,
             evaluations: 20,
-            eval_windows: 48,
+            eval_windows: 192,
             min_loss_improvement: 0.002,
-            patience: 4,
+            patience: 6,
             grow_vocabulary: true,
             max_words: 192,
             word_limit: None,
@@ -491,7 +492,8 @@ pub fn pretrain_mix(
         current.tokenizer.set_words(words);
     }
     let window = cfg.window.min(current.config.max_tokens);
-    let per_part_windows = (cfg.eval_windows / parts.len()).max(8);
+    // At least 24 windows per corpus, so one corpus's check is not decided by a few windows.
+    let per_part_windows = (cfg.eval_windows / parts.len()).max(24);
     let mut trains = Vec::new();
     let mut probes = Vec::new();
     let mut prompts = Vec::new();

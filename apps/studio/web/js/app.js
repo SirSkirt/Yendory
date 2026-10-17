@@ -78,6 +78,7 @@ function showActive(meta) {
   $("readWindow").max = meta.context;
   if (Number($("readWindow").value) > meta.context) $("readWindow").value = meta.context;
   const read = (meta.read || []).filter(r => r.accepted);
+  for (const id of ["readFirstTeach", "readFirstPlan"]) $(id).hidden = read.length > 0;
   $("activeReading").textContent = read.length
     ? read.map(r => `${r.corpus}: ${fmt(r.tokens)} tokens, held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`).join(" · ")
     : "nothing read yet";
@@ -161,7 +162,7 @@ function showDevice(d) {
   threads.value = String(d.cpuThreads >= d.cpuTotal ? 0 : d.cpuThreads);
   $("deviceNote").textContent = d.trainingOn === "gpu"
     ? `Training runs on ${d.gpu}; at the same time the CPU scores lesson candidates and checks reading. Talking and exams run on the CPU.`
-    : d.gpu ? `Training runs on the CPU (GPU available: ${d.gpu}).` : `Training runs on the CPU: no GPU found (${d.gpuError}).`;
+    : d.gpu ? `Training runs on the CPU (GPU available: ${d.gpu}).` : `Training runs on the CPU: ${/^no gpu found\.?$/i.test(d.gpuError || "") ? "no GPU found" : "no GPU can be used (" + d.gpuError + ")"}.`;
   renderSizes();
 }
 const deviceLabel = () => deviceInfo?.trainingOn === "gpu" ? ` · on ${deviceInfo.gpu}` : " · on the CPU";
@@ -350,6 +351,7 @@ $("teach").addEventListener("click", safe(async () => {
     rehearsal: $("optRehearsal").checked,
     protectAnswers: $("optProtect").checked,
     passPercent: Number($("optPass").value),
+    flatEpochs: Number($("optFlat").value),
     retries: $("optRetries").checked,
     requeue: $("optRequeue").checked,
     education: $("optEducation").value,
@@ -376,6 +378,27 @@ $("stopTeach").addEventListener("click", safe(async () => {
 
 const OUTCOME_CLASS = { passed: "ok", learned: "ok", progressed: "warn", deferred: "warn", kept_previous: "bad", unresolved: "bad", duplicate: "warn", failed: "bad", stopped: "warn" };
 const OUTCOME_LABEL = { passed: "passed", learned: "learned", progressed: "progressed, not passed", deferred: "not passed yet: moved to the end of the queue", kept_previous: "not learned; previous model kept", unresolved: "unresolved: attempts used up", duplicate: "duplicate", failed: "not taught", stopped: "stopped" };
+// What a lesson changed, apart from whether it passed: held-out loss and answers, and the
+// share of its own (taught) questions answered right. Small held-out sets are pointed out.
+function learningText(r) {
+  if (!r || !r.baseline || !r.final_score) return "";
+  const b = r.baseline, f = r.final_score, n = f.exact_total;
+  const parts = [`held-out loss ${b.heldout_loss.toFixed(3)} → ${f.heldout_loss.toFixed(3)}`,
+    `held-out answers ${b.exact_correct} → ${f.exact_correct} of ${n}`];
+  if (r.own_before != null && r.own_after != null)
+    parts.push(`own questions ${(100 * r.own_before).toFixed(0)}% → ${(100 * r.own_after).toFixed(0)}%`);
+  let s = "Learning: " + parts.join(" · ");
+  if (n > 0 && n < 20) s += ` · only ${n} held-out questions, each worth ${(100 / n).toFixed(0)}% of the score`;
+  return s;
+}
+// What an epoch decided: accepted, kept training through a flat epoch, or restored.
+function epochDecision(ep) {
+  if (ep.selected) return `accepted ${ep.selected}`;
+  const flat = ep.flat_epochs ? ` (flat epoch ${ep.flat_epochs})` : "";
+  if (ep.continued) return `not accepted yet; training continues from ${ep.continued}${flat}`;
+  if (ep.restored) return `no safe candidate; restored the best checkpoint${flat}`;
+  return `no candidate accepted${flat}`;
+}
 function scoreCell(s) { return s ? `${s.exact_correct}/${s.exact_total}` : "—"; }
 function onTeachEvent(e) {
   if (e.type === "file_started") {
@@ -420,6 +443,7 @@ function onTeachEvent(e) {
         const row = [...document.querySelectorAll(`[id="cand-${e.index}-${s.epoch}-${c.focus}"]`)].pop();
         if (!row) continue;
         if (c.selected) { row.classList.add("current-row"); row.lastChild.replaceChildren(el("b", { class: "ok" }, "selected")); }
+        else if (c.continued) row.lastChild.replaceChildren(el("span", { class: "warn" }, "training continues from this one (safe, not yet better enough to accept)"));
         else if (c.eligible && !c.reasons.length) row.lastChild.replaceChildren(el("span", {}, "eligible; another candidate was better"));
       }
       // The whole brain after this epoch (the accepted model): progress at a glance.
@@ -428,8 +452,8 @@ function onTeachEvent(e) {
         el("b", {}, `Whole brain after epoch ${s.epoch}: `),
         `exact ${scoreCell(a)} · held-out loss ${a.heldout_loss.toFixed(4)}`,
         a.dense_reliance == null ? "" : ` · transformer alone ${a.without_dense_loss.toFixed(4)} · Dense contribution ${a.dense_reliance.toFixed(3)}`,
-        ` · ${s.selected ? "kept " + s.selected : "no candidate kept"}`)));
-      log("INFO", `Epoch ${s.epoch}: ${s.selected ? "selected " + s.selected : "no candidate selected"}`);
+        ` · ${epochDecision(s)}`)));
+      log("INFO", `Epoch ${s.epoch}: ${epochDecision(s)}`);
     }
   } else if (e.type === "file_finished") {
     const cls = OUTCOME_CLASS[e.outcome] || "";
@@ -443,6 +467,7 @@ function onTeachEvent(e) {
       el("td", {}, e.name),
       el("td", {}, el("span", { class: cls }, label),
         e.attempts?.length ? el("div", { class: "note" }, `Pass mark ${Math.round(100 * (e.pass_mark ?? 0))}% · ${e.attempts.length} attempt(s)${e.pass > 1 ? ", second pass" : ""}: ` + e.attempts.map(a => `${a.passed ? "passed" : a.learned ? "improved" : "no change"}${a.because ? " after " + a.because.cause.replace("_", " ") : ""} (${(100 * a.final_score.exact_correct / Math.max(1, a.final_score.exact_total)).toFixed(0)}%)`).join(" → ")) : "",
+        learningText(e) ? el("div", { class: "note" }, learningText(e)) : "",
         e.error ? el("div", { class: "note" }, e.error) : ""),
       el("td", { class: "num" }, `${fmt(e.start_step)} → ${fmt(e.end_step)}`),
       el("td", { class: "num" }, `${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}`),
@@ -840,14 +865,15 @@ async function loadHistory() {
     if (r.type === "course_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Course ended with an error: " + r.error) : `Course ${r.stopped ? "stopped" : "finished"}.`);
     if (e?.type === "file_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),
       el("b", {}, e.name), ` — ${e.outcome.replace("_", " ")}${e.pass > 1 ? " (second pass)" : ""}, steps ${fmt(e.start_step)} → ${fmt(e.end_step)}, exact ${scoreCell(e.baseline)} → ${scoreCell(e.final_score)}, ${e.attempts?.length ?? 0} attempt(s)`, e.error ? ` (${e.error})` : "",
+      learningText(e) ? el("div", { class: "note" }, learningText(e)) : "",
       el("div", { class: "note mono" }, "sha256 " + e.sha256));
     if (e?.type === "session" && e.event.type === "epoch") {
       const ep = e.event;
       const d = el("details", { class: "record" }, el("summary", {}, el("span", { class: "when" }, when(r.time)),
-        `Epoch ${ep.epoch}: ${ep.selected ? "selected " + ep.selected : "no candidate selected"} · exact ${scoreCell(ep.accepted_score)} · held-out loss ${ep.accepted_score.heldout_loss.toFixed(4)}`));
+        `Epoch ${ep.epoch}: ${epochDecision(ep)} · exact ${scoreCell(ep.accepted_score)} · held-out loss ${ep.accepted_score.heldout_loss.toFixed(4)}`));
       const t = el("table", { class: "ledger compact" }, el("thead", {}, el("tr", {}, el("th", {}, "Candidate"), el("th", { class: "num" }, "Held-out loss"), el("th", { class: "num" }, "Exact"), el("th", {}, "Decision"))));
       const b = el("tbody");
-      for (const c of ep.candidates) b.append(el("tr", {}, el("td", {}, c.focus), el("td", { class: "num" }, c.score.heldout_loss.toFixed(4)), el("td", { class: "num" }, scoreCell(c.score)), el("td", {}, c.selected ? "selected" : (c.reasons.join("; ") || "eligible; another candidate was better"))));
+      for (const c of ep.candidates) b.append(el("tr", {}, el("td", {}, c.focus), el("td", { class: "num" }, c.score.heldout_loss.toFixed(4)), el("td", { class: "num" }, scoreCell(c.score)), el("td", {}, c.selected ? "selected" : c.continued ? "training continued from it (not yet accepted)" : (c.reasons.join("; ") || "eligible; another candidate was better"))));
       t.append(b);
       d.append(t);
       for (const [p, exp, got] of ep.sample_replies) d.append(el("p", { class: "note" }, `${p.replace(/\n/g, " ⏎ ")} → expected "${exp}", replied "${got}"`));

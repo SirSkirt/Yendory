@@ -2,13 +2,22 @@
 //! guards and checkpoint selection, with a typed record of every candidate in every epoch.
 //! The rules are written out in docs/LEARNING.md.
 //!
-//! Each epoch starts from the currently ACCEPTED complete model (weights, Adam state, step,
-//! tokenizer). With Foundation training on, four candidates are trained on identical batches —
-//! Right (Dense), Left (Transformer), Interconnect and Joint — differing only in which parameter
-//! group the optimizer may update; every pathway still runs in every forward pass. Each
-//! candidate is scored as a whole model; the best ELIGIBLE candidate that improves becomes the
-//! accepted model. When nothing qualifies, the accepted model is kept (rollback). Teacher answers
-//! are training targets and evaluation keys only; they are never given to the model at inference.
+//! Two models are kept: the ACCEPTED model (the best validated checkpoint) and the WORKING model
+//! that training continues from (weights, Adam state, step, tokenizer). With Foundation training
+//! on, four candidates are trained from the working model on identical batches — Right (Dense),
+//! Left (Transformer), Interconnect and Joint — differing only in which parameter group the
+//! optimizer may update; every pathway still runs in every forward pass. Each candidate is
+//! scored as a whole model; the best ELIGIBLE candidate that improves on the accepted model
+//! becomes the accepted model and the working model.
+//!
+//! A flat epoch (candidates safe, but none better than the accepted model by the required
+//! amount) does not throw the epoch's learning away: training continues from the best safe
+//! candidate, so improvement can build up over several epochs until it is large enough to be
+//! accepted. When no candidate is safe (held-out loss rose too far, earlier lessons or answers
+//! lost, Dense unused), the working model is restored to the accepted model. After `patience`
+//! epochs in a row without an accepted candidate the session ends, and the accepted model is
+//! the result. Teacher answers are training targets and evaluation keys only; they are never
+//! given to the model at inference.
 use super::eval::{evaluate, sample_per_kind, Report};
 use super::lessons::{grow_vocabulary, Item, Kind};
 use super::{batch_loss_and_gradients, encode_item, lr_schedule, Rng, Row};
@@ -32,7 +41,8 @@ pub struct SessionConfig {
     /// the accepted model's (the held-out loss gap when Dense's input to the transformer is cut).
     #[serde(default)]
     pub keep_dense_reliance: f32,
-    /// Stop after this many epochs in a row without a selected candidate.
+    /// Stop after this many epochs in a row without an accepted candidate ("flat epochs"; the
+    /// working model keeps training through them).
     pub patience: u32,
     /// Share of batch rows drawn from archived earlier lessons (when an archive exists).
     pub rehearsal_share: f32,
@@ -114,7 +124,7 @@ impl Default for SessionConfig {
             batch_size: 16,
             learning_rate: 1e-3,
             foundation: true,
-            patience: 2,
+            patience: 4,
             rehearsal_share: 0.10,
             eval_limit: Some(40),
             heldout_loss_tolerance: 0.08,
@@ -254,6 +264,9 @@ pub struct CandidateRecord {
     pub rejections: Vec<Rejection>,
     pub selected: bool,
     pub step: u64,
+    /// Not accepted, but training continued from it (the best safe candidate of a flat epoch).
+    #[serde(default)]
+    pub continued: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,6 +276,15 @@ pub struct EpochRecord {
     pub selected: Option<String>,
     pub accepted_step: u64,
     pub accepted_score: Score,
+    /// A flat epoch: the candidate training continued from (not accepted).
+    #[serde(default)]
+    pub continued: Option<String>,
+    /// No candidate was safe: the working model was restored to the accepted model.
+    #[serde(default)]
+    pub restored: bool,
+    /// Epochs in a row without an accepted candidate, this one included.
+    #[serde(default)]
+    pub flat_epochs: u32,
     /// A few held-out replies of the accepted model (prompt, expected, reply).
     pub sample_replies: Vec<(String, String, String)>,
 }
@@ -432,6 +454,7 @@ impl Judge<'_> {
         accepted_score: &Score,
         accepted_correct: &[bool],
         best: &mut Option<Best>,
+        plateau: &mut Option<Best>,
         records: &mut Vec<CandidateRecord>,
         observer: &mut dyn FnMut(&Event),
     ) {
@@ -509,6 +532,8 @@ impl Judge<'_> {
             s.exact_correct > b.exact_correct
                 || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
         });
+        // Safe, just not better enough yet: training may continue from it.
+        let safe = rejections == [Rejection::NoImprovement];
         let record = CandidateRecord {
             epoch,
             focus: focus_name(focus).into(),
@@ -519,11 +544,18 @@ impl Judge<'_> {
             rejections,
             selected: false,
             step: cand.step,
+            continued: false,
         };
         observer(&Event::Candidate(record.clone()));
         records.push(record);
+        let better_than_plateau = plateau.as_ref().map_or(true, |(_, _, b, _, _)| {
+            s.exact_correct > b.exact_correct
+                || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
+        });
         if eligible && improves && better_than_best {
             *best = Some((ci, cand, s, now_correct, report));
+        } else if safe && better_than_plateau {
+            *plateau = Some((ci, cand, s, now_correct, report));
         }
     }
 }
@@ -606,6 +638,9 @@ pub fn teach_with(
     let warmup = (total_steps / 10).clamp(1, 200);
 
     let mut accepted = start.clone();
+    // Where training continues from: the accepted model, or the best safe candidate of the last
+    // flat epochs (so improvement can build up until it is large enough to be accepted).
+    let mut working = start.clone();
     let mut accepted_score = baseline.clone();
     let mut accepted_correct = correct_set(&base_report);
     let mut learned = false;
@@ -664,13 +699,14 @@ pub fn teach_with(
 
         let mut records = Vec::new();
         let mut best: Option<Best> = None;
+        let mut plateau: Option<Best> = None;
         // With GPU training the CPU scores each candidate while the GPU trains the next one
-        // (every candidate of an epoch starts from the same accepted model). Candidates are
+        // (every candidate of an epoch starts from the same working model). Candidates are
         // still judged one by one in order, so the result is the same as scoring inline.
         let interrupted = std::thread::scope(|scope| -> Result<bool, String> {
             let mut pending: Option<Pending> = None;
             for (ci, &focus) in foci.iter().enumerate() {
-                let mut cand = accepted.clone();
+                let mut cand = working.clone();
                 let mut trainer = super::Trainer::new(&cand);
                 let mut losses = 0f64;
                 for (b, rows) in plan.iter().enumerate() {
@@ -705,6 +741,7 @@ pub fn teach_with(
                         &accepted_score,
                         &accepted_correct,
                         &mut best,
+                        &mut plateau,
                         &mut records,
                         observer,
                     );
@@ -729,6 +766,7 @@ pub fn teach_with(
                         &accepted_score,
                         &accepted_correct,
                         &mut best,
+                        &mut plateau,
                         &mut records,
                         observer,
                     );
@@ -746,6 +784,7 @@ pub fn teach_with(
                     &accepted_score,
                     &accepted_correct,
                     &mut best,
+                    &mut plateau,
                     &mut records,
                     observer,
                 );
@@ -757,8 +796,23 @@ pub fn teach_with(
             break 'epochs;
         }
 
+        let (mut continued, mut restored) = (None, false);
+        if best.is_none() {
+            match plateau.take() {
+                Some((ci, cand, _, _, _)) => {
+                    records[ci].continued = true;
+                    continued = Some(focus_name(foci[ci]).to_string());
+                    working = cand;
+                }
+                None => {
+                    restored = working.step != accepted.step;
+                    working = accepted.clone();
+                }
+            }
+        }
         let selected = best.map(|(ci, cand, s, correct, report)| {
             records[ci].selected = true;
+            working = cand.clone();
             accepted = cand;
             accepted_score = s;
             accepted_correct = correct;
@@ -783,6 +837,9 @@ pub fn teach_with(
             selected: selected.map(|(f, _)| f),
             accepted_step: accepted.step,
             accepted_score: accepted_score.clone(),
+            continued,
+            restored,
+            flat_epochs: stale,
             sample_replies,
         };
         observer(&Event::Epoch(record.clone()));
