@@ -19,3 +19,7 @@ bytemuck = { version = "1", optional = true, features = ["derive"] }
 
 [features]
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[[example]]
+name = "gpu_check"
+required-features = ["gpu"]
