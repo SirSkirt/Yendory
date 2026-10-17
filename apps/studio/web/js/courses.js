@@ -271,7 +271,7 @@ function onPlanEvent({ planId, event: e }) {
   $("planProgress").hidden = false;
   if (e.type === "course_started") {
     live.lessons = e.lessons; live.taught = 0;
-    $("planNow").textContent = `${e.name} · ${e.resumed ? "resumed" : "started"}`;
+    $("planNow").textContent = `${e.name} · ${e.resumed ? "resumed" : "started"}${deviceLabel()}`;
     planLog(`${e.resumed ? "Resumed" : "Started"} ${e.name} (${e.lessons} lessons).`);
   } else if (e.type === "pretest") {
     planLog(`Pre-test (ungraded): ${percent(e.score)}.`);

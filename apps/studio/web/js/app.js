@@ -136,13 +136,29 @@ function speedCell(s) {
     } finally { button.disabled = false; }
   }, "Measure speed") }, m ? "measure again" : "Measure");
   if (!m) return el("td", {}, el("span", { class: "note" }, "not measured "), button);
-  const perMillion = 1e6 / m.training / 60;
+  const onGpu = deviceInfo?.trainingOn === "gpu" && m.gpuTraining;
+  const perMillion = 1e6 / (onGpu ? m.gpuTraining : m.training) / 60;
   const reading = perMillion < 90 ? `${Math.ceil(perMillion)} min` : `${(perMillion / 60).toFixed(1)} h`;
   return el("td", {},
-    el("div", {}, `training ${fmt(Math.round(m.training))} tok/s · replies ${fmt(Math.round(m.generation))} tok/s `, button),
+    el("div", {}, `training: CPU ${fmt(Math.round(m.training))} tok/s`, m.gpuTraining ? ` · GPU ${fmt(Math.round(m.gpuTraining))} tok/s` : "", ` · replies ${fmt(Math.round(m.generation))} tok/s `, button),
     el("div", { class: "note", title: `Measured with ${m.threads} threads. Foundation lessons train four candidates, so an epoch takes about 4× as long as Joint-only.` },
-      `reading 1M tokens ≈ ${reading}`));
+      `reading 1M tokens ≈ ${reading}${onGpu ? " on the GPU" : ""}`));
 }
+// ---- training device -----------------------------------------------------------------------
+let deviceInfo = null;
+function showDevice(d) {
+  deviceInfo = d;
+  $("deviceChoice").value = d.choice;
+  $("deviceNote").textContent = d.trainingOn === "gpu"
+    ? `Training runs on ${d.gpu}. Talking, checks and exams run on the CPU.`
+    : d.gpu ? `Training runs on the CPU (GPU available: ${d.gpu}).` : `Training runs on the CPU: no GPU found (${d.gpuError}).`;
+  renderSizes();
+}
+const deviceLabel = () => deviceInfo?.trainingOn === "gpu" ? ` · on ${deviceInfo.gpu}` : " · on the CPU";
+$("deviceChoice").addEventListener("change", safe(async () => {
+  try { showDevice(await invoke("set_training_device", { choice: $("deviceChoice").value })); }
+  catch (e) { if (deviceInfo) $("deviceChoice").value = deviceInfo.choice; throw e; }
+}, "Training device"));
 function renderSizes() {
   const body = $("sizeTable").tBodies[0];
   body.replaceChildren(...sizes.map(s => {
@@ -329,7 +345,7 @@ $("teach").addEventListener("click", safe(async () => {
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
   $("progressEntry").hidden = false;
-  $("progressTitle").textContent = `Teaching ${active.name}`;
+  $("progressTitle").textContent = `Teaching ${active.name}${deviceLabel()}`;
   await invoke("teach", { options });
   setTeaching(true);
   say("Teaching started.");
@@ -578,7 +594,7 @@ $("read").addEventListener("click", safe(async () => {
   $("evalTable").tBodies[0].replaceChildren();
   $("readEntry").hidden = false;
   $("readBar").style.width = "0%";
-  $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}`;
+  $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}${deviceLabel()}`;
   $("readLine").textContent = "Preparing the corpora…";
   await invoke("read_corpus", { options });
   readStart = 0;
@@ -835,6 +851,7 @@ async function boot() {
   setTeaching(s.teaching);
   sizes = await invoke("model_sizes");
   renderSizes();
+  invoke("training_device").then(showDevice).catch(e => log("ERROR", e));
   await updateVocabNote();
   await refreshModels();
   await refreshLessons();

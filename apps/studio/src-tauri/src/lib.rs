@@ -395,6 +395,77 @@ struct Speed {
     generation: f64,
     threads: usize,
     time: u64,
+    /// Training tokens per second on the GPU (batches of 16 rows of 128 tokens, as reading
+    /// uses), when there is one.
+    #[serde(default)]
+    gpu_training: Option<f64>,
+    #[serde(default)]
+    gpu_name: Option<String>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Training device: the GPU (when there is one) or the CPU
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceInfo {
+    /// "auto", "gpu" or "cpu".
+    choice: String,
+    /// The GPU found, or why there is none.
+    gpu: Option<String>,
+    gpu_error: Option<String>,
+    /// Where training runs now.
+    training_on: String,
+}
+
+fn settings_file(app: &AppHandle) -> Res<PathBuf> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("settings.json"))
+}
+
+fn device_choice(app: &AppHandle) -> String {
+    settings_file(app)
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("trainingDevice").and_then(|d| d.as_str()).map(String::from))
+        .unwrap_or_else(|| "auto".into())
+}
+
+/// Applies a device choice and reports where training runs.
+fn apply_device(choice: &str) -> DeviceInfo {
+    let gpu = yendory_engine::learn::gpu_name();
+    let on_gpu = choice != "cpu" && gpu.is_ok();
+    yendory_engine::learn::set_gpu_training(on_gpu);
+    DeviceInfo {
+        choice: choice.into(),
+        gpu: gpu.as_ref().ok().cloned(),
+        gpu_error: gpu.err(),
+        training_on: if on_gpu { "gpu".into() } else { "cpu".into() },
+    }
+}
+
+#[tauri::command]
+async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
+    let choice = device_choice(&app);
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: String) -> Res<DeviceInfo> {
+    not_teaching(&studio)?;
+    if !["auto", "gpu", "cpu"].contains(&choice.as_str()) {
+        return Err("Choose auto, gpu or cpu".into());
+    }
+    write_atomic(
+        &settings_file(&app)?,
+        &serde_json::to_vec_pretty(&serde_json::json!({"trainingDevice": choice})).map_err(|e| e.to_string())?,
+    )?;
+    let info = tauri::async_runtime::spawn_blocking(move || apply_device(&choice)).await.map_err(|e| e.to_string())?;
+    if info.choice == "gpu" && info.training_on != "gpu" {
+        return Err(format!("No GPU can be used: {}", info.gpu_error.clone().unwrap_or_default()));
+    }
+    Ok(info)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -505,7 +576,31 @@ async fn measure_speed(app: AppHandle, studio: State<'_, Studio>, size: String) 
         }
         let generation = generated as f64 / t.elapsed().as_secs_f64();
         let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-        Ok(Speed { training, generation, threads, time: now() })
+        // GPU: batches of 16 rows of 128 tokens (reading's default), after one warm-up step.
+        let (gpu_training, gpu_name) = match yendory_engine::gpu::shared() {
+            Ok(gpu) => {
+                let long = m.tokenizer.encode(&text.repeat(8))?;
+                let n = 128.min(long.len() - 17);
+                let rows: Vec<Row> = (0..16)
+                    .map(|r| Row {
+                        ids: long[r..r + n].to_vec(),
+                        targets: long[r + 1..r + n + 1].to_vec(),
+                        mask: vec![1.; n],
+                    })
+                    .collect();
+                let mut g = yendory_engine::gpu::GpuModel::upload(&gpu, &m)?;
+                g.train_step(&m, &rows, Ablation::default(), 1e-4, Focus::Joint)?;
+                let t = std::time::Instant::now();
+                let mut steps = 0;
+                while steps < 3 || t.elapsed().as_secs_f64() < 1. {
+                    g.train_step(&m, &rows, Ablation::default(), 1e-4, Focus::Joint)?;
+                    steps += 1;
+                }
+                (Some((steps * rows.len() * n) as f64 / t.elapsed().as_secs_f64()), Some(gpu.name()))
+            }
+            Err(_) => (None, None),
+        };
+        Ok(Speed { training, generation, threads, time: now(), gpu_training, gpu_name })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1103,6 +1198,8 @@ pub fn run() {
             reading::download_corpus,
             reading::cancel_download,
             reading::read_corpus,
+            training_device,
+            set_training_device,
             courses::list_courses,
             courses::create_course,
             courses::course_detail,
