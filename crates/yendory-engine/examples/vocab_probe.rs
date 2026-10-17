@@ -3,7 +3,8 @@
 //! 2. Grow the vocabulary from lesson B, as teaching B would (new slots, random init).
 //! 3. Measure lesson A's held-out loss before and after the growth (no training between),
 //!    and how many of lesson A's tokens changed.
-//! 4. Teach lesson A again briefly and measure how fast it recovers.
+//! 4. Train on lesson A again and measure how fast it recovers.
+//!
 //! cargo run --release --example vocab_probe -- <lesson A> <lesson B> [epochs]
 use std::sync::atomic::AtomicBool;
 use yendory_engine::learn::lessons::grow_vocabulary;
