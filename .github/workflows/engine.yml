@@ -60,7 +60,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "apps/studio/src-tauri -> target"
-      - run: node --check apps/studio/web/js/app.js && node --check apps/studio/web/js/brain.js
+      - run: node --check apps/studio/web/js/app.js && node --check apps/studio/web/js/brain.js && node --check apps/studio/web/js/courses.js
       - run: cargo fmt --check
         working-directory: apps/studio/src-tauri
       - run: cargo clippy --all-targets -- -D warnings

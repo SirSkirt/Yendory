@@ -39,28 +39,9 @@ pub struct Source {
     pub fetch: Fetch,
 }
 
-const BABI: &[&str] = &[
-    "en-10k-qa1",
-    "en-10k-qa2",
-    "en-10k-qa3",
-    "en-10k-qa4",
-    "en-10k-qa5",
-    "en-10k-qa6",
-    "en-10k-qa7",
-    "en-10k-qa8",
-    "en-10k-qa9",
-    "en-10k-qa10",
-    "en-10k-qa11",
-    "en-10k-qa12",
-    "en-10k-qa13",
-    "en-10k-qa14",
-    "en-10k-qa15",
-    "en-10k-qa16",
-    "en-10k-qa17",
-    "en-10k-qa18",
-    "en-10k-qa19",
-    "en-10k-qa20",
-];
+/// Only task 1 of the 20 is available as data from the Hugging Face dataset viewer (the
+/// others answer "not found"; checked from a GitHub runner).
+const BABI: &[&str] = &["en-10k-qa1"];
 
 /// Children's books checked on gutenberg.org (number, title).
 const BOOKS: &[(u32, &str)] = &[
@@ -180,14 +161,14 @@ pub fn sources() -> Vec<Source> {
         },
         Source {
             id: "babi",
-            name: "bAbI reasoning tasks",
+            name: "bAbI task 1: where is someone",
             category: Category::Reasoning,
-            description: "20 kinds of short reasoning: where people and things are, counting, yes/no, deduction, paths, size and time order.",
+            description: "Short stories of people moving between rooms, then \"Where is ...?\" (10,000 questions). Only task 1 of the 20 bAbI tasks can be downloaded as data; the practice generator below covers similar reasoning (where things are, who has what, counting, yes/no, comparisons, deduction).",
             page: "https://huggingface.co/datasets/facebook/babi_qa",
             license: "CC BY 3.0",
             attribution: "bAbI tasks, Weston et al. (2015), Facebook AI Research",
-            size_mb: 60,
-            default_mb: 30,
+            size_mb: 3,
+            default_mb: 3,
             fetch: Fetch::HfRows { dataset: "facebook/babi_qa", configs: BABI, split: "train", convert: babi },
         },
         Source {
@@ -386,6 +367,10 @@ pub fn gutenberg_book(text: &str) -> Vec<String> {
     let mut cur = String::new();
     for para in body.replace("\r\n", "\n").split("\n\n") {
         let p = para.split_whitespace().collect::<Vec<_>>().join(" ");
+        // Illustration captions are not part of the text.
+        if p.starts_with("[Illustration") {
+            continue;
+        }
         if p.split(' ').count() < 4 {
             continue;
         }

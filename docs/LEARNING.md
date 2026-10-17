@@ -61,7 +61,7 @@ step-19,000 vocabulary word for word, and the published held-out scores of step 
   independent exam: lesson-matched held-out data is used to choose checkpoints. Keep genuinely
   unseen tests separate (Studio's Exams).
 
-## Reading: corpus pre-training (`learn::corpus::pretrain`)
+## Reading: corpus pre-training (`learn::corpus::pretrain`, `pretrain_mix`)
 
 Optional, before the lessons: the model reads ordinary text and learns next-token prediction on
 it, so it starts the lessons already knowing how English words and sentences go together.
@@ -84,10 +84,56 @@ it, so it starts the lessons already knowing how English words and sentences go 
    Each check also records a greedy continuation of the start of a held-out document, written
    by the model, so progress can be read and not only measured.
 
-Studio stores corpora with their SHA-256 fingerprint and records what each model read
-(`meta.json` `read`, and every check in `history.jsonl`). The built-in source is TinyStories
-(Hugging Face `roneneldan/TinyStories`), downloaded on the user's device and never redistributed
-by Yendory; any plain-text file can be used instead.
+### Reading a mix (`learn::corpus::pretrain_mix`)
+
+Several corpora can be read together. Each corpus has a **category** (stories and prose,
+knowledge, conversation, reasoning) and a **share**; every training batch comes from one corpus,
+chosen so that the batches follow the shares, interleaved (not one corpus after another, which
+would make the model forget the earlier ones). Each corpus keeps its own held-out documents:
+every check reports each corpus's held-out loss, Dense reliance and a sample written by the model
+(a conversation's sample starts at the model's first turn, `... N: `). A checkpoint is accepted
+when the share-weighted held-out loss improves.
+
+- **Joint** (conventional): the whole brain reads every corpus.
+- **Bicameral** (experimental): each corpus is read in the stage of its category; by default
+  knowledge in Stage A (Dense + interconnect), conversation and prose in Stage B (transformer),
+  reasoning in Stage C (cooperation). A checkpoint whose Dense contribution falls below half of
+  the best checkpoint's is not accepted, once that contribution is clearly above noise
+  (`GUARDED_RELIANCE`, 0.05; an untrained model's Dense reliance moves at random below it).
+  Every rejected check states why.
+
+### Sources
+
+Studio stores corpora with their SHA-256 fingerprint, category, licence and credit, and records
+what each model read (`meta.json` `read`, with every corpus's share, stage and licence; every
+check in `history.jsonl`). Everything is downloaded on the user's device and never redistributed
+by Yendory. Records are converted into Nova's format: conversations become `U:` / `N:` turns,
+problems a question and its worked answer. Formats, licences and reachability were checked from a
+GitHub runner, and CI downloads a little of every source (non-blocking).
+
+| Source | Category | Licence | Format |
+|---|---|---|---|
+| Simple English Wikipedia (2023-11, `wikimedia/wikipedia`) | knowledge | CC BY-SA 3.0, GFDL | title and paragraphs, up to the reference sections |
+| SODA (`allenai/soda`) | conversation | CC BY 4.0 | situation, then `U:` / `N:` turns |
+| Synthetic-Persona-Chat (`google/Synthetic-Persona-Chat`) | conversation | CC BY 4.0 | `U:` / `N:` turns, name placeholders filled |
+| bAbI task 1 (`facebook/babi_qa`) | reasoning | CC BY 3.0 | story so far, `U:` question, `N:` answer (only task 1 of 20 is available as data) |
+| GSM8K (`openai/grade-school-math`) | reasoning | MIT | question, worked steps, "The answer is N." |
+| ProofWriter (`tasksource/proofwriter`) | reasoning | CC BY 4.0 per AI2's release (the mirror states none) | facts and rules, statement, true / false / unknown |
+| 22 children's books (Project Gutenberg) | prose | public domain in the USA | a few paragraphs per document; Gutenberg header, licence and illustration captions removed |
+| TinyStories (`roneneldan/TinyStories`) | prose | CDLA-Sharing-1.0 | stories |
+
+DailyDialog was considered and left out: no data-only copy can be downloaded (its Hugging Face
+copy needs a loading script, the original link no longer serves the file). Large sources are
+downloaded in part ("first N MB"); Studio shows the total against a 1 GB budget.
+
+### Practice generated on the device (`learn::generate`)
+
+Question-and-answer text in Nova's format, with the reasoning written out: arithmetic, word
+problems, comparisons and ordering, if-then and all/some logic (including "we cannot tell"
+cases), small "who is where, who has what" worlds, and sequences; difficulty 1 to 3. Every
+answer is computed from the example itself (the sums are added, the world is simulated, the rule
+is followed), so it is correct by construction. It is read like any corpus (10% held out) and is
+never used when the model replies.
 
 ## Teaching sessions (`learn::session::teach`)
 

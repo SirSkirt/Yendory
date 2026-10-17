@@ -285,7 +285,14 @@ pub struct Evaluation {
     /// Each corpus's held-out loss, Dense reliance and sample (several when reading a mix).
     #[serde(default)]
     pub parts: Vec<PartEvaluation>,
+    /// Why the checkpoint was not accepted (None when accepted).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
+
+/// Dense's contribution is protected only once it is clearly above measurement noise: an
+/// untrained model's Dense reliance is a few hundredths of a nat and moves at random.
+pub const GUARDED_RELIANCE: f32 = 0.05;
 
 pub struct PretrainResult {
     /// The best accepted checkpoint; the input model unchanged when none was accepted.
@@ -566,11 +573,20 @@ pub fn pretrain_mix(
         if (step + 1) % eval_every == 0 || step + 1 == steps {
             let (held_out_loss, reliance, per) = check(&current)?;
             // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
-            let keeps_dense =
-                !bicameral || best_reliance <= 0.01 || reliance >= cfg.keep_dense_reliance * best_reliance;
-            let accepted = held_out_loss.is_finite()
-                && held_out_loss < best_loss - cfg.min_loss_improvement
-                && keeps_dense;
+            let keeps_dense = !bicameral
+                || best_reliance <= GUARDED_RELIANCE
+                || reliance >= cfg.keep_dense_reliance * best_reliance;
+            let improves = held_out_loss.is_finite() && held_out_loss < best_loss - cfg.min_loss_improvement;
+            let accepted = improves && keeps_dense;
+            let reason = if accepted {
+                None
+            } else if !improves {
+                Some(format!("not better than {best_loss:.4} by at least {}", cfg.min_loss_improvement))
+            } else {
+                Some(format!(
+                    "better, but Dense's contribution fell from {best_reliance:.3} to {reliance:.3} (bicameral guard)"
+                ))
+            };
             if accepted {
                 best_loss = held_out_loss;
                 best_reliance = reliance;
@@ -604,6 +620,7 @@ pub fn pretrain_mix(
                 sample_prompt: part_evals[0].sample_prompt.clone(),
                 sample: part_evals[0].sample.clone(),
                 parts: part_evals,
+                reason,
             };
             observer(&PretrainEvent::Evaluated(e.clone()));
             evaluations.push(e);

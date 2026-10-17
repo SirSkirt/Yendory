@@ -611,7 +611,7 @@ function onReadEvent(e) {
       el("td", { class: "num" }, e.train_loss.toFixed(4)),
       el("td", { class: "num" }, e.held_out_loss.toFixed(4)),
       el("td", { class: "num" }, (e.dense_reliance ?? 0).toFixed(3)),
-      el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, `not better than ${e.best_loss.toFixed(4)}`)),
+      el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, e.reason || `not better than ${e.best_loss.toFixed(4)}`)),
       el("td", { class: "sample" }, ...(e.parts?.length ? e.parts : [{ name: "", held_out_loss: e.held_out_loss, sample_prompt: e.sample_prompt, sample: e.sample }]).map(p =>
         el("div", { class: "part-line" }, p.name ? el("b", {}, `${CATEGORY[p.category] || ""}${p.name ? " · " + p.name : ""}: ${p.held_out_loss.toFixed(4)} `) : "",
           el("span", { class: "note" }, p.sample_prompt.replace(/\n/g, " ⏎ ")), " ", p.sample)))));

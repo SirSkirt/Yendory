@@ -263,8 +263,10 @@ table { border-collapse: collapse; width: 100%; }
 
 /* Reading sources and mix */
 .source-group h5 { margin: 14px 0 4px; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
-.family { display: inline-flex; gap: 6px; margin: 0 16px 6px 0; font-size: 14px; color: var(--ink); align-items: baseline; }
+.settings label.family { display: inline-flex; flex-direction: row; gap: 6px; margin: 0 16px 6px 0; font-size: 14px; color: var(--ink); align-items: baseline; }
+.source .note b { font: inherit; font-weight: 600; }
 .stage-map { display: flex; flex-wrap: wrap; gap: 10px 24px; }
 .stage-map label { min-width: 180px; }
 .ledger input[type=number].share { width: 4.5em; font: 14px var(--mono); padding: 2px; text-align: right; }
 .part-line { font-size: 13px; margin: 2px 0; overflow-wrap: anywhere; }
+.stage-map[hidden] { display: none; }

@@ -371,8 +371,12 @@ pub async fn generate_corpus(
             seed: now(),
         };
         let text = generate(&cfg)?;
-        let kinds: Vec<&str> = families.iter().map(|f| f.name()).collect();
-        let name = format!("Practice: {} (difficulty {difficulty}, {mb} MB)", kinds.join(", "));
+        let kinds = if families.len() == Family::ALL.len() {
+            "all kinds".to_string()
+        } else {
+            families.iter().map(|f| f.name()).collect::<Vec<_>>().join(", ")
+        };
+        let name = format!("Practice ({kinds}, difficulty {difficulty}, {mb} MB)");
         store(
             &app,
             &name,

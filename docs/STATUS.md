@@ -22,6 +22,7 @@ has been checked, how, and what has not.
 | Teaching session: four whole-model candidates per epoch from the same accepted model, deterministic for a seed, rollback leaves the model bit-identical, stop discards the epoch in progress | pass |
 | Courses: per-file SHA-256, steps, outcomes; duplicates not re-taught; a failing file does not end the course | pass |
 | Course Builder: file names give order, stage and role; exam questions, evaluation questions and training never overlap; practice leaks excluded; keyword and sentence grading; fingerprints and restart rules (`tests/program.rs`, `grading.rs`) | pass |
+| Reading a mix: batches follow the shares, per-corpus checks, bicameral stages train only their parts; generated practice is deterministic and its answers check out (`tests/corpus.rs`, `generate.rs`) | pass |
 | Course runs: pre-test, 70/30 grade, three remediation attempts with different strategies and halved learning rates, best checkpoint returned, stop and resume continue where they were | pass |
 | Measurements: tracing leaves outputs bit-identical; attention rows sum to 1; `no_right` equals `no_afferent` | pass |
 | **Size presets** 4M, 5M, 8M, 15M (Nova-2's 64 / 28.5 / 7.7% division): a briefly trained model of each, last-position logits, loss and 3,000 sampled gradients recomputed by the numpy reference (`examples/size_compat.rs` + `reference/check_sizes.py`, in CI) | logits within 2e-6, loss identical to 6 decimals, gradients within 3e-7 of the largest |
@@ -38,7 +39,11 @@ and live progress, per-file saving and records, conversation, exam grading with 
 warnings, the brain visualizer with live measurements, the Library record; a `.deb` package
 builds. Course Builder and Planner: a ZIP of Dense / Transformer / Co-op lessons with a practice
 file was read into a course (order, stages, practice and exam pool as expected), a plan taught it,
-graded it, started remediation, was stopped mid-remediation and resumed at the next lesson. Not checked: the Windows installer and Android APK on real devices (CI builds them).
+graded it, started remediation, was stopped mid-remediation and resumed at the next lesson.
+Reading sources: GSM8K downloaded and converted in the app; generated practice, a GSM8K and a
+prose corpus read together in bicameral mode (held-out loss 5.31 → 3.02, each corpus checked
+and recorded with its stage and licence). The other sources are downloaded and converted by
+CI (this container cannot reach their hosts). Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified
 
