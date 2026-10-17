@@ -55,4 +55,7 @@ fn main() {
     )
     .unwrap();
     println!("done in {:.0?}; model step {}", t.elapsed(), r.model.step);
+    if let Some(path) = std::env::var_os("SAVE") {
+        std::fs::write(path, r.model.to_bytes().unwrap()).unwrap();
+    }
 }

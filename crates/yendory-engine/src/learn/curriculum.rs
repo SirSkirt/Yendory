@@ -217,6 +217,14 @@ pub struct CourseSettings {
     /// Epochs in a row without an accepted checkpoint before a lesson attempt ends; training
     /// continues through them from the best safe candidate.
     pub flat_epochs: u32,
+    /// Judge this lesson's held-out answers by their net change (see
+    /// `SessionConfig::protect_answers_net`). Off: no answer may be lost.
+    pub protect_answers_net: bool,
+    /// Earlier lessons' held-out loss may rise by this share instead of a fixed 0.02
+    /// (see `SessionConfig::retention_relative`).
+    pub retention_relative: Option<f32>,
+    /// Earlier-lesson held-out units per kind for that loss.
+    pub retention_units: usize,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -231,6 +239,9 @@ impl Default for CourseSettings {
             requeue: true,
             time_limit_hours: None,
             flat_epochs: 4,
+            protect_answers_net: false,
+            retention_relative: None,
+            retention_units: 16,
         }
     }
 }

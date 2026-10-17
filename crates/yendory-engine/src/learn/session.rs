@@ -57,6 +57,18 @@ pub struct SessionConfig {
     pub retention_panel: usize,
     /// Held-out answers of THIS lesson that the accepted model gets right must stay right.
     pub protect_correct_answers: bool,
+    /// With `protect_correct_answers`: judge answers by their net change instead. A candidate is
+    /// rejected only when it loses more held-out answers the accepted model gave than it gains
+    /// (so gaining three and losing one is allowed). Off: no answer may be lost.
+    #[serde(default)]
+    pub protect_answers_net: bool,
+    /// Earlier lessons' held-out loss may rise by at most this share of its session baseline
+    /// (e.g. 0.03 = 3%) instead of the fixed `retention_loss_tolerance`.
+    #[serde(default)]
+    pub retention_relative: Option<f32>,
+    /// Earlier-lesson held-out units per kind used for that loss (more text, less noise).
+    #[serde(default = "default_retention_units")]
+    pub retention_units: usize,
     /// Grow learned word units from this lesson's training text (ids stay stable).
     pub grow_vocabulary: bool,
     /// Vocabulary limit (learned word units). `None`: the model's allocated slots. A larger
@@ -82,6 +94,9 @@ pub struct SessionConfig {
 }
 fn default_pass_mark() -> f32 {
     0.5
+}
+fn default_retention_units() -> usize {
+    16
 }
 fn default_min_loss_improvement() -> f32 {
     0.01
@@ -131,6 +146,9 @@ impl Default for SessionConfig {
             retention_loss_tolerance: 0.02,
             retention_panel: 8,
             protect_correct_answers: true,
+            protect_answers_net: false,
+            retention_relative: None,
+            retention_units: default_retention_units(),
             grow_vocabulary: true,
             education: None,
             keep_dense_reliance: 0.5,
@@ -485,12 +503,21 @@ impl Judge<'_> {
             ));
         }
         if let (Some(now), Some(before)) = (s.retention_loss, baseline.retention_loss) {
-            if now > before + cfg.retention_loss_tolerance {
+            let allowed = match cfg.retention_relative {
+                Some(share) => before * share,
+                None => cfg.retention_loss_tolerance,
+            };
+            if now > before + allowed {
                 rejections.push(Rejection::EarlierLessonsLoss);
-                reasons.push(format!(
-                    "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {}",
-                    cfg.retention_loss_tolerance
-                ));
+                reasons.push(match cfg.retention_relative {
+                    Some(share) => format!(
+                        "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {:.0}%",
+                        share * 100.
+                    ),
+                    None => {
+                        format!("earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {allowed}")
+                    }
+                });
             }
         }
         let lost_panel =
@@ -502,7 +529,16 @@ impl Judge<'_> {
         let now_correct = correct_set(&report);
         if cfg.protect_correct_answers {
             let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
-            if lost > 0 {
+            let gained = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| !**b && **n).count();
+            if cfg.protect_answers_net {
+                if lost > gained {
+                    rejections.push(Rejection::AnswersLost);
+                    reasons.push(format!(
+                        "lost {lost} held-out answer(s) the accepted model produced and gained {gained} (net -{})",
+                        lost - gained
+                    ));
+                }
+            } else if lost > 0 {
                 rejections.push(Rejection::AnswersLost);
                 reasons.push(format!("lost {lost} held-out answer(s) the accepted model produced"));
             }
@@ -607,7 +643,7 @@ pub fn teach_with(
     let per_kind = cfg.retention_panel.div_ceil(kinds.max(1));
     let mut panel_items = sample_per_kind(&archive_heldout, Some(per_kind), cfg.seed ^ 0xA5);
     panel_items.truncate(cfg.retention_panel);
-    let retention_items = sample_per_kind(&archive_heldout, Some(16), cfg.seed ^ 0x5A);
+    let retention_items = sample_per_kind(&archive_heldout, Some(cfg.retention_units), cfg.seed ^ 0x5A);
     let probes = Probes {
         heldout_rows: rows_of(&start, &probe_items, &mut rng)?,
         heldout_items: probe_items,
