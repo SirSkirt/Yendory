@@ -18,6 +18,8 @@
     clippy::excessive_precision
 )]
 pub mod fingerprint;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod learn;
 pub mod model;
 pub mod tokenizer;

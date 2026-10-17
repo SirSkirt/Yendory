@@ -88,6 +88,65 @@ struct Node {
     /// gradient straight into the caller's gradient buffer, so no weight is copied per row.
     param: Option<(usize, usize)>,
 }
+/// The operations the model's forward pass is written in. The CPU [`Tape`] and the GPU graph
+/// (`gpu::GpuGraph`) both implement them, so there is one definition of the network.
+pub(crate) trait Graph {
+    fn parameter(&mut self, name: &str, range: std::ops::Range<usize>) -> usize;
+    fn input(&mut self, x: Vec<f32>) -> usize;
+    /// A constant zero node shaped like `like` (ablations).
+    fn zeros_like(&mut self, like: usize) -> usize;
+    fn embed(&mut self, ids: &[usize], table: usize, d: usize) -> usize;
+    fn linear(&mut self, x: usize, w: usize, b: Option<usize>, in_dim: usize, out_dim: usize) -> usize;
+    fn add(&mut self, a: usize, b: usize) -> usize;
+    fn mul(&mut self, a: usize, b: usize) -> usize;
+    fn silu(&mut self, src: usize) -> usize;
+    fn sigmoid(&mut self, src: usize) -> usize;
+    fn norm(&mut self, src: usize, gain: usize, d: usize) -> usize;
+    fn rope_dim(&mut self, src: usize, heads: usize, d: usize, base: f32) -> usize;
+    /// Causal attention over sequences of `t` tokens.
+    fn attention(&mut self, q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize) -> usize;
+}
+
+impl Graph for Tape<'_> {
+    fn parameter(&mut self, name: &str, range: std::ops::Range<usize>) -> usize {
+        Tape::parameter(self, name, range)
+    }
+    fn input(&mut self, x: Vec<f32>) -> usize {
+        Tape::input(self, x)
+    }
+    fn zeros_like(&mut self, like: usize) -> usize {
+        let n = self.v(like).len();
+        Tape::input(self, vec![0.; n])
+    }
+    fn embed(&mut self, ids: &[usize], table: usize, d: usize) -> usize {
+        Tape::embed(self, ids, table, d)
+    }
+    fn linear(&mut self, x: usize, w: usize, b: Option<usize>, in_dim: usize, out_dim: usize) -> usize {
+        Tape::linear(self, x, w, b, in_dim, out_dim)
+    }
+    fn add(&mut self, a: usize, b: usize) -> usize {
+        Tape::add(self, a, b)
+    }
+    fn mul(&mut self, a: usize, b: usize) -> usize {
+        Tape::mul(self, a, b)
+    }
+    fn silu(&mut self, src: usize) -> usize {
+        Tape::silu(self, src)
+    }
+    fn sigmoid(&mut self, src: usize) -> usize {
+        Tape::sigmoid(self, src)
+    }
+    fn norm(&mut self, src: usize, gain: usize, d: usize) -> usize {
+        Tape::norm(self, src, gain, d)
+    }
+    fn rope_dim(&mut self, src: usize, heads: usize, d: usize, base: f32) -> usize {
+        Tape::rope_dim(self, src, heads, d, base)
+    }
+    fn attention(&mut self, q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize) -> usize {
+        Tape::attention(self, q, k, v, t, d, heads)
+    }
+}
+
 pub(crate) struct Tape<'a> {
     nodes: Vec<Node>,
     params: HashMap<String, usize>,

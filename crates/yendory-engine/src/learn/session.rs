@@ -534,6 +534,7 @@ pub fn teach_with(
         let mut best: Option<(usize, Bicameral, Score, Vec<bool>, Report)> = None;
         for (ci, &focus) in foci.iter().enumerate() {
             let mut cand = accepted.clone();
+            let mut trainer = super::Trainer::new(&cand);
             let mut losses = 0f64;
             for (b, rows) in plan.iter().enumerate() {
                 if stop.load(Ordering::Acquire) {
@@ -542,8 +543,7 @@ pub fn teach_with(
                 }
                 let step = (epoch as u64 - 1) * batches_per_epoch as u64 + b as u64;
                 let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1);
-                let (loss, grads) = batch_loss_and_gradients(&cand, rows, Ablation::default())?;
-                cand.adam_step(&grads, lr, focus)?;
+                let loss = trainer.step(&mut cand, rows, Ablation::default(), lr, focus)?;
                 losses += loss as f64;
                 observer(&Event::Batch {
                     epoch,
@@ -554,6 +554,7 @@ pub fn teach_with(
                     learning_rate: lr,
                 });
             }
+            trainer.sync(&mut cand)?;
             let (s, report, panel) = score(&cand, &probes, dense)?;
             let mut reasons = Vec::new();
             let mut rejections = Vec::new();

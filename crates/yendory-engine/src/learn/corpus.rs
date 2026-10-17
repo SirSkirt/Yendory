@@ -546,6 +546,7 @@ pub fn pretrain_mix(
     let mut tokens = 0u64;
     // Interleaving: each step takes the corpus furthest behind its share.
     let mut owed = vec![0f32; parts.len()];
+    let mut trainer = super::Trainer::new(&current);
     for step in 0..steps {
         if stop.load(Ordering::Acquire) {
             stopped = true;
@@ -559,18 +560,18 @@ pub fn pretrain_mix(
         let train = &trains[k];
         let rows: Vec<Row> =
             (0..cfg.batch_size).map(|_| window_row(train, rng.below(train.len() - window), window)).collect();
-        let (loss, grads) = batch_loss_and_gradients(&current, &rows, Ablation::default())?;
+        let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
+        let loss = trainer.step(&mut current, &rows, Ablation::default(), lr, focus_of(parts[k].stage))?;
         if !loss.is_finite() {
             return Err("Training diverged (loss is not finite); try a lower learning rate".into());
         }
-        let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
-        current.adam_step(&grads, lr, focus_of(parts[k].stage))?;
         tokens += tokens_per_step;
         since_eval += loss as f64;
         since_n += 1;
         observer(&PretrainEvent::Batch { step: step + 1, steps, tokens, loss, learning_rate: lr, part: k });
 
         if (step + 1) % eval_every == 0 || step + 1 == steps {
+            trainer.sync(&mut current)?;
             let (held_out_loss, reliance, per) = check(&current)?;
             // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
             let keeps_dense = !bicameral

@@ -11,7 +11,7 @@ pub mod lessons;
 pub mod program;
 pub mod session;
 
-use crate::model::{Ablation, Bicameral};
+use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
 pub use lessons::{grow_vocabulary, parse_lesson, Item, Kind, Segment};
@@ -151,6 +151,104 @@ pub fn batch_loss_and_gradients(
         *g = (*g as f64 / denom) as f32;
     }
     Ok(((loss / denom) as f32, grads))
+}
+
+/// Where training steps run. The GPU is used only when the Engine is built with the `gpu`
+/// feature, the user chose it and a GPU could be opened; otherwise the CPU trains.
+static USE_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Train on the GPU (when there is one) or on the CPU.
+pub fn set_gpu_training(on: bool) {
+    USE_GPU.store(on, std::sync::atomic::Ordering::Release);
+}
+
+pub fn gpu_training() -> bool {
+    USE_GPU.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// The GPU training would use ("NVIDIA GeForce RTX 2070 SUPER (Dx12)"), or why there is none.
+pub fn gpu_name() -> Result<String, String> {
+    #[cfg(feature = "gpu")]
+    {
+        crate::gpu::shared().map(|g| g.name())
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        Err("this build has no GPU support".into())
+    }
+}
+
+/// Runs training steps on the chosen device. On the GPU the model's weights live on the card
+/// between steps; [`Trainer::sync`] copies them back before the CPU reads them (checks,
+/// scoring, saving). On the CPU each step is `batch_loss_and_gradients` + `adam_step`.
+pub struct Trainer {
+    #[cfg(feature = "gpu")]
+    gpu: Option<crate::gpu::GpuModel>,
+    dirty: bool,
+}
+
+impl Trainer {
+    /// A trainer for `model`, on the GPU when GPU training is on and the model fits.
+    pub fn new(model: &Bicameral) -> Trainer {
+        #[cfg(feature = "gpu")]
+        if gpu_training() {
+            if let Ok(gpu) = crate::gpu::shared() {
+                if let Ok(m) = crate::gpu::GpuModel::upload(&gpu, model) {
+                    return Trainer { gpu: Some(m), dirty: false };
+                }
+            }
+        }
+        let _ = model;
+        Trainer {
+            #[cfg(feature = "gpu")]
+            gpu: None,
+            dirty: false,
+        }
+    }
+
+    pub fn on_gpu(&self) -> bool {
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu.is_some()
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            false
+        }
+    }
+
+    /// One step on a batch; returns its mean loss. On the GPU, `model`'s weights are not
+    /// updated until [`Trainer::sync`] (its step counter is).
+    pub fn step(
+        &mut self,
+        model: &mut Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        lr: f32,
+        focus: Focus,
+    ) -> Result<f32, String> {
+        #[cfg(feature = "gpu")]
+        if let Some(g) = self.gpu.as_mut() {
+            let loss = g.train_step(model, rows, abl, lr, focus)?;
+            model.step = g.step;
+            self.dirty = true;
+            return Ok(loss);
+        }
+        let (loss, grads) = batch_loss_and_gradients(model, rows, abl)?;
+        model.adam_step(&grads, lr, focus)?;
+        Ok(loss)
+    }
+
+    /// Brings `model` up to date with the GPU (nothing to do on the CPU).
+    pub fn sync(&mut self, model: &mut Bicameral) -> Result<(), String> {
+        #[cfg(feature = "gpu")]
+        if let (Some(g), true) = (self.gpu.as_ref(), self.dirty) {
+            g.download(model)?;
+        }
+        self.dirty = false;
+        let _ = model;
+        Ok(())
+    }
 }
 
 /// Appends one JSON line to a record file (epoch records, events). Records are plain data for

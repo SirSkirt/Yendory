@@ -16,6 +16,7 @@ pub use measure::{AblationEffects, Measurements};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
+pub(crate) use tape::Graph;
 pub use think::{Branch, Choice, Readout, ThinkOptions, ThinkingTree, ThoughtStep};
 
 /// Largest model the Engine creates or loads (1 billion parameters: 12 GB with the optimizer
@@ -330,23 +331,27 @@ impl Bicameral {
     fn slot(&self, name: &str) -> &Slot {
         &self.slots[*self.offsets.get(name).expect("missing Nova-2 parameter")]
     }
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    pub(crate) fn slot_range(&self, name: &str) -> Range<usize> {
+        self.slot(name).range.clone()
+    }
     pub(crate) fn val(&self, name: &str) -> &[f32] {
         &self.weights[self.slot(name).range.clone()]
     }
-    fn param(&self, t: &mut tape::Tape, name: &str) -> usize {
+    fn param<G: Graph>(&self, t: &mut G, name: &str) -> usize {
         t.parameter(name, self.slot(name).range.clone())
     }
-    fn norm(&self, t: &mut tape::Tape, h: usize, name: &str) -> usize {
+    fn norm<G: Graph>(&self, t: &mut G, h: usize, name: &str) -> usize {
         let g = self.param(t, name);
         t.norm(h, g, self.config.d)
     }
-    fn lin(&self, t: &mut tape::Tape, h: usize, name: &str, bias: Option<&str>) -> usize {
+    fn lin<G: Graph>(&self, t: &mut G, h: usize, name: &str, bias: Option<&str>) -> usize {
         let slot = self.slot(name);
         let w = self.param(t, name);
         let b = bias.map(|n| self.param(t, n));
         t.linear(h, w, b, slot.cols, slot.rows)
     }
-    fn block(&self, t: &mut tape::Tape, i: usize, h: usize, tokens: usize) -> usize {
+    fn block<G: Graph>(&self, t: &mut G, i: usize, h: usize, tokens: usize) -> usize {
         let c = &self.config;
         let p = |n: &str| format!("b{i}.{n}");
         let x = self.norm(t, h, &p("ln1"));
@@ -366,7 +371,7 @@ impl Bicameral {
         let down = self.lin(t, f, &p("w_down"), None);
         t.add(h, down)
     }
-    fn efferent(&self, t: &mut tape::Tape, z1: usize, h: usize, abl: Ablation) -> usize {
+    fn efferent<G: Graph>(&self, t: &mut G, z1: usize, h: usize, abl: Ablation) -> usize {
         let pre = self.lin(t, z1, "r.w2", Some("r.b2"));
         let pre = if abl.no_efferent {
             pre
@@ -377,12 +382,13 @@ impl Bicameral {
         };
         let z = t.silu(pre);
         if abl.no_right {
-            t.input(vec![0.; t.values(z).len()])
+            t.zeros_like(z)
         } else {
             z
         }
     }
-    fn inject(&self, t: &mut tape::Tape, h: usize, z: usize, n: &str, w: &str, b: &str, a: &str) -> usize {
+    #[allow(clippy::too_many_arguments)]
+    fn inject<G: Graph>(&self, t: &mut G, h: usize, z: usize, n: &str, w: &str, b: &str, a: &str) -> usize {
         let hn = self.norm(t, h, n);
         let gate = self.lin(t, hn, w, Some(b));
         let gate = t.sigmoid(gate);
@@ -391,24 +397,33 @@ impl Bicameral {
         t.add(h, fused)
     }
     fn forward(&self, t: &mut tape::Tape, ids: &[TokenId], feats: Vec<f32>, abl: Ablation) -> usize {
-        let h = self.forward_hidden(t, ids, feats, abl);
+        let h = self.forward_hidden(t, ids, feats, ids.len(), abl);
         let embed = self.param(t, "embed");
         let bias = self.param(t, "out_bias");
         t.linear(h, embed, Some(bias), self.config.d, self.config.vocab)
     }
     /// Everything up to the output layer: the final normalised left state of every position.
-    fn forward_hidden(&self, t: &mut tape::Tape, ids: &[TokenId], feats: Vec<f32>, abl: Ablation) -> usize {
+    /// `ids` may hold several sequences of `seq` tokens one after another (the GPU trains a
+    /// batch at once); attention and positions are per sequence.
+    pub(crate) fn forward_hidden<G: Graph>(
+        &self,
+        t: &mut G,
+        ids: &[TokenId],
+        feats: Vec<f32>,
+        seq: usize,
+        abl: Ablation,
+    ) -> usize {
         let c = &self.config;
         let tok = ids.iter().map(|&v| v as usize).collect::<Vec<_>>();
         let embed = self.param(t, "embed");
         let mut h = t.embed(&tok, embed, c.d);
         for i in 0..c.split {
-            h = self.block(t, i, h, ids.len());
+            h = self.block(t, i, h, seq);
         }
         let feat = t.input(feats);
         let z1 = self.lin(t, feat, "r.w1", Some("r.b1"));
         let z1 = t.silu(z1);
-        let z1 = if abl.no_right { t.input(vec![0.; t.values(z1).len()]) } else { z1 };
+        let z1 = if abl.no_right { t.zeros_like(z1) } else { z1 };
         if !abl.no_afferent {
             h = self.inject(t, h, z1, "c.n1", "c.g1w", "c.g1b", "c.a1");
         }
@@ -418,7 +433,7 @@ impl Bicameral {
                 h = self.inject(t, h, z2, "c.n2", "c.g2w", "c.g2b", "c.a2");
             }
             for i in c.split..c.blocks {
-                h = self.block(t, i, h, ids.len());
+                h = self.block(t, i, h, seq);
             }
             if round + 1 < c.loops {
                 z2 = self.efferent(t, z1, h, abl);
@@ -580,7 +595,7 @@ impl Bicameral {
         scale: f32,
     ) -> f32 {
         let mut t = tape::Tape::new(&self.weights, Some(grads));
-        let h = self.forward_hidden(&mut t, ids, features, abl);
+        let h = self.forward_hidden(&mut t, ids, features, ids.len(), abl);
         let targets = targets.iter().map(|&v| v as usize).collect::<Vec<_>>();
         let (embed, bias) = (self.param(&mut t, "embed"), self.param(&mut t, "out_bias"));
         let loss = t.head_xent(h, embed, bias, self.config.d, self.config.vocab, &targets, mask);
