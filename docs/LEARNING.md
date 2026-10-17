@@ -388,6 +388,53 @@ state stay on the card during a run; they are copied back before every check and
 Results equal the CPU's within float rounding (see docs/STATUS.md). `YENDORY_GPU_SOFTWARE=1`
 also allows a software GPU, for tests.
 
+## Yendory Nexus: actions and results (`nexus`)
+
+Nexus is how a model takes actions in an environment (tool calls, game moves, later code) and
+gets results back. It is part of the engine, not of the weights: a model file is unchanged and
+nothing in it says Nexus exists. An environment announces itself in the context, and a model
+uses it only if it was taught to. No tools or games ship yet; this is the infrastructure.
+
+**Markers.** Three ASCII control characters mark Nexus lines: `\x02` an environment's
+announcement, `\x05` an action the model writes, `\x06` a result Nexus writes. A turn looks
+like this (shown readably):
+
+```
+Environment: Room: A room with a lamp. Actions: look - see the lamp; switch <on|off> - ...
+U: is the lamp on?
+N: Action: look
+Result: The lamp is off.
+No, it is off.
+```
+
+Outside text never carries markers: typed messages, lesson and exam files and results are
+sanitized, and during generation the model cannot write a result or an announcement (an action
+marker counts only at the start of a line). Only the model itself can request an action.
+
+**Environments** implement `nexus::Environment` (`manifest`, `act`). A manifest names the
+environment, says whether it is a game or a tool set, and lists its actions, each with the
+access it needs: look, act or change. `Manifest::announcement` renders it in the one form
+lessons and live sessions share.
+
+**Permissions.** A rule per access: allow, ask or deny. Defaults: looking is allowed; acting
+is allowed in a game and asked with tools; changing anything is asked. Asking goes to an
+`Approver` (the person running the session); with no one to ask, the action is denied. A
+denied or unknown action is answered with a result (`not permitted: save`), so a model can
+learn from it.
+
+**Limits** per turn: 8 actions, 64 tokens per line, results cut at 400 characters. Every
+action is logged with its decision, result and time. Time limits and code sandboxing come
+with the code environment (a WebAssembly interpreter with fuel and memory limits).
+
+**Teaching.** In a Multi-Turn Conversation session, `Environment:`, `Action:` and `Result:`
+lines become marked lines. The model is trained on its action lines and replies, never on
+environment or result lines (loss weight 0: they come from the environment). Evaluation
+checks every action and reply with the lesson's own results before it.
+`tests/nexus.rs` teaches a small model a lamp environment that exists only in the test: it
+then looks before answering and reports the room's actual state, its switch changes the
+environment, saving is refused without approval and allowed with it, and without an
+announcement it does not act.
+
 ## Measurements (`Bicameral::measure`)
 
 For the brain visualizer and diagnostics, measured from a real forward pass of the last prompt

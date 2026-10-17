@@ -4,6 +4,8 @@
 //! - [`model`]: configuration, parameter layout, forward/backward, AdamW with training focus,
 //!   ablations, KV-cached generation and `.nnova2` checkpoints.
 //! - [`tokenizer`]: ASCII characters (ids 0..127) plus learned word units (ids 128..).
+//! - [`nexus`]: how a model takes actions in an environment and gets results back, with
+//!   permissions and limits (the environment announces itself; the model must be taught).
 //!
 //! The numpy reference in `reference/` is the specification; `tests/compat` holds the
 //! cross-implementation checks. Every output comes from the network; there are no canned replies.
@@ -22,6 +24,7 @@ pub mod fingerprint;
 pub mod gpu;
 pub mod learn;
 pub mod model;
+pub mod nexus;
 pub mod tokenizer;
 pub use model::size_presets;
 

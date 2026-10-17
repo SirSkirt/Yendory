@@ -1,6 +1,7 @@
 //! Unified Teacher Lesson files -> training items. Exact port of `reference/lessons.py`.
 //!
-//! Blocks: `[Dialogue Lesson]`, `[Understanding Lesson]`, `[Multi-Turn Conversation Lesson]`,
+//! Blocks: `[Dialogue Lesson]`, `[Understanding Lesson]`, `[Multi-Turn Conversation Lesson]`
+//! (sessions may include Nexus lines: `Environment:`, `Action:`, `Result:`),
 //! `[Reasoning Lesson]`. Text before `[examples]` is explanatory prose (`T: ` lines, lighter
 //! weight). About 10% of units in every block are held out by a stable hash of their text, so
 //! the same question never lands in both training and test. Nothing here runs at inference;
@@ -66,6 +67,31 @@ pub struct Item {
     pub key: Option<super::grading::AnswerKey>,
 }
 impl Item {
+    /// True for a conversation with Nexus lines (an environment, actions, results).
+    pub fn has_actions(&self) -> bool {
+        self.segments.iter().any(|s| crate::nexus::has_markers(&s.text))
+    }
+    /// The model's lines in a conversation (replies and actions), each with everything before it.
+    pub fn model_turns(&self) -> Vec<(String, &str)> {
+        let mut history = String::new();
+        let mut out = Vec::new();
+        for seg in &self.segments {
+            if seg.weight == 1.0 && !history.is_empty() {
+                out.push((history.clone(), seg.text.trim_end_matches('\n')));
+            }
+            history.push_str(&seg.text);
+        }
+        out
+    }
+    /// How many outcomes evaluating this item gives: one per conversation turn, else one.
+    pub fn outcome_count(&self) -> usize {
+        match self.kind {
+            Kind::Prose => 0,
+            Kind::Conversation if self.has_actions() => self.model_turns().len(),
+            Kind::Conversation => self.users.len().min(self.replies.len()),
+            _ => usize::from(self.prompt.is_some() && self.answer.is_some()),
+        }
+    }
     fn new(kind: Kind, source: &str, held_out: bool, segments: Vec<Segment>) -> Self {
         Item {
             kind,
@@ -220,6 +246,9 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
         return Err(format!("{source}: lessons must be ASCII text"));
     }
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Nexus markers come only from `Environment:`, `Action:` and `Result:` lines, never from
+    // the file's own characters.
+    let text = text.replace([crate::nexus::ENVIRONMENT, crate::nexus::ACTION, crate::nexus::RESULT], "");
     let mut items = Vec::new();
     for (name, body) in blocks(&text) {
         let Some(kind) = block_kind(name) else { continue };
@@ -275,6 +304,16 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
                             it.segments
                                 .push(Segment { text: format!("U: {said}\nN: "), weight: PROMPT_WEIGHT });
                             it.users.push(said.into());
+                        } else if who == "Environment" {
+                            // Written by the environment: context only, never trained on.
+                            it.segments
+                                .push(Segment { text: crate::nexus::environment_line(said), weight: 0. });
+                        } else if who == "Result" {
+                            it.segments.push(Segment { text: crate::nexus::result_line(said), weight: 0. });
+                        } else if who == "Action" {
+                            let line = crate::nexus::action_line(said);
+                            it.replies.push(line.trim_end_matches('\n').into());
+                            it.segments.push(Segment { text: line, weight: 1.0 });
                         } else {
                             it.segments.push(Segment { text: format!("{said}\n"), weight: 1.0 });
                             it.replies.push(said.into());

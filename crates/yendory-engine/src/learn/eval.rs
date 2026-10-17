@@ -87,6 +87,21 @@ fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outc
     let mut out = Vec::new();
     match it.kind {
         Kind::Prose => {}
+        Kind::Conversation if it.has_actions() => {
+            // Actions and replies are each checked with the lesson's own results before them.
+            for (history, expected) in it.model_turns() {
+                let got = crate::nexus::next_line(model, &history, MAX_REPLY_TOKENS, abl)?;
+                out.push(Outcome {
+                    kind: it.kind,
+                    source: it.source.clone(),
+                    prompt: crate::nexus::readable(&history),
+                    expected: crate::nexus::readable(expected),
+                    correct: got == expected,
+                    reply: crate::nexus::readable(&got),
+                    prefers_supported: None,
+                });
+            }
+        }
         Kind::Conversation => {
             let mut history = String::new();
             for (user, expected) in it.users.iter().zip(&it.replies) {

@@ -265,7 +265,7 @@ fn diagnose(
         let mut v = Vec::new();
         let mut o = report.outcomes.iter();
         for it in &training {
-            let turns = if it.kind == Kind::Conversation { it.users.len().min(it.replies.len()) } else { 1 };
+            let turns = it.outcome_count();
             let ok = (0..turns).filter_map(|_| o.next()).all(|x| x.correct);
             v.push(ok);
         }

@@ -458,7 +458,7 @@ fn remedy_session(
             // all its outcomes are.
             let mut outcomes = report.outcomes.iter();
             for (k, it) in questions.iter().enumerate() {
-                let n = if it.kind == Kind::Conversation { it.replies.len() } else { 1 };
+                let n = it.outcome_count();
                 let ok = outcomes.by_ref().take(n).all(|o| o.correct);
                 let copies = if ok { usize::from(k % 4 == 0) } else { 2 };
                 items.extend(std::iter::repeat((*it).clone()).take(copies));

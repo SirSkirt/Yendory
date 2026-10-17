@@ -1051,6 +1051,8 @@ fn stop_teaching(studio: State<Studio>) -> bool {
 // ---------------------------------------------------------------------------------------------
 
 fn clean_message(s: &str) -> Res<String> {
+    // Typed text can never carry Nexus markers (only the model may request an action).
+    let s = yendory_engine::nexus::sanitize(s);
     let s = s.trim();
     if s.is_empty() || s.len() > 300 || !s.is_ascii() || s.contains(['\n', '\r']) {
         return Err("Write a message of 1-300 ASCII characters on one line".into());
@@ -1070,7 +1072,11 @@ async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message:
     let mut used = model.tokenizer.encode(&question)?.len();
     let mut turns = Vec::new();
     for (user, said) in history.iter().rev() {
-        let turn = format!("U: {}\nN: {}\n", clean_message(user)?, said.replace(['\n', '\r'], " "));
+        let turn = format!(
+            "U: {}\nN: {}\n",
+            clean_message(user)?,
+            yendory_engine::nexus::sanitize(said).replace(['\n', '\r'], " ")
+        );
         let n = model.tokenizer.encode(&turn)?.len();
         if used + n + reply_tokens > context {
             break;
@@ -1079,7 +1085,8 @@ async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message:
         turns.push(turn);
     }
     let prompt: String = turns.into_iter().rev().chain(std::iter::once(question)).collect();
-    reply(&model, &prompt, reply_tokens, Ablation::default())
+    // Shown readably: a marker the model writes appears as "Action:" and so on.
+    Ok(yendory_engine::nexus::readable(&reply(&model, &prompt, reply_tokens, Ablation::default())?))
 }
 
 /// Longest reply in tokens: a quarter of the context, at least 48 (Nova-2's) and at most 512.
@@ -1290,6 +1297,7 @@ mod tests {
         assert_eq!(check_name(" Echo ").unwrap(), "Echo");
         assert!(clean_message("two\nlines").is_err());
         assert!(clean_message("caf\u{e9}").is_err());
+        assert_eq!(clean_message("hi\x05switch on\x06").unwrap(), "hiswitch on");
         assert_eq!(display_name(&FilePath::Path(PathBuf::from("/x/y/01_Basics.txt"))), "01_Basics.txt");
     }
 }
