@@ -490,6 +490,7 @@ function renderSources() {
           $("downloadTitle").textContent = `Downloading ${s.name}`;
           $("downloadBar").style.width = "0%";
           $("downloadLine").textContent = "Connecting…";
+          $("downloadNote").hidden = true;
           $("cancelDownload").hidden = false;
         }, "Download") }, "Download"),
         el("p", { class: "note" }, `${s.description} `, el("b", {}, "Licence: "), `${s.license}. `, el("b", {}, "Credit: "), `${s.attribution}. Source: ${s.page}`));
@@ -570,6 +571,16 @@ $("generate").addEventListener("click", safe(async () => {
 }, "Generate practice"));
 $("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
 function onDownload(e) {
+  if (!e.done && e.note != null) {
+    // Waiting for the server (rate limit, busy): shown beside the progress, which is kept.
+    $("downloadNote").textContent = e.note;
+    $("downloadNote").hidden = !e.note;
+    return;
+  }
+  if (e.done) {
+    $("downloadNote").textContent = e.note || "";
+    $("downloadNote").hidden = !e.note || !!e.error;
+  }
   if (!e.done) {
     $("downloadBar").style.width = e.total ? (100 * e.received / e.total).toFixed(1) + "%" : "50%";
     $("downloadLine").textContent = `${mb(e.received)}${e.total ? " of " + mb(e.total) : ""} received`;

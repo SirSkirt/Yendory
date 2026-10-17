@@ -190,33 +190,116 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// GETs JSON, retrying a few times when the server is busy or the connection drops.
-fn get_json(agent: &ureq::Agent, url: &str, cancel: &AtomicBool) -> Res<serde_json::Value> {
-    let mut wait = 2;
-    for attempt in 0..5 {
+/// Paces requests to one server: a gap between requests that widens when the server says
+/// "too many requests" (429), so a long download slows down instead of failing.
+pub struct Pacer {
+    gap: Duration,
+    last: Option<std::time::Instant>,
+}
+impl Pacer {
+    pub fn new() -> Self {
+        Pacer { gap: Duration::from_millis(1000), last: None }
+    }
+}
+
+/// Sleeps in short slices so a cancel is noticed. False if cancelled.
+fn wait_for(time: Duration, cancel: &AtomicBool) -> bool {
+    let until = std::time::Instant::now() + time;
+    while std::time::Instant::now() < until {
+        if cancel.load(Ordering::Acquire) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200).min(until - std::time::Instant::now()));
+    }
+    !cancel.load(Ordering::Acquire)
+}
+
+/// Rate limited: the server kept answering 429 after every wait.
+const RATE_LIMITED: &str = "the server is limiting downloads (too many requests)";
+
+/// GETs JSON at the pacer's speed. When the server answers 429 it waits as long as the server
+/// asks (Retry-After) or 30 s, doubling up to 5 minutes, for up to about 20 minutes, and
+/// slows later requests down. Busy servers (5xx) and dropped connections are retried too.
+/// `note` reports waiting (and `None` when downloading again).
+fn get_json(
+    agent: &ureq::Agent,
+    url: &str,
+    cancel: &AtomicBool,
+    pacer: &mut Pacer,
+    note: &mut dyn FnMut(Option<String>),
+) -> Res<serde_json::Value> {
+    let (mut limited_wait, mut limited_total) = (Duration::from_secs(30), Duration::ZERO);
+    let (mut busy_wait, mut busy_tries) = (Duration::from_secs(2), 0);
+    let mut waited = false;
+    loop {
+        if let Some(last) = pacer.last {
+            let next = last + pacer.gap;
+            let now = std::time::Instant::now();
+            if next > now && !wait_for(next - now, cancel) {
+                return Err("Download cancelled".into());
+            }
+        }
         if cancel.load(Ordering::Acquire) {
             return Err("Download cancelled".into());
         }
-        match agent.get(url).call() {
+        pacer.last = Some(std::time::Instant::now());
+        let mut request = agent.get(url);
+        if let Ok(token) = std::env::var("HF_TOKEN") {
+            if url.contains("huggingface.co") && !token.trim().is_empty() {
+                request = request.set("Authorization", &format!("Bearer {}", token.trim()));
+            }
+        }
+        let wait = match request.call() {
             Ok(r) => {
+                if waited {
+                    note(None);
+                }
                 let text = r.into_string().map_err(|e| format!("Download failed: {e}"))?;
                 return serde_json::from_str(&text).map_err(|e| format!("Download failed: {e}"));
             }
-            Err(ureq::Error::Status(code, _)) if code != 429 && code < 500 => {
+            Err(ureq::Error::Status(429, r)) => {
+                if limited_total >= Duration::from_secs(20 * 60) {
+                    return Err(format!("Download stopped: {RATE_LIMITED}. Try again later."));
+                }
+                let asked = r.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok());
+                let wait =
+                    asked.map(Duration::from_secs).unwrap_or(limited_wait).min(Duration::from_secs(600));
+                limited_wait = (limited_wait * 2).min(Duration::from_secs(300));
+                limited_total += wait;
+                pacer.gap = (pacer.gap * 2).clamp(Duration::from_secs(2), Duration::from_secs(10));
+                note(Some(format!(
+                    "The server asked to slow down (too many requests). Waiting {} s, then continuing more slowly.",
+                    wait.as_secs()
+                )));
+                wait
+            }
+            Err(ureq::Error::Status(code, _)) if code < 500 => {
                 return Err(format!("Download failed: the server answered {code} for {url}"))
             }
-            Err(e) if attempt == 4 => return Err(format!("Download failed: {e}")),
-            Err(_) => {
-                std::thread::sleep(Duration::from_secs(wait));
-                wait *= 2;
+            Err(e) => {
+                busy_tries += 1;
+                if busy_tries > 5 {
+                    return Err(format!("Download failed: {e}"));
+                }
+                note(Some(format!(
+                    "The server did not answer ({e}). Trying again in {} s.",
+                    busy_wait.as_secs()
+                )));
+                let w = busy_wait;
+                busy_wait *= 2;
+                w
             }
+        };
+        waited = true;
+        if !wait_for(wait, cancel) {
+            return Err("Download cancelled".into());
         }
     }
-    unreachable!()
 }
 
 /// Documents from a Hugging Face dataset, page by page (100 rows), until `limit` bytes. The
-/// limit is shared evenly between the configs (e.g. the 20 bAbI tasks).
+/// limit is shared evenly between the configs (e.g. the 20 bAbI tasks). If the server stops
+/// answering partway, what was downloaded is kept (marked as cut short).
 #[allow(clippy::too_many_arguments)]
 pub fn hf_documents(
     agent: &ureq::Agent,
@@ -227,17 +310,26 @@ pub fn hf_documents(
     limit: u64,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
+    note: &mut dyn FnMut(Option<String>),
 ) -> Res<(Vec<String>, bool)> {
     let mut docs = Vec::new();
     let mut truncated = false;
     let per_config = (limit / configs.len().max(1) as u64).max(1);
+    let mut pacer = Pacer::new();
     for config in configs {
         let (mut used, mut offset) = (0u64, 0u64);
         loop {
             let url = format!(
                 "https://datasets-server.huggingface.co/rows?dataset={dataset}&config={config}&split={split}&offset={offset}&length=100"
             );
-            let page = get_json(agent, &url, cancel)?;
+            let page = match get_json(agent, &url, cancel, &mut pacer, note) {
+                Ok(p) => p,
+                Err(e) if !docs.is_empty() && !cancel.load(Ordering::Acquire) => {
+                    note(Some(format!("{e} Keeping the {} documents downloaded so far.", docs.len())));
+                    return Ok((docs, true));
+                }
+                Err(e) => return Err(e),
+            };
             let rows = page.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
             if rows.is_empty() {
                 break;
@@ -318,11 +410,12 @@ pub fn source_text(
     limit: u64,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
+    note: &mut dyn FnMut(Option<String>),
 ) -> Res<(Vec<u8>, bool)> {
     let (docs, truncated) = match src.fetch {
         Fetch::Text(url) => return fetch(agent, url, limit, cancel, progress),
         Fetch::HfRows { dataset, configs, split, convert } => {
-            hf_documents(agent, dataset, configs, split, convert, limit, cancel, progress)?
+            hf_documents(agent, dataset, configs, split, convert, limit, cancel, progress, note)?
         }
         Fetch::JsonLines(url, convert) => jsonl_documents(agent, url, convert, limit, cancel, progress)?,
         Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, progress)?,
@@ -452,6 +545,8 @@ struct DownloadEvent {
     done: bool,
     error: Option<String>,
     corpus: Option<CorpusInfo>,
+    /// Why the download is waiting (rate limit, busy server), or a note on the result.
+    note: Option<String>,
 }
 
 #[tauri::command]
@@ -467,6 +562,7 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
         let emit = |e: DownloadEvent| {
             let _ = app.emit("corpus-download", e);
         };
+        let last_note = std::cell::RefCell::new(None::<String>);
         let mut progress = |received, total| {
             emit(DownloadEvent {
                 source: source.clone(),
@@ -475,10 +571,23 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
                 done: false,
                 error: None,
                 corpus: None,
+                note: None,
             })
         };
-        let result =
-            source_text(&agent(), &src, limit, &cancel, &mut progress).and_then(|(bytes, truncated)| {
+        let mut note = |n: Option<String>| {
+            last_note.replace(n.clone());
+            emit(DownloadEvent {
+                source: source.clone(),
+                received: 0,
+                total: None,
+                done: false,
+                error: None,
+                corpus: None,
+                note: Some(n.unwrap_or_default()),
+            })
+        };
+        let result = source_text(&agent(), &src, limit, &cancel, &mut progress, &mut note).and_then(
+            |(bytes, truncated)| {
                 let mb = bytes.len() as f64 / (1 << 20) as f64;
                 let name = if truncated {
                     format!("{} · first {mb:.0} MB", src.name)
@@ -492,13 +601,15 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
                     category: src.category,
                 };
                 store(&app, &name, &from, bytes, truncated)
-            });
+            },
+        );
         let (corpus, error) = match result {
             Ok(c) => (Some(c), None),
             Err(e) => (None, Some(e)),
         };
         app.state::<Studio>().downloading.store(false, Ordering::Release);
-        emit(DownloadEvent { source, received: 0, total: None, done: true, error, corpus });
+        let note = last_note.into_inner();
+        emit(DownloadEvent { source, received: 0, total: None, done: true, error, corpus, note });
     });
     Ok(())
 }
@@ -747,6 +858,48 @@ mod tests {
         format!("http://{addr}/stories.txt")
     }
 
+    /// A server that answers 429 (asking to wait 1 s) `limited` times, then serves JSON.
+    fn rate_limited(limited: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for i in 0..=limited {
+                let (mut s, _) = listener.accept().unwrap();
+                let mut req = [0u8; 1024];
+                let _ = s.read(&mut req);
+                let _ = if i < limited {
+                    write!(s, "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                } else {
+                    write!(
+                        s,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{{\"rows\":[]}}"
+                    )
+                };
+            }
+        });
+        format!("http://{addr}/rows")
+    }
+
+    #[test]
+    fn waits_out_rate_limits_and_slows_down() {
+        let local = ureq::AgentBuilder::new().build();
+        let mut pacer = Pacer::new();
+        let mut notes = Vec::new();
+        let started = std::time::Instant::now();
+        let page =
+            get_json(&local, &rate_limited(2), &AtomicBool::new(false), &mut pacer, &mut |n| notes.push(n))
+                .unwrap();
+        assert_eq!(page["rows"], serde_json::json!([]));
+        assert!(started.elapsed() >= Duration::from_secs(2), "it waited as the server asked");
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[0].as_deref().unwrap().contains("Waiting 1 s"));
+        assert_eq!(notes[2], None, "the note clears when downloading continues");
+        assert!(pacer.gap >= Duration::from_secs(2), "later requests are spaced further apart");
+        // Cancelling while waiting stops at once.
+        let cancel = AtomicBool::new(true);
+        assert!(get_json(&local, &rate_limited(5), &cancel, &mut Pacer::new(), &mut |_| {}).is_err());
+    }
+
     fn stories(n: usize) -> Vec<u8> {
         (0..n)
             .map(|i| format!("Story {i}: a cat found a hat.\n<|endoftext|>\n"))
@@ -780,7 +933,11 @@ mod tests {
                 Fetch::Gutenberg(_) => 200_000,
                 _ => 300_000,
             };
-            match source_text(&agent(), &src, limit, &AtomicBool::new(false), &mut |_, _| {}) {
+            match source_text(&agent(), &src, limit, &AtomicBool::new(false), &mut |_, _| {}, &mut |n| {
+                if let Some(n) = n {
+                    println!("{n}");
+                }
+            }) {
                 Ok((bytes, truncated)) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let corpus = Corpus::prepare(&text);
@@ -810,7 +967,8 @@ mod tests {
     fn tinystories_is_reachable() {
         let src = &sources()[0];
         let (bytes, truncated) =
-            source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+            source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}, &mut |_| {})
+                .unwrap();
         assert!(truncated);
         let corpus = Corpus::prepare(&String::from_utf8_lossy(&bytes));
         println!(

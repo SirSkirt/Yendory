@@ -126,6 +126,14 @@ DailyDialog was considered and left out: no data-only copy can be downloaded (it
 copy needs a loading script, the original link no longer serves the file). Large sources are
 downloaded in part ("first N MB"); Studio shows the total against a 1 GB budget.
 
+Hugging Face sources are read 100 rows per request through its dataset viewer, which limits
+how fast anyone may ask ("too many requests", HTTP 429). Studio spaces its requests (one a
+second), and when the server says to slow down it waits as long as the server asks (or 30 s,
+doubling up to 5 minutes, for up to 20 minutes), shows that it is waiting, and continues more
+slowly. If the server still refuses, the documents downloaded so far are kept (marked "first
+N MB"). A free Hugging Face access token in the `HF_TOKEN` environment variable raises the
+limit; it is sent only to huggingface.co.
+
 ### Practice generated on the device (`learn::generate`)
 
 Question-and-answer text in Nova's format, with the reasoning written out: arithmetic, word
