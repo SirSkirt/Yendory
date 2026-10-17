@@ -1,53 +1,17 @@
-//! Reading (corpus pre-training): corpora on this device, downloads, and the reading thread.
-//! Corpora are stored as <app data>/corpora/<id>.{txt,json}; the training itself is
-//! `yendory_engine::learn::corpus::pretrain`.
+//! Reading (corpus pre-training): corpora on this device, downloads and conversion, practice
+//! generated on this device, and the reading thread. Corpora are stored as
+//! <app data>/corpora/<id>.{txt,json}; the training itself is
+//! `yendory_engine::learn::corpus::pretrain_mix`.
 use super::*;
+use crate::sources::{gutenberg_book, sources, Convert, Fetch, Source};
 use std::time::Duration;
-use yendory_engine::learn::corpus::{pretrain, Corpus, PretrainConfig, PretrainEvent, END_OF_TEXT};
+use yendory_engine::learn::corpus::{
+    pretrain_mix, Category, Corpus, MixPart, PretrainConfig, PretrainEvent, END_OF_TEXT,
+};
+use yendory_engine::learn::generate::{generate, Family, GenerateConfig};
 
 /// Largest corpus kept on the device (downloads stop here; larger files are refused).
-pub const MAX_CORPUS_BYTES: u64 = 200 << 20;
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Source {
-    id: &'static str,
-    name: &'static str,
-    description: &'static str,
-    url: &'static str,
-    page: &'static str,
-    license: &'static str,
-    /// Full size of the file in MB (approximate); downloads can stop earlier.
-    size_mb: u64,
-    default_mb: u64,
-}
-
-pub fn sources() -> Vec<Source> {
-    const PAGE: &str = "https://huggingface.co/datasets/roneneldan/TinyStories";
-    const LICENSE: &str = "CDLA-Sharing-1.0 (see the dataset page)";
-    vec![
-        Source {
-            id: "tinystories-valid",
-            name: "TinyStories (validation file)",
-            description: "About 22,000 short stories in simple English, written for training very small language models.",
-            url: "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-valid.txt",
-            page: PAGE,
-            license: LICENSE,
-            size_mb: 19,
-            default_mb: 19,
-        },
-        Source {
-            id: "tinystories-train",
-            name: "TinyStories (training file)",
-            description: "The same kind of stories, about 2.1 million of them. Download only the first part you need.",
-            url: "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt",
-            page: PAGE,
-            license: LICENSE,
-            size_mb: 1900,
-            default_mb: 50,
-        },
-    ]
-}
+pub const MAX_CORPUS_BYTES: u64 = 400 << 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +29,25 @@ pub struct CorpusInfo {
     /// The download stopped at the size limit (the file continues beyond it).
     truncated: bool,
     added: u64,
+    /// What kind of text it is (for mixing and bicameral reading).
+    #[serde(default)]
+    category: Category,
+    /// How to credit the source.
+    #[serde(default)]
+    attribution: String,
+}
+
+/// One corpus of a reading, as recorded.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPartRecord {
+    name: String,
+    sha256: String,
+    category: Category,
+    share: f32,
+    stage: Option<EducationStage>,
+    license: String,
+    attribution: String,
 }
 
 /// What a model has read, kept in its metadata.
@@ -73,6 +56,12 @@ pub struct CorpusInfo {
 pub struct ReadRecord {
     corpus: String,
     sha256: String,
+    /// The corpora of a mixed reading, with their shares, stages and licences.
+    #[serde(default)]
+    parts: Vec<ReadPartRecord>,
+    /// "joint" or "bicameral".
+    #[serde(default)]
+    mode: String,
     tokens: u64,
     baseline_loss: f32,
     best_loss: f32,
@@ -96,14 +85,14 @@ fn corpus_path(app: &AppHandle, id: &str, ext: &str) -> Res<PathBuf> {
 }
 
 /// Checks and stores a corpus; the same text is stored once (its id is its fingerprint).
-fn store(
-    app: &AppHandle,
-    name: &str,
-    origin: &str,
-    license: &str,
-    bytes: Vec<u8>,
-    truncated: bool,
-) -> Res<CorpusInfo> {
+struct Provenance<'a> {
+    origin: &'a str,
+    license: &'a str,
+    attribution: &'a str,
+    category: Category,
+}
+
+fn store(app: &AppHandle, name: &str, from: &Provenance, bytes: Vec<u8>, truncated: bool) -> Res<CorpusInfo> {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let corpus = Corpus::prepare(&text);
     if corpus.train.is_empty() || corpus.held_out.is_empty() {
@@ -117,8 +106,10 @@ fn store(
     let info = CorpusInfo {
         id: sha256[..16].to_string(),
         name: name.to_string(),
-        origin: origin.to_string(),
-        license: license.to_string(),
+        origin: from.origin.to_string(),
+        license: from.license.to_string(),
+        attribution: from.attribution.to_string(),
+        category: from.category,
         bytes: text.len() as u64,
         sha256,
         documents: corpus.train.len() + corpus.held_out.len(),
@@ -199,9 +190,204 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+/// GETs JSON, retrying a few times when the server is busy or the connection drops.
+fn get_json(agent: &ureq::Agent, url: &str, cancel: &AtomicBool) -> Res<serde_json::Value> {
+    let mut wait = 2;
+    for attempt in 0..5 {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Download cancelled".into());
+        }
+        match agent.get(url).call() {
+            Ok(r) => {
+                let text = r.into_string().map_err(|e| format!("Download failed: {e}"))?;
+                return serde_json::from_str(&text).map_err(|e| format!("Download failed: {e}"));
+            }
+            Err(ureq::Error::Status(code, _)) if code != 429 && code < 500 => {
+                return Err(format!("Download failed: the server answered {code} for {url}"))
+            }
+            Err(e) if attempt == 4 => return Err(format!("Download failed: {e}")),
+            Err(_) => {
+                std::thread::sleep(Duration::from_secs(wait));
+                wait *= 2;
+            }
+        }
+    }
+    unreachable!()
+}
+
+/// Documents from a Hugging Face dataset, page by page (100 rows), until `limit` bytes. The
+/// limit is shared evenly between the configs (e.g. the 20 bAbI tasks).
+#[allow(clippy::too_many_arguments)]
+pub fn hf_documents(
+    agent: &ureq::Agent,
+    dataset: &str,
+    configs: &[&str],
+    split: &str,
+    convert: Convert,
+    limit: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Res<(Vec<String>, bool)> {
+    let mut docs = Vec::new();
+    let mut truncated = false;
+    let per_config = (limit / configs.len().max(1) as u64).max(1);
+    for config in configs {
+        let (mut used, mut offset) = (0u64, 0u64);
+        loop {
+            let url = format!(
+                "https://datasets-server.huggingface.co/rows?dataset={dataset}&config={config}&split={split}&offset={offset}&length=100"
+            );
+            let page = get_json(agent, &url, cancel)?;
+            let rows = page.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+            if rows.is_empty() {
+                break;
+            }
+            for r in &rows {
+                for d in convert(&r["row"]) {
+                    used += d.len() as u64 + 16;
+                    docs.push(d);
+                }
+            }
+            offset += rows.len() as u64;
+            progress(docs.iter().map(|d| d.len() as u64 + 16).sum::<u64>().min(limit), Some(limit));
+            let rows_total = page.get("num_rows_total").and_then(|n| n.as_u64()).unwrap_or(0);
+            if offset >= rows_total {
+                break;
+            }
+            if used >= per_config {
+                truncated = true;
+                break;
+            }
+        }
+    }
+    Ok((docs, truncated))
+}
+
+/// Documents from a JSON-lines file.
+fn jsonl_documents(
+    agent: &ureq::Agent,
+    url: &str,
+    convert: Convert,
+    limit: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Res<(Vec<String>, bool)> {
+    let (bytes, truncated) = fetch(agent, url, limit, cancel, progress)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut docs = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            docs.extend(convert(&v));
+        }
+    }
+    Ok((docs, truncated))
+}
+
+/// Documents from Project Gutenberg books, one book after another, until `limit` bytes.
+fn gutenberg_documents(
+    agent: &ureq::Agent,
+    books: &[(u32, &str)],
+    limit: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Res<(Vec<String>, bool)> {
+    let mut docs = Vec::new();
+    let mut used = 0u64;
+    for (i, (id, _)) in books.iter().enumerate() {
+        if used >= limit {
+            return Ok((docs, true));
+        }
+        if i > 0 {
+            std::thread::sleep(Duration::from_millis(500)); // be gentle with gutenberg.org
+        }
+        let url = format!("https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt");
+        let (bytes, _) = fetch(agent, &url, 8 << 20, cancel, &mut |_, _| {})?;
+        for d in gutenberg_book(&String::from_utf8_lossy(&bytes)) {
+            used += d.len() as u64 + 16;
+            docs.push(d);
+        }
+        progress(used.min(limit), Some(limit));
+    }
+    Ok((docs, false))
+}
+
+/// Downloads a source and converts it into documents (plain text sources are kept as they are).
+pub fn source_text(
+    agent: &ureq::Agent,
+    src: &Source,
+    limit: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Res<(Vec<u8>, bool)> {
+    let (docs, truncated) = match src.fetch {
+        Fetch::Text(url) => return fetch(agent, url, limit, cancel, progress),
+        Fetch::HfRows { dataset, configs, split, convert } => {
+            hf_documents(agent, dataset, configs, split, convert, limit, cancel, progress)?
+        }
+        Fetch::JsonLines(url, convert) => jsonl_documents(agent, url, convert, limit, cancel, progress)?,
+        Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, progress)?,
+    };
+    if docs.is_empty() {
+        return Err(format!("{}: nothing usable was downloaded", src.name));
+    }
+    let mut text = docs.join(&format!("\n{END_OF_TEXT}\n"));
+    text.push('\n');
+    Ok((text.into_bytes(), truncated))
+}
+
 #[tauri::command]
 pub fn corpus_sources() -> Vec<Source> {
     sources()
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FamilyInfo {
+    id: Family,
+    name: &'static str,
+}
+
+#[tauri::command]
+pub fn practice_families() -> Vec<FamilyInfo> {
+    Family::ALL.iter().map(|&f| FamilyInfo { id: f, name: f.name() }).collect()
+}
+
+/// Generates practice text on this device and stores it as a Reasoning corpus.
+#[tauri::command]
+pub async fn generate_corpus(
+    app: AppHandle,
+    families: Vec<Family>,
+    difficulty: u8,
+    mb: f32,
+) -> Res<CorpusInfo> {
+    if !(0.1..=200.).contains(&mb) || !(1..=3).contains(&difficulty) {
+        return Err("Choose 0.1 to 200 MB and a difficulty of 1 to 3".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = GenerateConfig {
+            families: families.clone(),
+            difficulty,
+            bytes: (mb * 1048576.) as usize,
+            seed: now(),
+        };
+        let text = generate(&cfg)?;
+        let kinds: Vec<&str> = families.iter().map(|f| f.name()).collect();
+        let name = format!("Practice: {} (difficulty {difficulty}, {mb} MB)", kinds.join(", "));
+        store(
+            &app,
+            &name,
+            &Provenance {
+                origin: "generated on this device",
+                license: "Generated on this device (no restrictions)",
+                attribution: "Yendory practice generator",
+                category: Category::Reasoning,
+            },
+            text.into_bytes(),
+            false,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -232,7 +418,7 @@ pub fn delete_corpus(app: AppHandle, studio: State<Studio>, id: String) -> Res<V
 }
 
 #[tauri::command]
-pub async fn import_corpus(app: AppHandle) -> Res<Option<CorpusInfo>> {
+pub async fn import_corpus(app: AppHandle, category: Option<Category>) -> Res<Option<CorpusInfo>> {
     let Some(path) = app.dialog().file().add_filter("Plain text (.txt)", &["txt"]).blocking_pick_file()
     else {
         return Ok(None);
@@ -240,7 +426,13 @@ pub async fn import_corpus(app: AppHandle) -> Res<Option<CorpusInfo>> {
     let name = display_name(&path);
     let bytes = read_picked(&app, &path, MAX_CORPUS_BYTES as usize)?;
     tauri::async_runtime::spawn_blocking(move || {
-        store(&app, &name, &name, "as supplied by you", bytes, false)
+        let from = Provenance {
+            origin: &name,
+            license: "as supplied by you",
+            attribution: "",
+            category: category.unwrap_or_default(),
+        };
+        store(&app, &name, &from, bytes, false)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -282,14 +474,20 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
             })
         };
         let result =
-            fetch(&agent(), src.url, limit, &cancel, &mut progress).and_then(|(bytes, truncated)| {
+            source_text(&agent(), &src, limit, &cancel, &mut progress).and_then(|(bytes, truncated)| {
                 let mb = bytes.len() as f64 / (1 << 20) as f64;
                 let name = if truncated {
                     format!("{} · first {mb:.0} MB", src.name)
                 } else {
                     src.name.to_string()
                 };
-                store(&app, &name, src.url, src.license, bytes, truncated)
+                let from = Provenance {
+                    origin: src.page,
+                    license: src.license,
+                    attribution: src.attribution,
+                    category: src.category,
+                };
+                store(&app, &name, &from, bytes, truncated)
             });
         let (corpus, error) = match result {
             Ok(c) => (Some(c), None),
@@ -309,16 +507,51 @@ pub fn cancel_download(studio: State<Studio>) {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadOptions {
-    corpus_id: String,
+    /// The corpora to read and their shares of the batches.
+    parts: Vec<ReadPart>,
     tokens: u64,
     batch_size: usize,
     learning_rate: f32,
     window: usize,
     grow_vocabulary: bool,
     max_words: usize,
-    /// Experimental bicameral education stage ("dense", "transformer", "cooperative").
+    /// "joint" (the whole brain reads everything) or "bicameral" (each category in its stage).
     #[serde(default)]
-    education: Option<String>,
+    mode: String,
+    /// Bicameral reading: the stage of each category ("dense", "transformer", "cooperative",
+    /// "off"); categories not listed use the defaults (knowledge → Dense, conversation →
+    /// Transformer, reasoning → Co-op, general → Transformer).
+    #[serde(default)]
+    stages: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPart {
+    corpus_id: String,
+    share: f32,
+}
+
+fn category_key(c: Category) -> &'static str {
+    match c {
+        Category::General => "general",
+        Category::Knowledge => "knowledge",
+        Category::Conversation => "conversation",
+        Category::Reasoning => "reasoning",
+    }
+}
+
+/// The stage a category is read in, in bicameral reading.
+fn stage_for(options: &ReadOptions, c: Category) -> Res<Option<EducationStage>> {
+    if options.mode != "bicameral" {
+        return Ok(None);
+    }
+    let default = match c {
+        Category::Knowledge => "dense",
+        Category::Reasoning => "cooperative",
+        Category::General | Category::Conversation => "transformer",
+    };
+    education_stage(Some(options.stages.get(category_key(c)).map(String::as_str).unwrap_or(default)))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -345,7 +578,18 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
                     and a window of at least 16 tokens (it is cut to the model's context)"
             .into());
     }
-    let info = load_info(&app, &options.corpus_id)?;
+    if options.parts.is_empty() || options.parts.len() > 12 {
+        return Err("Choose 1 to 12 corpora to read".into());
+    }
+    if options.parts.iter().any(|p| !(p.share.is_finite() && p.share > 0.)) {
+        return Err("Give every corpus a share above 0".into());
+    }
+    let mut infos = Vec::new();
+    for p in &options.parts {
+        let info = load_info(&app, &p.corpus_id)?;
+        let stage = stage_for(&options, info.category)?;
+        infos.push((info, p.share, stage));
+    }
     let (meta, model) = with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone())))?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching or reading".into());
@@ -359,14 +603,28 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         grow_vocabulary: options.grow_vocabulary,
         max_words: options.max_words,
         word_limit: meta.word_limit,
-        education: education_stage(options.education.as_deref())?,
         seed: now(),
         ..PretrainConfig::default()
     };
+    let mode = if options.mode == "bicameral" { "bicameral" } else { "joint" };
+    let records: Vec<ReadPartRecord> = infos
+        .iter()
+        .map(|(i, share, stage)| ReadPartRecord {
+            name: i.name.clone(),
+            sha256: i.sha256.clone(),
+            category: i.category,
+            share: *share,
+            stage: *stage,
+            license: i.license.clone(),
+            attribution: i.attribution.clone(),
+        })
+        .collect();
+    let corpora: Vec<&CorpusInfo> = infos.iter().map(|(i, _, _)| i).collect();
     append_history(
         &app,
         &meta.id,
-        serde_json::json!({"type": "reading_started", "time": now(), "corpus": info, "options": cfg}),
+        serde_json::json!({"type": "reading_started", "time": now(), "corpus": corpora.first(), "corpora": corpora,
+            "parts": records, "mode": mode, "options": cfg}),
     );
     let stop = studio.stop.clone();
     std::thread::spawn(move || {
@@ -374,15 +632,24 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         let id = meta.id.clone();
         let current = Arc::new(Mutex::new(meta.clone()));
         let run = || -> Res<ReadFinished> {
-            let path = corpus_path(&app, &info.id, "txt")?;
-            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            if sha256_hex(text.as_bytes()) != info.sha256 {
-                return Err(
-                    "The stored corpus does not match its fingerprint; download or import it again".into()
-                );
+            let mut parts = Vec::new();
+            for (info, share, stage) in &infos {
+                let path = corpus_path(&app, &info.id, "txt")?;
+                let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                if sha256_hex(text.as_bytes()) != info.sha256 {
+                    return Err(format!(
+                        "{}: the stored corpus does not match its fingerprint; download or import it again",
+                        info.name
+                    ));
+                }
+                parts.push(MixPart {
+                    name: info.name.clone(),
+                    category: info.category,
+                    corpus: Corpus::prepare(&text),
+                    share: *share,
+                    stage: *stage,
+                });
             }
-            let corpus = Corpus::prepare(&text);
-            drop(text);
             let mut observer = |e: &PretrainEvent| {
                 let _ = app.emit("read-event", e);
                 if !matches!(e, PretrainEvent::Batch { .. }) {
@@ -400,11 +667,14 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
                 }
                 Ok(())
             };
-            let r = pretrain(&model, &corpus, &cfg, &mut observer, &mut on_accepted, &stop)?;
+            let r = pretrain_mix(&model, &parts, &cfg, &mut observer, &mut on_accepted, &stop)?;
+            drop(parts);
             let mut meta = current.lock().unwrap().clone();
             meta.read.push(ReadRecord {
-                corpus: info.name.clone(),
-                sha256: info.sha256.clone(),
+                corpus: infos.iter().map(|(i, _, _)| i.name.as_str()).collect::<Vec<_>>().join(" + "),
+                sha256: infos[0].0.sha256.clone(),
+                parts: records.clone(),
+                mode: mode.into(),
                 tokens: r.tokens,
                 baseline_loss: r.baseline_loss,
                 best_loss: r.best_loss,
@@ -495,13 +765,48 @@ mod tests {
         assert!(cancelled.is_err());
     }
 
+    /// Downloads a little of every source through the real code path and shows what the model
+    /// will read (network; run in CI with `--ignored`).
+    #[test]
+    #[ignore]
+    fn sources_are_reachable_and_convert() {
+        let mut failed = Vec::new();
+        for src in sources() {
+            let limit = match src.fetch {
+                Fetch::Gutenberg(_) => 200_000,
+                _ => 300_000,
+            };
+            match source_text(&agent(), &src, limit, &AtomicBool::new(false), &mut |_, _| {}) {
+                Ok((bytes, truncated)) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    let corpus = Corpus::prepare(&text);
+                    let first = corpus.train.first().cloned().unwrap_or_default();
+                    println!(
+                        "OK {}: {} bytes, {} documents ({} held out), truncated {truncated}, {} dropped characters\n--- first document ---\n{}\n",
+                        src.id,
+                        bytes.len(),
+                        corpus.train.len() + corpus.held_out.len(),
+                        corpus.held_out.len(),
+                        corpus.dropped_chars,
+                        &first[..first.len().min(700)]
+                    );
+                    if corpus.train.is_empty() || corpus.held_out.is_empty() {
+                        failed.push(format!("{}: too few documents", src.id));
+                    }
+                }
+                Err(e) => failed.push(format!("{}: {e}", src.id)),
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
     /// Checks the real TinyStories download (network; run in CI with `--ignored`).
     #[test]
     #[ignore]
     fn tinystories_is_reachable() {
         let src = &sources()[0];
         let (bytes, truncated) =
-            fetch(&agent(), src.url, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+            source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
         assert!(truncated);
         let corpus = Corpus::prepare(&String::from_utf8_lossy(&bytes));
         println!(

@@ -108,3 +108,77 @@ fn a_corpus_without_held_out_documents_is_refused() {
         pretrain(&fresh(), &corpus, &quick(), &mut |_| {}, &mut |_| Ok(()), &AtomicBool::new(false)).is_err()
     );
 }
+
+/// Reading a mix: batches follow the shares, every corpus is checked on its own held-out text,
+/// and bicameral reading changes only the parts each corpus's stage may train.
+#[test]
+fn reading_a_mix_interleaves_and_checks_each_corpus() {
+    use yendory_engine::learn::corpus::{pretrain_mix, Category, MixPart};
+    use yendory_engine::learn::generate::{generate, Family, GenerateConfig};
+    use yendory_engine::learn::session::EducationStage;
+    use yendory_engine::Focus;
+    let reasoning = generate(&GenerateConfig {
+        families: vec![Family::Arithmetic, Family::World],
+        difficulty: 1,
+        bytes: 60_000,
+        seed: 2,
+    })
+    .unwrap();
+    let parts = |stages: [Option<EducationStage>; 2]| {
+        vec![
+            MixPart {
+                name: "stories".into(),
+                category: Category::General,
+                corpus: Corpus::prepare(&stories()),
+                share: 3.,
+                stage: stages[0],
+            },
+            MixPart {
+                name: "practice".into(),
+                category: Category::Reasoning,
+                corpus: Corpus::prepare(&reasoning),
+                share: 1.,
+                stage: stages[1],
+            },
+        ]
+    };
+    let start = fresh();
+    let mut batches = [0usize; 2];
+    let mut evaluated = Vec::new();
+    let r = pretrain_mix(
+        &start,
+        &parts([None, None]),
+        &quick(),
+        &mut |e| match e {
+            PretrainEvent::Batch { part, .. } => batches[*part] += 1,
+            PretrainEvent::Evaluated(ev) => evaluated.push(ev.clone()),
+            _ => {}
+        },
+        &mut |_| Ok(()),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(r.accepted && r.best_loss < r.baseline_loss);
+    let total = (batches[0] + batches[1]) as f64;
+    assert!((batches[0] as f64 / total - 0.75).abs() < 0.02, "{batches:?}");
+    let last = evaluated.last().unwrap();
+    assert_eq!(last.parts.len(), 2);
+    assert!(last.parts[1].sample_prompt.starts_with("U: ") && last.parts[1].sample_prompt.ends_with("N: "));
+    let weighted = 0.75 * last.parts[0].held_out_loss + 0.25 * last.parts[1].held_out_loss;
+    assert!((weighted - last.held_out_loss).abs() < 1e-4);
+
+    // Bicameral: both corpora in Stage A leave the transformer untouched.
+    let a = pretrain_mix(
+        &start,
+        &parts([Some(EducationStage::DenseKnowledge), Some(EducationStage::DenseKnowledge)]),
+        &PretrainConfig { grow_vocabulary: false, ..quick() },
+        &mut |_| {},
+        &mut |_| Ok(()),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    if a.accepted {
+        assert_eq!(a.model.group_values(Focus::Left), start.group_values(Focus::Left));
+        assert_ne!(a.model.group_values(Focus::Right), start.group_values(Focus::Right));
+    }
+}

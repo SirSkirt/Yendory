@@ -5,6 +5,7 @@ pub mod corpus;
 pub mod course;
 pub mod curriculum;
 pub mod eval;
+pub mod generate;
 pub mod grading;
 pub mod lessons;
 pub mod program;

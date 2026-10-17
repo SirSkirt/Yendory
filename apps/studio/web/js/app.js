@@ -435,62 +435,109 @@ function onTeachFinished(f) {
 // ---- reading (corpus pre-training) ---------------------------------------------------------
 let sourcesList = [];
 let corporaList = [];
+let familiesList = [];
 const mb = bytes => (bytes / 1048576).toFixed(1) + " MB";
+const CATEGORY = { general: "Stories and prose", knowledge: "Knowledge", conversation: "Conversation", reasoning: "Reasoning" };
+const BUDGET = 1024 * 1048576;
+// Reading choices per corpus (kept while the list is refreshed).
+const mix = {};  // id -> { read: bool, share: number }
 
 function renderSources() {
-  $("sourceList").replaceChildren(...sourcesList.map(s => {
-    const size = el("input", { type: "number", min: 1, max: Math.min(200, s.sizeMb), value: s.defaultMb, title: "Megabytes to download" });
-    return el("div", { class: "source" },
-      el("b", {}, s.name),
-      s.sizeMb > s.defaultMb ? el("span", {}, "first ", size, ` MB of ${fmt(s.sizeMb)} MB`) : el("span", {}, `${s.sizeMb} MB`),
-      el("button", { onclick: safe(async () => {
-        await invoke("download_corpus", { source: s.id, maxMb: Number(size.value) || s.defaultMb });
-        $("downloadEntry").hidden = false;
-        $("downloadTitle").textContent = `Downloading ${s.name}`;
-        $("downloadBar").style.width = "0%";
-        $("downloadLine").textContent = "Connecting…";
-        $("cancelDownload").hidden = false;
-      }, "Download") }, "Download"),
-      el("p", { class: "note" }, `${s.description} Licence: ${s.license}. Source: ${s.page}`));
-  }));
+  const groups = ["knowledge", "conversation", "reasoning", "general"];
+  $("sourceList").replaceChildren(...groups.map(g => el("div", { class: "source-group" },
+    el("h5", {}, CATEGORY[g]),
+    ...sourcesList.filter(s => s.category === g).map(s => {
+      const size = el("input", { type: "number", min: 1, max: Math.min(400, s.sizeMb), value: s.defaultMb, title: "Megabytes to download" });
+      return el("div", { class: "source" },
+        el("b", {}, s.name),
+        s.sizeMb > s.defaultMb ? el("span", {}, "first ", size, ` MB of about ${fmt(s.sizeMb)} MB`) : el("span", {}, `about ${s.sizeMb} MB`),
+        el("button", { onclick: safe(async () => {
+          const want = s.sizeMb > s.defaultMb ? Number(size.value) || s.defaultMb : s.sizeMb;
+          const used = corporaList.reduce((a, c) => a + c.bytes, 0);
+          if (used + want * 1048576 > BUDGET && !confirm(`This would bring the corpora on this device to about ${mb(used + want * 1048576)}, over the 1 GB budget. Download anyway?`)) return;
+          await invoke("download_corpus", { source: s.id, maxMb: want });
+          $("downloadEntry").hidden = false;
+          $("downloadTitle").textContent = `Downloading ${s.name}`;
+          $("downloadBar").style.width = "0%";
+          $("downloadLine").textContent = "Connecting…";
+          $("cancelDownload").hidden = false;
+        }, "Download") }, "Download"),
+        el("p", { class: "note" }, `${s.description} `, el("b", {}, "Licence: "), `${s.license}. `, el("b", {}, "Credit: "), `${s.attribution}. Source: ${s.page}`));
+    }))));
+}
+function renderFamilies() {
+  $("familyList").replaceChildren(el("span", { class: "note" }, "Kinds: "), ...familiesList.map(f =>
+    el("label", { class: "family" }, el("input", { type: "checkbox", value: f.id, checked: "" }), f.name)));
 }
 function renderCorpora() {
   const body = $("corpusTable").tBodies[0];
   body.replaceChildren();
-  if (!corporaList.length) body.append(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "No corpus yet. Download one or use a text file.")));
-  for (const c of corporaList) body.append(el("tr", {},
-    el("td", {}, c.name, c.droppedChars ? el("div", { class: "note" }, `${fmt(c.droppedChars)} non-ASCII characters dropped`) : ""),
-    el("td", { class: "num" }, mb(c.bytes)),
-    el("td", { class: "num" }, fmt(c.documents)),
-    el("td", { class: "num" }, fmt(c.heldOut)),
-    el("td", {}, c.license),
-    el("td", { class: "mono", title: c.sha256 }, c.sha256.slice(0, 12)),
-    el("td", {}, el("button", { class: "quiet", disabled: teaching ? "" : null, onclick: safe(async () => {
-      if (!confirm(`Delete the corpus "${c.name}" from this device?`)) return;
-      corporaList = await invoke("delete_corpus", { id: c.id }); renderCorpora();
-    }, "Delete corpus") }, "delete"))));
-  const sel = $("readCorpus");
-  const keep = sel.value;
-  sel.replaceChildren(...corporaList.map(c => el("option", { value: c.id }, `${c.name} (${mb(c.bytes)})`)));
-  if (corporaList.some(c => c.id === keep)) sel.value = keep;
+  if (!corporaList.length) body.append(el("tr", {}, el("td", { colspan: 8, class: "empty" }, "No corpus yet. Download one, generate practice or use a text file.")));
+  for (const c of corporaList) {
+    const m = mix[c.id] ??= { read: false, share: 25 };
+    const read = el("input", { type: "checkbox", checked: m.read ? "" : null, onchange: e => { m.read = e.target.checked; updateReadNote(); } });
+    const share = el("input", { type: "number", class: "share", min: 1, max: 100, value: m.share, onchange: e => { m.share = Number(e.target.value) || 1; updateReadNote(); } });
+    body.append(el("tr", {},
+      el("td", {}, read),
+      el("td", {}, c.name, c.droppedChars ? el("div", { class: "note" }, `${fmt(c.droppedChars)} non-ASCII characters dropped`) : "",
+        c.attribution ? el("div", { class: "note" }, "Credit: " + c.attribution) : ""),
+      el("td", {}, CATEGORY[c.category] || c.category),
+      el("td", { class: "num" }, share),
+      el("td", { class: "num" }, mb(c.bytes)),
+      el("td", { class: "num" }, `${fmt(c.documents)} (${fmt(c.heldOut)} held out)`),
+      el("td", {}, c.license),
+      el("td", {}, el("button", { class: "quiet", disabled: teaching ? "" : null, onclick: safe(async () => {
+        if (!confirm(`Delete the corpus "${c.name}" from this device?`)) return;
+        corporaList = await invoke("delete_corpus", { id: c.id }); renderCorpora();
+      }, "Delete corpus") }, "delete"))));
+  }
+  const used = corporaList.reduce((a, c) => a + c.bytes, 0);
+  $("corpusBudget").textContent = `Corpora on this device: ${mb(used)} of the 1 GB budget.`;
+  $("corpusBudget").className = used > BUDGET ? "warn" : "note";
   updateReadNote();
 }
+const chosen = () => corporaList.filter(c => mix[c.id]?.read);
 function updateReadNote() {
   const steps = Math.ceil(Number($("readTokens").value) / (Number($("readBatch").value) * Number($("readWindow").value)));
-  $("readNote").textContent = Number.isFinite(steps) && steps > 0
-    ? `${fmt(steps)} training steps, with about 20 held-out checks. Only checkpoints that lower the held-out loss are kept.`
-    : "—";
+  const parts = chosen();
+  const total = parts.reduce((a, c) => a + mix[c.id].share, 0);
+  const shares = parts.map(c => `${c.name} ${Math.round(100 * mix[c.id].share / total)}%`).join(", ");
+  $("readNote").textContent = !parts.length ? "Tick the corpora to read in the table above."
+    : Number.isFinite(steps) && steps > 0
+      ? `${fmt(steps)} training steps over ${shares}, with about 20 held-out checks. Only checkpoints that lower the held-out loss are kept.`
+      : "—";
 }
 for (const id of ["readTokens", "readBatch", "readWindow"]) $(id).addEventListener("input", updateReadNote);
+// Bicameral reading: the stage each kind of text is read in.
+const STAGE_OPTIONS = [["dense", "Stage A: Dense"], ["transformer", "Stage B: Transformer"], ["cooperative", "Stage C: Co-op"], ["off", "Whole brain"]];
+const STAGE_DEFAULT = { knowledge: "dense", conversation: "transformer", reasoning: "cooperative", general: "transformer" };
+for (const sel of document.querySelectorAll("#stageMap select")) {
+  sel.replaceChildren(...STAGE_OPTIONS.map(([v, t]) => el("option", { value: v }, t)));
+  sel.value = STAGE_DEFAULT[sel.dataset.cat];
+}
+$("readMode").addEventListener("change", () => { $("stageMap").hidden = $("readMode").value !== "bicameral"; });
 async function refreshCorpora() { corporaList = await invoke("corpora"); renderCorpora(); }
+function pick(id) { (mix[id] ??= { read: true, share: 25 }).read = true; }
 $("importCorpus").addEventListener("click", safe(async () => {
   say("Reading the file…");
-  const c = await invoke("import_corpus");
+  const c = await invoke("import_corpus", { category: $("importCategory").value });
   if (!c) return;
+  pick(c.id);
   await refreshCorpora();
-  $("readCorpus").value = c.id;
   say(`Added ${c.name}: ${fmt(c.documents)} documents, ${fmt(c.heldOut)} held out.`);
 }, "Use text file"));
+$("generate").addEventListener("click", safe(async () => {
+  const families = [...document.querySelectorAll("#familyList input:checked")].map(i => i.value);
+  if (!families.length) throw new Error("Tick at least one kind of practice");
+  $("generate").disabled = true;
+  try {
+    say("Generating practice…");
+    const c = await invoke("generate_corpus", { families, difficulty: Number($("genDifficulty").value), mb: Number($("genMb").value) });
+    pick(c.id);
+    await refreshCorpora();
+    say(`Generated ${c.name}: ${fmt(c.documents)} examples (${fmt(c.heldOut)} held out).`);
+  } finally { $("generate").disabled = false; }
+}, "Generate practice"));
 $("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
 function onDownload(e) {
   if (!e.done) {
@@ -503,29 +550,36 @@ function onDownload(e) {
   $("downloadBar").style.width = "100%";
   const c = e.corpus;
   $("downloadLine").textContent = `Saved ${c.name}: ${mb(c.bytes)}, ${fmt(c.documents)} documents (${fmt(c.heldOut)} held out).`;
-  refreshCorpora().then(() => { $("readCorpus").value = c.id; });
+  pick(c.id);
+  refreshCorpora();
   say(`Downloaded ${c.name}.`);
 }
 
 let readStart = 0;
+let readParts = [];
 $("read").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
-  if (!$("readCorpus").value) throw new Error("Download a corpus or use a text file first");
+  const parts = chosen();
+  if (!parts.length) throw new Error("Tick the corpora to read (download one, generate practice or use a text file first)");
+  const stages = {};
+  for (const sel of document.querySelectorAll("#stageMap select")) stages[sel.dataset.cat] = sel.value;
   const options = {
-    corpusId: $("readCorpus").value,
+    parts: parts.map(c => ({ corpusId: c.id, share: mix[c.id].share })),
     tokens: Number($("readTokens").value),
     batchSize: Number($("readBatch").value),
     learningRate: Number($("readRate").value),
     window: Number($("readWindow").value),
     growVocabulary: $("readWords").checked,
-    education: $("readEducation").value,
     maxWords: Number($("readMaxWords").value),
+    mode: $("readMode").value,
+    stages,
   };
+  readParts = parts;
   $("evalTable").tBodies[0].replaceChildren();
   $("readEntry").hidden = false;
   $("readBar").style.width = "0%";
-  $("readTitle").textContent = `${active.name} is reading ${$("readCorpus").selectedOptions[0].textContent}`;
-  $("readLine").textContent = "Preparing the corpus…";
+  $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}`;
+  $("readLine").textContent = "Preparing the corpora…";
   await invoke("read_corpus", { options });
   readStart = 0;
   setTeaching(true);
@@ -540,14 +594,17 @@ $("stopRead").addEventListener("click", safe(async () => {
 function onReadEvent(e) {
   if (e.type === "started") {
     readStart = performance.now();
-    $("readLine").textContent = `${fmt(e.train_documents)} documents to read (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`;
+    readParts = e.parts || [];
+    const stageName = { dense_knowledge: "Stage A", transformer_language: "Stage B", cooperative: "Stage C" };
+    const parts = readParts.map(p => `${p.name} ${Math.round(100 * p.share)}%${p.stage ? " in " + stageName[p.stage] : ""}`).join(", ");
+    $("readLine").textContent = `${fmt(e.train_documents)} documents to read (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps${parts ? " · " + parts : ""}. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`;
     $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", { class: "num" }, (e.baseline_dense_reliance ?? 0).toFixed(3)), el("td", {}, "starting point"), el("td", {}, "")));
   } else if (e.type === "batch") {
     $("readBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
     const secs = (performance.now() - readStart) / 1000;
     const rate = e.tokens / Math.max(secs, 1e-3);
     const left = (e.steps - e.step) * (e.tokens / e.step) / rate;
-    $("readLine").textContent = `step ${fmt(e.step)}/${fmt(e.steps)} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)} · rate ${e.learning_rate.toExponential(2)} · ${fmt(Math.round(rate))} tokens/s · about ${Math.ceil(left / 60)} min left`;
+    $("readLine").textContent = `step ${fmt(e.step)}/${fmt(e.steps)}${readParts.length > 1 ? " · " + (readParts[e.part]?.name ?? "") : ""} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)} · rate ${e.learning_rate.toExponential(2)} · ${fmt(Math.round(rate))} tokens/s · about ${Math.ceil(left / 60)} min left`;
   } else if (e.type === "evaluated") {
     $("evalTable").tBodies[0].append(el("tr", { class: e.accepted ? "current-row" : "" },
       el("td", { class: "num" }, fmt(e.tokens)),
@@ -555,7 +612,9 @@ function onReadEvent(e) {
       el("td", { class: "num" }, e.held_out_loss.toFixed(4)),
       el("td", { class: "num" }, (e.dense_reliance ?? 0).toFixed(3)),
       el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, `not better than ${e.best_loss.toFixed(4)}`)),
-      el("td", { class: "sample" }, el("span", { class: "note" }, e.sample_prompt), " ", e.sample)));
+      el("td", { class: "sample" }, ...(e.parts?.length ? e.parts : [{ name: "", held_out_loss: e.held_out_loss, sample_prompt: e.sample_prompt, sample: e.sample }]).map(p =>
+        el("div", { class: "part-line" }, p.name ? el("b", {}, `${CATEGORY[p.category] || ""}${p.name ? " · " + p.name : ""}: ${p.held_out_loss.toFixed(4)} `) : "",
+          el("span", { class: "note" }, p.sample_prompt.replace(/\n/g, " ⏎ ")), " ", p.sample)))));
   } else if (e.type === "finished" && e.early_stop) {
     log("INFO", "Reading stopped early: the held-out loss stopped improving.");
   }
@@ -732,7 +791,8 @@ async function loadHistory() {
   const shown = rows.filter(r => r.type || r.reading?.type === "evaluated" || r.event?.type === "file_finished" || (r.event?.type === "session" && r.event.event.type === "epoch"));
   box.replaceChildren(...shown.reverse().map(r => {
     const e = r.event;
-    if (r.type === "reading_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Reading started: ${r.corpus.name} (sha256 ${r.corpus.sha256.slice(0, 12)}), up to ${fmt(r.options.tokens)} tokens.`);
+    if (r.type === "reading_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),
+      `Reading started${r.mode === "bicameral" ? " (bicameral)" : ""}: ${(r.corpora || [r.corpus]).map(c => `${c.name} (sha256 ${c.sha256.slice(0, 12)}; ${c.license})`).join(" + ")}, up to ${fmt(r.options.tokens)} tokens.`);
     if (r.type === "reading_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Reading ended with an error: " + r.error) : `Reading ${r.stopped ? "stopped" : "finished"} after ${fmt(r.tokens)} tokens; ${r.accepted ? "best checkpoint kept" : "model unchanged"}.`);
     if (r.reading?.type === "evaluated") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Read ${fmt(r.reading.tokens)} tokens: held-out loss ${r.reading.held_out_loss.toFixed(4)} — ${r.reading.accepted ? "kept" : "not better"}.`, el("div", { class: "note mono" }, `${r.reading.sample_prompt} → ${r.reading.sample}`));
     if (r.type === "course_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Course started: ${r.files} file(s), ${r.options.epochs} epoch(s), ${r.options.foundation ? "Foundation" : "Joint only"}.`);
@@ -767,6 +827,8 @@ async function boot() {
   await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));
   sourcesList = await invoke("corpus_sources");
   renderSources();
+  familiesList = await invoke("practice_families");
+  renderFamilies();
   await refreshCorpora();
   const s = await invoke("status");
   showActive(s.active);

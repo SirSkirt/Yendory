@@ -108,10 +108,28 @@
     <p class="lede">Before its lessons, a model can read ordinary text and learn how words and sentences go together (pre-training). One document in ten is held out and never read; a checkpoint is kept only when it predicts those unseen documents better than every earlier one.</p>
 
     <h3>Get a corpus</h3>
+    <p class="note">Every source shows its licence. Records are converted into Nova's own format: conversations become <code>U:</code> / <code>N:</code> turns, problems a question with its worked answer. Large sources can be downloaded in part.</p>
     <div id="sourceList"></div>
+
+    <h4>Practice generated on this device</h4>
+    <p class="note">Questions with worked answers, computed from each example itself (sums added, little worlds simulated, rules followed), so they are correct by construction. No download, no licence restrictions.</p>
+    <div class="settings">
+      <div class="wide" id="familyList"></div>
+      <label>Difficulty <select id="genDifficulty"><option value="1">1: easy</option><option value="2" selected>2: medium</option><option value="3">3: harder</option></select></label>
+      <label>Size (MB) <input type="number" id="genMb" min="0.1" max="200" step="1" value="10"></label>
+    </div>
+    <div class="actions"><button type="button" id="generate">Generate practice</button></div>
+
+    <h4>Your own text</h4>
     <div class="actions">
+      <select id="importCategory">
+        <option value="general">Stories and other prose</option>
+        <option value="knowledge">Knowledge</option>
+        <option value="conversation">Conversation (U: / N: turns)</option>
+        <option value="reasoning">Reasoning</option>
+      </select>
       <button type="button" id="importCorpus">Use a text file from this device…</button>
-      <span class="note">Plain .txt, up to 200 MB. Stories are split at <code>&lt;|endoftext|&gt;</code>, other text at blank lines. Text is converted to ASCII.</span>
+      <span class="note">Plain .txt, up to 400 MB. Documents are split at <code>&lt;|endoftext|&gt;</code>, or else at blank lines. Text is converted to ASCII.</span>
     </div>
     <div class="entry" id="downloadEntry" hidden>
       <h3 id="downloadTitle">Downloading</h3>
@@ -122,24 +140,28 @@
 
     <h3>Corpora on this device</h3>
     <table class="ledger" id="corpusTable">
-      <thead><tr><th>Corpus</th><th class="num">Size</th><th class="num">Documents</th><th class="num">Held out</th><th>Licence</th><th>Fingerprint</th><th></th></tr></thead>
-      <tbody><tr><td colspan="7" class="empty">No corpus yet. Download one or use a text file.</td></tr></tbody>
+      <thead><tr><th>Read</th><th>Corpus</th><th>Kind</th><th class="num">Share %</th><th class="num">Size</th><th class="num">Documents</th><th>Licence</th><th></th></tr></thead>
+      <tbody><tr><td colspan="8" class="empty">No corpus yet. Download one, generate practice or use a text file.</td></tr></tbody>
     </table>
+    <p class="note" id="corpusBudget">—</p>
 
     <h3>Settings</h3>
     <div class="settings">
-      <label>Corpus <select id="readCorpus"></select></label>
       <label>Tokens to read <input type="number" id="readTokens" min="10000" step="100000" value="2000000"></label>
       <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
       <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
       <label>Window (tokens per example) <input type="number" id="readWindow" min="16" step="16" value="128"></label>
-      <label class="wide">Bicameral education (experimental)
-        <select id="readEducation">
-        <option value="off">Off: the whole brain learns together</option>
-        <option value="dense">Stage A: Dense knowledge (Dense + interconnect learn; transformer frozen)</option>
-        <option value="transformer">Stage B: Transformer language and reasoning (Dense + interconnect frozen)</option>
-        <option value="cooperative">Stage C: Cooperation (whole brain; Dense's contribution protected)</option>
+      <label class="wide">Training
+        <select id="readMode">
+        <option value="joint">Joint: the whole brain reads everything (conventional)</option>
+        <option value="bicameral">Bicameral (experimental): each kind of text is read in its own stage</option>
         </select></label>
+      <div class="wide stage-map" id="stageMap" hidden>
+        <label>Knowledge <select data-cat="knowledge"></select></label>
+        <label>Conversation <select data-cat="conversation"></select></label>
+        <label>Reasoning <select data-cat="reasoning"></select></label>
+        <label>Stories and prose <select data-cat="general"></select></label>
+      </div>
       <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
     </div>
     <div class="actions">
@@ -153,7 +175,7 @@
       <div class="meter"><div id="readBar"></div></div>
       <p class="mono" id="readLine">—</p>
       <table class="ledger compact" id="evalTable">
-        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Sample (written by the model)</th></tr></thead>
+        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Each corpus: held-out loss and a sample written by the model</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>

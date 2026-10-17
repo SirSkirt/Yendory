@@ -22,6 +22,7 @@ use yendory_engine::{
 
 mod courses;
 mod reading;
+mod sources;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
 /// Large enough for the largest model the Engine accepts (1 billion parameters × 12 bytes,
@@ -1094,6 +1095,8 @@ pub fn run() {
             measure_step,
             history,
             reading::corpus_sources,
+            reading::practice_families,
+            reading::generate_corpus,
             reading::corpora,
             reading::delete_corpus,
             reading::import_corpus,

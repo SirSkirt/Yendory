@@ -177,6 +177,57 @@ impl Default for PretrainConfig {
     }
 }
 
+/// What kind of text a corpus is, for mixing and for bicameral reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    /// Stories and other ordinary prose.
+    #[default]
+    General,
+    /// Facts about the world (encyclopedia text, explanations).
+    Knowledge,
+    /// Dialogue, in `U:` / `N:` turns.
+    Conversation,
+    /// Problems with worked answers.
+    Reasoning,
+}
+
+/// One corpus of a reading mix.
+#[derive(Clone, Debug)]
+pub struct MixPart {
+    pub name: String,
+    pub category: Category,
+    pub corpus: Corpus,
+    /// Relative share of training batches.
+    pub share: f32,
+    /// Bicameral reading: the education stage this corpus is read in (None: whole brain).
+    pub stage: Option<crate::learn::session::EducationStage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartInfo {
+    pub name: String,
+    pub category: Category,
+    /// Share of training batches (the shares add up to 1).
+    pub share: f32,
+    pub stage: Option<crate::learn::session::EducationStage>,
+    pub train_documents: usize,
+    pub held_out_documents: usize,
+    pub train_tokens: usize,
+    pub held_out_tokens: usize,
+}
+
+/// One corpus's held-out check within an evaluation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartEvaluation {
+    pub name: String,
+    pub category: Category,
+    pub held_out_loss: f32,
+    pub dense_reliance: f32,
+    pub sample_prompt: String,
+    pub sample: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PretrainEvent {
@@ -191,6 +242,9 @@ pub enum PretrainEvent {
         /// Held-out loss rise when Dense's input to the transformer is cut, before reading.
         #[serde(default)]
         baseline_dense_reliance: f32,
+        /// The corpora read (one for a single corpus).
+        #[serde(default)]
+        parts: Vec<PartInfo>,
     },
     Batch {
         step: u64,
@@ -198,6 +252,9 @@ pub enum PretrainEvent {
         tokens: u64,
         loss: f32,
         learning_rate: f32,
+        /// Index of the corpus this batch came from.
+        #[serde(default)]
+        part: usize,
     },
     Evaluated(Evaluation),
     Finished {
@@ -225,6 +282,9 @@ pub struct Evaluation {
     /// Greedy continuation of the start of a held-out document, written by the model.
     pub sample_prompt: String,
     pub sample: String,
+    /// Each corpus's held-out loss, Dense reliance and sample (several when reading a mix).
+    #[serde(default)]
+    pub parts: Vec<PartEvaluation>,
 }
 
 pub struct PretrainResult {
@@ -308,9 +368,13 @@ fn mean_loss_with(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32,
     Ok((total / weight.max(1.)) as f32)
 }
 
-/// The first words of a held-out document, used as the sample prompt.
+/// The start of a held-out document, used as the sample prompt: up to the model's first turn
+/// in a conversation (`... N: `), otherwise its first words.
 fn sample_prompt(corpus: &Corpus) -> String {
     let doc = corpus.held_out.first().map(String::as_str).unwrap_or("Once upon a time");
+    if let Some(i) = doc.find("\nN: ").filter(|&i| i < 600) {
+        return doc[..i + 4].to_string();
+    }
     let line = doc.lines().next().unwrap_or(doc);
     let words: Vec<&str> = line.split(' ').take(6).collect();
     words.join(" ")
@@ -320,10 +384,11 @@ fn sample(model: &Bicameral, prompt: &str) -> String {
     super::eval::reply(model, prompt, 40, Ablation::default()).unwrap_or_default()
 }
 
-/// Reads the corpus: trains the whole model (Joint) on random windows of the training
-/// documents, evaluates the held-out loss at regular intervals and keeps the best checkpoint.
-/// `on_accepted` is called with every newly accepted checkpoint (to save progress); `stop` ends
-/// the run at the next batch and the best accepted checkpoint is returned.
+/// Reads one corpus: trains on random windows of the training documents (the whole model, or
+/// the parts `cfg.education` chooses), evaluates the held-out loss at regular intervals and
+/// keeps the best checkpoint. `on_accepted` is called with every newly accepted checkpoint (to
+/// save progress); `stop` ends the run at the next batch and the best accepted checkpoint is
+/// returned.
 pub fn pretrain(
     model: &Bicameral,
     corpus: &Corpus,
@@ -332,10 +397,52 @@ pub fn pretrain(
     on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
     stop: &AtomicBool,
 ) -> Result<PretrainResult, String> {
-    if corpus.train.is_empty() || corpus.held_out.is_empty() {
-        return Err("The corpus is too small: it needs training documents and held-out documents \
-                    (about one document in ten is held out)"
-            .into());
+    let part = MixPart {
+        name: "corpus".into(),
+        category: Category::General,
+        corpus: corpus.clone(),
+        share: 1.,
+        stage: cfg.education,
+    };
+    pretrain_mix(model, &[part], cfg, observer, on_accepted, stop)
+}
+
+fn focus_of(stage: Option<crate::learn::session::EducationStage>) -> Focus {
+    use crate::learn::session::EducationStage;
+    match stage {
+        None | Some(EducationStage::Cooperative) => Focus::Joint,
+        Some(EducationStage::DenseKnowledge) => Focus::DenseAndInterconnect,
+        Some(EducationStage::TransformerLanguage) => Focus::Left,
+    }
+}
+
+/// Reads several corpora interleaved, each batch from one corpus in proportion to the shares
+/// (so earlier corpora are not forgotten while later ones are read). Each corpus is read in its
+/// own stage (`MixPart::stage`, bicameral reading) or by the whole brain. The held-out loss is
+/// checked per corpus; a checkpoint is accepted when the share-weighted held-out loss improves
+/// (and, in bicameral reading, Dense's contribution is kept). `cfg.education` is not used here.
+pub fn pretrain_mix(
+    model: &Bicameral,
+    parts: &[MixPart],
+    cfg: &PretrainConfig,
+    observer: &mut dyn FnMut(&PretrainEvent),
+    on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
+    stop: &AtomicBool,
+) -> Result<PretrainResult, String> {
+    if parts.is_empty() {
+        return Err("Choose at least one corpus to read".into());
+    }
+    for p in parts {
+        if p.corpus.train.is_empty() || p.corpus.held_out.is_empty() {
+            return Err(format!(
+                "{} is too small: it needs training documents and held-out documents \
+                 (about one document in ten is held out)",
+                p.name
+            ));
+        }
+        if !(p.share.is_finite() && p.share > 0.) {
+            return Err(format!("{}: give it a share above 0", p.name));
+        }
     }
     if cfg.batch_size == 0
         || cfg.window < 2
@@ -345,6 +452,9 @@ pub fn pretrain(
     {
         return Err("Invalid pre-training settings".into());
     }
+    let total_share: f32 = parts.iter().map(|p| p.share).sum();
+    let shares: Vec<f32> = parts.iter().map(|p| p.share / total_share).collect();
+    let bicameral = parts.iter().any(|p| p.stage.is_some());
     let mut current = model.clone();
     let mut new_words = 0;
     if cfg.grow_vocabulary {
@@ -352,7 +462,7 @@ pub fn pretrain(
         let cap = cfg.max_words.min(limit).max(current.tokenizer.words().len());
         let words = grow_vocabulary_from_texts(
             current.tokenizer.words(),
-            corpus.train.iter().map(String::as_str),
+            parts.iter().flat_map(|p| p.corpus.train.iter().map(String::as_str)),
             cap,
             cfg.min_word_count,
         );
@@ -363,35 +473,59 @@ pub fn pretrain(
         current.tokenizer.set_words(words);
     }
     let window = cfg.window.min(current.config.max_tokens);
-    let train = encode_stream(&current, &corpus.train)?;
-    let held = encode_stream(&current, &corpus.held_out)?;
-    if train.len() < window + 1 {
-        return Err("The corpus is too small for one training window".into());
+    let per_part_windows = (cfg.eval_windows / parts.len()).max(8);
+    let mut trains = Vec::new();
+    let mut probes = Vec::new();
+    let mut prompts = Vec::new();
+    let mut infos = Vec::new();
+    for (p, &share) in parts.iter().zip(&shares) {
+        let train = encode_stream(&current, &p.corpus.train)?;
+        let held = encode_stream(&current, &p.corpus.held_out)?;
+        if train.len() < window + 1 {
+            return Err(format!("{} is too small for one training window", p.name));
+        }
+        probes.push(eval_rows(&held, window, per_part_windows));
+        prompts.push(sample_prompt(&p.corpus));
+        infos.push(PartInfo {
+            name: p.name.clone(),
+            category: p.category,
+            share,
+            stage: p.stage,
+            train_documents: p.corpus.train.len(),
+            held_out_documents: p.corpus.held_out.len(),
+            train_tokens: train.len(),
+            held_out_tokens: held.len(),
+        });
+        trains.push(train);
     }
-    let probes = eval_rows(&held, window, cfg.eval_windows);
-    let prompt = sample_prompt(corpus);
     let tokens_per_step = (cfg.batch_size * window) as u64;
     let steps = cfg.tokens.div_ceil(tokens_per_step).max(1);
     let warmup = (steps / 20).clamp(1, 200);
     let eval_every = (steps / cfg.evaluations.max(1) as u64).max(1);
 
-    let baseline_loss = mean_loss(&current, &probes)?;
-    let baseline_dense_reliance = dense_reliance(&current, &probes, baseline_loss)?;
-    use crate::learn::session::EducationStage;
-    let focus = match cfg.education {
-        None | Some(EducationStage::Cooperative) => Focus::Joint,
-        Some(EducationStage::DenseKnowledge) => Focus::DenseAndInterconnect,
-        Some(EducationStage::TransformerLanguage) => Focus::Left,
+    // Held-out loss and Dense reliance of every part; the overall values are share-weighted.
+    type Check = (f32, f32, Vec<(f32, f32)>);
+    let check = |m: &Bicameral| -> Result<Check, String> {
+        let mut per = Vec::new();
+        for rows in &probes {
+            let l = mean_loss(m, rows)?;
+            per.push((l, dense_reliance(m, rows, l)?));
+        }
+        let loss = per.iter().zip(&shares).map(|((l, _), s)| l * s).sum();
+        let rel = per.iter().zip(&shares).map(|((_, r), s)| r * s).sum();
+        Ok((loss, rel, per))
     };
+    let (baseline_loss, baseline_dense_reliance, _) = check(&current)?;
     observer(&PretrainEvent::Started {
-        train_documents: corpus.train.len(),
-        held_out_documents: corpus.held_out.len(),
-        train_tokens: train.len(),
-        held_out_tokens: held.len(),
+        train_documents: infos.iter().map(|i| i.train_documents).sum(),
+        held_out_documents: infos.iter().map(|i| i.held_out_documents).sum(),
+        train_tokens: infos.iter().map(|i| i.train_tokens).sum(),
+        held_out_tokens: infos.iter().map(|i| i.held_out_tokens).sum(),
         new_words,
         steps,
         baseline_loss,
         baseline_dense_reliance,
+        parts: infos,
     });
     let mut best_reliance = baseline_dense_reliance;
 
@@ -403,32 +537,37 @@ pub fn pretrain(
     let mut misses = 0;
     let (mut stopped, mut early_stop) = (false, false);
     let mut tokens = 0u64;
+    // Interleaving: each step takes the corpus furthest behind its share.
+    let mut owed = vec![0f32; parts.len()];
     for step in 0..steps {
         if stop.load(Ordering::Acquire) {
             stopped = true;
             break;
         }
-        let rows: Vec<Row> = (0..cfg.batch_size)
-            .map(|_| window_row(&train, rng.below(train.len() - window), window))
-            .collect();
+        for (o, s) in owed.iter_mut().zip(&shares) {
+            *o += s;
+        }
+        let k = (0..parts.len()).max_by(|&a, &b| owed[a].total_cmp(&owed[b]).then(b.cmp(&a))).unwrap_or(0);
+        owed[k] -= 1.;
+        let train = &trains[k];
+        let rows: Vec<Row> =
+            (0..cfg.batch_size).map(|_| window_row(train, rng.below(train.len() - window), window)).collect();
         let (loss, grads) = batch_loss_and_gradients(&current, &rows, Ablation::default())?;
         if !loss.is_finite() {
             return Err("Training diverged (loss is not finite); try a lower learning rate".into());
         }
         let lr = lr_schedule(step, cfg.learning_rate, warmup, steps, 0.1);
-        current.adam_step(&grads, lr, focus)?;
+        current.adam_step(&grads, lr, focus_of(parts[k].stage))?;
         tokens += tokens_per_step;
         since_eval += loss as f64;
         since_n += 1;
-        observer(&PretrainEvent::Batch { step: step + 1, steps, tokens, loss, learning_rate: lr });
+        observer(&PretrainEvent::Batch { step: step + 1, steps, tokens, loss, learning_rate: lr, part: k });
 
         if (step + 1) % eval_every == 0 || step + 1 == steps {
-            let held_out_loss = mean_loss(&current, &probes)?;
-            let reliance = dense_reliance(&current, &probes, held_out_loss)?;
-            // Bicameral education: a checkpoint that stopped using Dense is not accepted.
-            let keeps_dense = cfg.education.is_none()
-                || best_reliance <= 0.01
-                || reliance >= cfg.keep_dense_reliance * best_reliance;
+            let (held_out_loss, reliance, per) = check(&current)?;
+            // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
+            let keeps_dense =
+                !bicameral || best_reliance <= 0.01 || reliance >= cfg.keep_dense_reliance * best_reliance;
             let accepted = held_out_loss.is_finite()
                 && held_out_loss < best_loss - cfg.min_loss_improvement
                 && keeps_dense;
@@ -441,6 +580,19 @@ pub fn pretrain(
             } else {
                 misses += 1;
             }
+            let part_evals: Vec<PartEvaluation> = parts
+                .iter()
+                .zip(&per)
+                .zip(&prompts)
+                .map(|((p, &(l, r)), prompt)| PartEvaluation {
+                    name: p.name.clone(),
+                    category: p.category,
+                    held_out_loss: l,
+                    dense_reliance: r,
+                    sample_prompt: prompt.clone(),
+                    sample: sample(&current, prompt),
+                })
+                .collect();
             let e = Evaluation {
                 step: step + 1,
                 tokens,
@@ -449,8 +601,9 @@ pub fn pretrain(
                 best_loss,
                 accepted,
                 dense_reliance: reliance,
-                sample_prompt: prompt.clone(),
-                sample: sample(&current, &prompt),
+                sample_prompt: part_evals[0].sample_prompt.clone(),
+                sample: part_evals[0].sample.clone(),
+                parts: part_evals,
             };
             observer(&PretrainEvent::Evaluated(e.clone()));
             evaluations.push(e);
