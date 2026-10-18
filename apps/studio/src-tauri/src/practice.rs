@@ -4,7 +4,9 @@
 use super::courses::{check_id, data_dir, fresh_id};
 use super::*;
 use yendory_engine::learn::designer::{export, BlockKind};
-use yendory_engine::learn::practice::{answer_all, train, Mark, PracticeItem};
+use yendory_engine::learn::practice::{
+    accept_auto_grades, answer_all, auto_grade, train_rewarded, Mark, PracticeItem,
+};
 use yendory_engine::learn::session::Score;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -123,6 +125,8 @@ fn source_items(
         note: String::new(),
         target: None,
         after: None,
+        grade: None,
+        auto: None,
     };
     match kind {
         "design" => {
@@ -218,6 +222,7 @@ pub async fn start_practice(
     tauri::async_runtime::spawn_blocking(move || {
         let mut memory = study_mode.then(|| super::study::load_memory(&app2, &model_id));
         answer_all(&model, &mut items, memory.as_mut(), false, now())?;
+        auto_grade(&mut items);
         if let Some(m) = &memory {
             super::study::save_memory(&app2, &model_id, m)?;
         }
@@ -246,6 +251,9 @@ pub struct MarkEdit {
     mark: Option<Mark>,
     correction: String,
     note: String,
+    /// The teacher's grade, 0-100 (partial credit).
+    #[serde(default)]
+    grade: Option<f32>,
 }
 
 /// Saves the teacher's marks, corrections and notes.
@@ -259,11 +267,31 @@ pub fn save_practice_marks(app: AppHandle, id: String, marks: Vec<MarkEdit>) -> 
         return Err("The marks do not match the questions".into());
     }
     for (it, m) in s.items.iter_mut().zip(marks) {
+        if m.grade.is_some_and(|g| !(0. ..=100.).contains(&g)) {
+            return Err("Grades go from 0 to 100".into());
+        }
+        it.grade = m.grade.map(|g| g.round());
         it.mark = m.mark;
         it.correction =
             m.correction.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
         it.note = m.note;
     }
+    store(&app, &s)?;
+    Ok(s)
+}
+
+/// Marks the answers whose automatic grade is certain (right, or 0% wrong); partial and
+/// uncertain ones stay for the teacher.
+#[tauri::command]
+pub fn accept_practice_auto(app: AppHandle, id: String) -> Res<PracticeSession> {
+    let mut s = load(&app, &id)?;
+    if s.result.is_some() {
+        return Err("This session was already trained".into());
+    }
+    if s.items.iter().any(|i| i.auto.is_none()) {
+        auto_grade(&mut s.items);
+    }
+    accept_auto_grades(&mut s.items);
     store(&app, &s)?;
     Ok(s)
 }
@@ -326,8 +354,22 @@ pub fn train_practice(
         };
         let step_before = model.step;
         let mut items = s.items.clone();
+        let mut rewards = super::rewards::rewards_for(&app, &meta.id);
         let outcome = guarded(|| {
-            let r = train(&model, &mut items, &s.lesson_items, &archive, &cfg, &mut observer, &stop)?;
+            let r = train_rewarded(
+                &model,
+                &mut items,
+                &s.lesson_items,
+                &archive,
+                &cfg,
+                rewards.as_mut(),
+                &mut observer,
+                &stop,
+            );
+            if let Some(rw) = &rewards {
+                super::rewards::keep(&app, rw);
+            }
+            let r = r?;
             let Some(r) = r else { return Err("Nothing was marked for training".to_string()) };
             let mut m = meta.clone();
             if r.learned {

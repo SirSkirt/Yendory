@@ -21,9 +21,10 @@
     <button type="button" data-page="courses"><span>5</span>Courses</button>
     <button type="button" data-page="planner"><span>6</span>Planner</button>
     <button type="button" data-page="study"><span>7</span>Study</button>
-    <button type="button" data-page="exams"><span>8</span>Exams</button>
-    <button type="button" data-page="brain"><span>9</span>Brain</button>
-    <button type="button" data-page="library"><span>10</span>Library</button>
+    <button type="button" data-page="rewards"><span>8</span>Rewards</button>
+    <button type="button" data-page="exams"><span>9</span>Exams</button>
+    <button type="button" data-page="brain"><span>10</span>Brain</button>
+    <button type="button" data-page="library"><span>11</span>Library</button>
   </nav>
 </header>
 
@@ -233,6 +234,7 @@
       <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
       <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
     </div>
+<p class="note reward-status" data-reward-status>Rewards: —</p>
 <p class="note warn" id="readFirstTeach" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
     <div class="actions">
       <button type="button" id="teach" class="primary">Teach</button>
@@ -402,6 +404,7 @@
         <tbody></tbody>
       </table>
       <div class="line-form"><select id="planAddCourse"></select><button type="button" id="planAdd">Add course</button></div>
+      <p class="note reward-status" data-reward-status>Rewards: —</p>
       <p class="note warn" id="readFirstPlan" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
       <div class="actions">
         <button type="button" id="planStart" class="primary">Start</button>
@@ -467,7 +470,7 @@
     </table>
 
     <h3>Practice</h3>
-    <p class="note">Nova answers a lesson's practice questions herself. You mark each answer right or wrong, and may write a correction and a note. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
+    <p class="note">Nova answers a lesson's practice questions herself. Yendory suggests an automatic grade where the lesson has an answer (or says it is uncertain). You mark each answer right or wrong, may give a grade from 0 to 100% for partial credit, and may write a correction and a note; grades and notes go into the reward ledger (§ 8 Rewards). A partly right answer is never trained as written. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
     <div class="actions">
       <select id="practiceSource" aria-label="Lesson to practise"><option value="">Choose a lesson…</option></select>
       <button type="button" id="practiceStart" class="primary">Nova answers</button>
@@ -480,11 +483,11 @@
       <h3 id="practiceTitle">Practice</h3>
       <div id="practiceCard" hidden></div>
       <div class="actions">
-        <button type="button" id="practiceAllRight" class="quiet">Mark the answers that match the lesson's as right</button>
+        <button type="button" id="practiceAllRight" class="quiet">Accept the certain automatic grades</button>
         <span class="note" id="practiceSaved">—</span>
       </div>
       <table class="ledger compact" id="practiceTable">
-        <thead><tr><th>#</th><th>Question</th><th>Nova's answer</th><th>Your mark</th><th>Correction and note</th></tr></thead>
+        <thead><tr><th>#</th><th>Question</th><th>Nova's answer</th><th>Your mark and grade</th><th>Correction and note</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="actions">
@@ -567,9 +570,78 @@
     <div id="studyBody"></div>
   </section>
 
-  <!-- § 8 Exams -->
+  <!-- § 8 Rewards -->
+  <section class="page" id="page-rewards" hidden>
+    <h2><span class="sec">§ 8</span> Rewards</h2>
+    <p class="lede">Yendory grades Nova's answers 0–100% and keeps a reward ledger: one-time credit for new progress on a question, smaller bonuses for answers she keeps across checkpoints, and the most for questions she was never trained on. Reward-guided training uses that history to decide how often each unit is practised; what she is taught never changes. Course final exams never enter the ledger.</p>
+
+    <div class="entry" id="rewardSettings">
+      <h3>Settings</h3>
+      <div class="rw-checks">
+      <label class="check"><input type="checkbox" id="rwRecord"> <b>Grade and record</b> (Stage 1): grade Nova's answers in the Classroom, the Planner, Practice and Review Training, and keep the ledger. Training is not changed by this.</label>
+      <label class="check"><input type="checkbox" id="rwWeighted"> <b>Reward-guided training</b> (Stage 2, experimental): before each epoch Nova is asked the lesson's taught questions; questions she gets wrong, forgets or keeps failing are practised more, ones she answers and keeps are practised less (never left out). The number of units per epoch stays the same, and the targets stay the lesson's answers and your corrections. Not yet the default: it is being compared with ordinary training.</label>
+      <label class="check"><input type="checkbox" id="rwPrefix"> <b>Letter-prefix progress</b> (experimental): in lessons marked <code>Grading: spelling</code> only, credit for each newly correct letter at the start of the answer. Other lessons are graded by meaning, never by matching letters.</label>
+      </div>
+      <details>
+        <summary>Values</summary>
+        <div class="settings" id="rwValues"></div>
+      </details>
+      <div class="actions">
+        <button type="button" id="rwSave" class="primary">Save settings</button>
+        <button type="button" id="rwDefaults" class="quiet">Restore defaults</button>
+        <span class="note" id="rwSaved">—</span>
+      </div>
+    </div>
+
+    <h3>Ledger</h3>
+    <p class="note" id="rwSummary">Open a model to see its ledger.</p>
+    <div id="rwFlags"></div>
+    <table class="figures" id="rwTotals" hidden></table>
+
+    <h4>Concepts</h4>
+    <p class="note">Questions grouped by pattern (names and numbers replaced by _). Taught: answered right now, of those asked. First sight: right the first time they were asked, before practice (new variations). Never trained: held-out and review questions. Generalization shows in the last column.</p>
+    <table class="ledger compact" id="rwConcepts">
+      <thead><tr><th>Concept</th><th class="num">Questions</th><th class="num">Taught</th><th class="num">First sight</th><th class="num">Never trained</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr></tbody>
+    </table>
+
+    <h4>Sessions</h4>
+    <table class="ledger compact" id="rwSessions">
+      <thead><tr><th>When</th><th>Lesson</th><th>Training</th><th class="num">Progress</th><th class="num">Retention</th><th class="num">Generalization</th><th class="num">Taught right</th><th class="num">Held-out before → after</th><th class="num">Held-out loss</th></tr></thead>
+      <tbody><tr><td colspan="9" class="empty">No session recorded yet.</td></tr></tbody>
+    </table>
+
+    <h4>Questions</h4>
+    <div class="actions">
+      <select id="rwFilter" aria-label="Which questions">
+        <option value="all">All questions (most emphasis first)</option>
+        <option value="gaps">Taught, not yet right</option>
+        <option value="stuck">Stuck (failing without progress)</option>
+        <option value="forgotten">Forgotten since a checkpoint</option>
+        <option value="retained">Retained across checkpoints</option>
+        <option value="memory">Right only with memories</option>
+        <option value="unseen">Never trained (held-out, review)</option>
+      </select>
+      <input type="text" id="rwSearch" placeholder="Search question, answer or lesson">
+      <button type="button" id="rwShow">Show</button>
+    </div>
+    <table class="ledger compact" id="rwQuestions">
+      <thead><tr><th>Question</th><th class="num">Grade</th><th>Milestones</th><th class="num">Retention</th><th class="num">Generalization</th><th class="num" title="How much this unit is practised relative to ordinary training (1.0)">Emphasis</th><th></th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">—</td></tr></tbody>
+    </table>
+
+    <h4 id="rwAuditTitle">Audit log</h4>
+    <p class="note">Every grading decision: the grade and why, new credit, milestones already credited, and credit withheld with the reason. Relevance (words from the question's own text in a wrong answer) is shown for diagnosis only and never used by training.</p>
+    <div class="actions"><button type="button" id="rwAuditAll" class="quiet">Show the latest answers</button><button type="button" id="rwClear" class="quiet">Clear this model's ledger</button></div>
+    <table class="ledger compact" id="rwAudit">
+      <thead><tr><th>When</th><th>Question</th><th>From</th><th>Nova's answer</th><th>Grade</th><th>Credit</th><th>Withheld</th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">—</td></tr></tbody>
+    </table>
+  </section>
+
+  <!-- § 9 Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 8</span> Exams</h2>
+    <h2><span class="sec">§ 9</span> Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is scripted. With Study Mode on, memories related to your message are put in front of it (shown as memory lines); the reply is still the model's own.</p>
 
     <h3>Conversation</h3>
@@ -586,9 +658,9 @@
     <div id="examResult"></div>
   </section>
 
-  <!-- § 9 Brain -->
+  <!-- § 10 Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 9</span> Brain</h2>
+    <h2><span class="sec">§ 10</span> Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
     <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on § 7 Study. Everything below is the network itself.</p>
     <div class="plate-wrap">
@@ -638,9 +710,9 @@
     <div id="thinkTree" class="think-tree"><p class="empty">Trace a reply to see how it was produced.</p></div>
   </section>
 
-  <!-- § 10 Library -->
+  <!-- § 11 Library -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 10</span> Library</h2>
+    <h2><span class="sec">§ 11</span> Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>
@@ -661,5 +733,6 @@
 <script src="js/practice.js"></script>
 <script src="js/reflection.js"></script>
 <script src="js/review.js"></script>
+<script src="js/rewards.js"></script>
 </body>
 </html>

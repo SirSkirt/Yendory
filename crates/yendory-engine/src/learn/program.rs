@@ -8,8 +8,7 @@ use super::curriculum::{PreparedCourse, PreparedLesson, Section};
 use super::eval::{evaluate, Report};
 use super::lessons::{Item, Kind};
 use super::session::{
-    batch_loss_and_gradients_loss, rows_of, teach_with, EducationStage, Event, RetryPolicy, SessionConfig,
-    Strategy,
+    batch_loss_and_gradients_loss, rows_of, EducationStage, Event, RetryPolicy, SessionConfig, Strategy,
 };
 use super::Rng;
 use crate::model::{Ablation, Bicameral};
@@ -271,6 +270,13 @@ pub trait CourseHost {
     fn study(&mut self) -> Option<&mut dyn crate::memory::StudyHook> {
         None
     }
+    /// The reward ledger and settings for this run (none by default). It is taken when the run
+    /// starts and given back with [`CourseHost::return_rewards`] when it ends, whatever the
+    /// outcome; the course's final exam is protected from it.
+    fn take_rewards(&mut self) -> Option<super::reward::Rewards> {
+        None
+    }
+    fn return_rewards(&mut self, _rewards: super::reward::Rewards) {}
 }
 
 #[derive(Clone, Debug, Default)]
@@ -526,6 +532,30 @@ pub fn run_course(
     host: &mut dyn CourseHost,
     stop: &AtomicBool,
 ) -> Result<RunResult, String> {
+    let mut rewards = host.take_rewards();
+    if let Some(r) = rewards.as_mut() {
+        // The final exam stays independent: its questions are never recorded or credited.
+        r.protect(prep.exam.iter().flat_map(|s| &s.items));
+    }
+    let result = run_course_inner(model, archive, prep, run, best, opts, host, rewards.as_mut(), stop);
+    if let Some(r) = rewards {
+        host.return_rewards(r);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_course_inner(
+    model: &Bicameral,
+    archive: &[Item],
+    prep: &PreparedCourse,
+    run: &mut CourseRun,
+    best: Option<Snapshot>,
+    opts: &RunOptions,
+    host: &mut dyn CourseHost,
+    mut rewards: Option<&mut super::reward::Rewards>,
+    stop: &AtomicBool,
+) -> Result<RunResult, String> {
     if run.fingerprint != prep.fingerprint || run.records.len() != prep.lessons.len() {
         return Err("The course changed since this run started; start a new run of the revised course".into());
     }
@@ -648,6 +678,7 @@ pub fn run_course(
                     &mut record,
                     &mut stopped,
                     &mut run.queue,
+                    rewards.as_deref_mut(),
                     &mut |e| host.event(&ProgramEvent::Lesson { index, stage, event: e.clone() }),
                     &mut |_, _| Ok(()),
                     stop,
@@ -716,12 +747,13 @@ pub fn run_course(
                         archive.iter().filter(|i| i.source != lesson.name).cloned().collect();
                     let name = lesson.name.clone();
                     let attempt = rec.attempt;
-                    let r = teach_with(
+                    let r = super::session::teach_rewarded(
                         &current,
                         &lesson.items,
                         Some(&practice),
                         &others,
                         &cfg,
+                        rewards.as_deref_mut(),
                         &mut |e| {
                             host.event(&ProgramEvent::Remediation {
                                 attempt,

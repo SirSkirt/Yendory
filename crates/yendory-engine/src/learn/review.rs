@@ -529,6 +529,35 @@ pub fn assess(
     Ok(Assessment { step: model.step, time: now, asked, correct, total, with_memory })
 }
 
+/// Records an assessment in the reward ledger: the review questions were never trained, so a
+/// right answer counts for generalization (network alone) and, separately, with memories.
+pub fn record_assessment(rewards: &mut super::reward::Rewards, items: &[Item], a: &Assessment) {
+    use super::reward::{Answer, Evidence, Origin};
+    let held: Vec<&Item> = items.iter().filter(|i| i.held_out && i.prompt.is_some()).collect();
+    for (it, asked) in held.iter().zip(&a.asked) {
+        rewards.record(Evidence {
+            item: it,
+            answer: Answer::Reply(&asked.reply),
+            origin: Origin::Review,
+            step: a.step,
+            checkpoint: true,
+            teacher: None,
+        });
+        if let Some((reply, _)) = &asked.with_memory {
+            let mut with = (*it).clone();
+            with.context = Some(format!("{}(retrieved memories)\n", crate::memory::MEMORY));
+            rewards.record(Evidence {
+                item: &with,
+                answer: Answer::Reply(reply),
+                origin: Origin::Review,
+                step: a.step,
+                checkpoint: true,
+                teacher: None,
+            });
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Comparison {
     pub improved: Vec<String>,

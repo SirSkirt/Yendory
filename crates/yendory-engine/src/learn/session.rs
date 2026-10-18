@@ -20,6 +20,7 @@
 //! given to the model at inference.
 use super::eval::{evaluate, sample_per_kind, Report};
 use super::lessons::{grow_vocabulary, Item, Kind};
+use super::reward::{Origin, Rewards, Totals};
 use super::{encode_item, lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use serde::{Deserialize, Serialize};
@@ -327,6 +328,26 @@ pub enum Event {
     },
     Candidate(CandidateRecord),
     Epoch(EpochRecord),
+    /// Rewards (Stage 1): what the ledger recorded at the session start or end.
+    Rewarded {
+        /// "start" or "end".
+        when: String,
+        /// Taught units (and earlier lessons' units) asked, and how many were right.
+        quizzed: usize,
+        quiz_right: usize,
+        /// Credit earned so far in this session.
+        progress: f32,
+        retention: f32,
+        generalization: f32,
+        /// Diagnostic only.
+        relevance: f32,
+        flags: Vec<super::reward::Flag>,
+    },
+    /// Reward-guided training (Stage 2): how this epoch's units were scheduled and why.
+    Emphasis {
+        epoch: u32,
+        plan: super::reward::EmphasisPlan,
+    },
     Finished {
         accepted: bool,
         epochs_run: u32,
@@ -598,6 +619,48 @@ pub fn teach_with(
     observer: &mut dyn FnMut(&Event),
     stop: &AtomicBool,
 ) -> Result<SessionResult, String> {
+    teach_rewarded(model, lesson, practice, archive, cfg, None, observer, stop)
+}
+
+/// What the ledger saw of the session so far.
+fn rewarded_event(r: &Rewards, start: &Totals, when: &str, quiz: (usize, usize)) -> Event {
+    let t = &r.ledger.totals;
+    Event::Rewarded {
+        when: when.into(),
+        quizzed: quiz.0,
+        quiz_right: quiz.1,
+        progress: t.progress - start.progress,
+        retention: t.retention - start.retention,
+        generalization: t.generalization - start.generalization,
+        relevance: t.relevance - start.relevance,
+        flags: if when == "end" { r.ledger.flags() } else { Vec::new() },
+    }
+}
+
+/// Picks an index with probability proportional to `cumulative` weights (a running sum).
+fn weighted_pick(cumulative: &[f32], rng: &mut Rng) -> usize {
+    let total = cumulative.last().copied().unwrap_or(0.);
+    let x = rng.unit() as f32 * total;
+    cumulative.partition_point(|&c| c <= x).min(cumulative.len().saturating_sub(1))
+}
+
+/// [`teach_with`] with rewards. With `rewards` recording (Stage 1), Nova's answers to the
+/// lesson's held-out questions (start and end) and to a quiz of its taught units and of earlier
+/// lessons' units (start) are graded into the ledger; nothing about training changes. With
+/// reward-guided training on (Stage 2), each epoch's units are scheduled by their emphasis
+/// (`reward::plan_epoch`) and rehearsal of earlier lessons favours what is being forgotten; the
+/// targets, the candidates and every acceptance rule stay exactly as in ordinary training.
+#[allow(clippy::too_many_arguments)]
+pub fn teach_rewarded(
+    model: &Bicameral,
+    lesson: &[Item],
+    practice: Option<&[Item]>,
+    archive: &[Item],
+    cfg: &SessionConfig,
+    mut rewards: Option<&mut Rewards>,
+    observer: &mut dyn FnMut(&Event),
+    stop: &AtomicBool,
+) -> Result<SessionResult, String> {
     if cfg.epochs == 0 || cfg.batch_size == 0 || !(cfg.learning_rate > 0. && cfg.learning_rate.is_finite()) {
         return Err("Choose at least one epoch, a batch size and a positive learning rate".into());
     }
@@ -652,6 +715,34 @@ pub fn teach_with(
         baseline: baseline.clone(),
     });
 
+    // Rewards: the start checkpoint's answers go into the ledger (evaluation only: nothing here
+    // touches the training random streams, so ordinary training is unchanged).
+    rewards = rewards.filter(|r| r.config.record);
+    let lesson_name =
+        lesson.iter().find(|i| !i.held_out).or(lesson.first()).map(|i| i.source.clone()).unwrap_or_default();
+    let mut ledger_start = Totals::default();
+    let mut start_quiz = (0, 0);
+    let mut quiz_rate = None;
+    if let Some(r) = rewards.as_deref_mut() {
+        ledger_start = r.ledger.begin_session();
+        r.record_report(&probes.heldout_items, &base_report, Origin::HeldOut, start.step, true);
+        start_quiz = r.quiz(&start, &train, Origin::Training, true)?;
+        quiz_rate = (start_quiz.0 > 0).then(|| start_quiz.1 as f32 / start_quiz.0 as f32);
+        // Earlier lessons' units: retention across checkpoints.
+        let limit = r.config.quiz_limit;
+        r.config.quiz_limit = limit / 4;
+        let earlier = r.quiz(&start, &archive_train, Origin::Training, true);
+        r.config.quiz_limit = limit;
+        let earlier = earlier?;
+        observer(&rewarded_event(
+            r,
+            &ledger_start,
+            "start",
+            (start_quiz.0 + earlier.0, start_quiz.1 + earlier.1),
+        ));
+    }
+    let weighted = rewards.as_ref().is_some_and(|r| r.weighted());
+
     let foci: Vec<Focus> = if let Some(stage) = cfg.education {
         stage.foci(cfg.foundation)
     } else if cfg.foundation {
@@ -669,6 +760,7 @@ pub fn teach_with(
     let mut working = start.clone();
     let mut accepted_score = baseline.clone();
     let mut accepted_correct = correct_set(&base_report);
+    let mut accepted_report = base_report.clone();
     let mut learned = false;
     let mut epochs = Vec::new();
     let mut stale = 0;
@@ -677,7 +769,31 @@ pub fn teach_with(
     'epochs: for epoch in 1..=cfg.epochs {
         // One batch plan per epoch, shared by every candidate.
         let mut plan_rng = Rng::new(cfg.seed.wrapping_mul(0x9E37_79B9).wrapping_add(epoch as u64));
-        let mut order: Vec<&Item> = train.clone();
+        // Stage 2: copies of each unit by emphasis (same total), rehearsal by emphasis.
+        let mut rehearsal_weights: Option<Vec<f32>> = None;
+        let mut order: Vec<&Item> = match rewards.as_deref_mut().filter(|_| weighted) {
+            Some(r) => {
+                let quizzed =
+                    if epoch == 1 { start_quiz } else { r.quiz(&working, &train, Origin::Session, false)? };
+                let (copies, plan) = super::reward::plan_epoch(r, &train, &mut plan_rng, quizzed);
+                observer(&Event::Emphasis { epoch, plan });
+                if !archive_train.is_empty() {
+                    let concepts = super::reward::Concepts::of(&r.ledger, &archive_train);
+                    let mut sum = 0f32;
+                    rehearsal_weights = Some(
+                        archive_train
+                            .iter()
+                            .map(|it| {
+                                sum += r.ledger.emphasis(&r.config, it, &concepts).value;
+                                sum
+                            })
+                            .collect(),
+                    );
+                }
+                train.iter().zip(copies).flat_map(|(it, n)| std::iter::repeat(*it).take(n)).collect()
+            }
+            None => train.clone(),
+        };
         match cfg.strategy {
             Strategy::Standard => {
                 for i in (1..order.len()).rev() {
@@ -700,7 +816,10 @@ pub fn teach_with(
             let mut rows = Vec::with_capacity(cfg.batch_size);
             while rows.len() < cfg.batch_size {
                 let it = if !archive_train.is_empty() && plan_rng.unit() < cfg.rehearsal_share as f64 {
-                    archive_train[plan_rng.below(archive_train.len())]
+                    match &rehearsal_weights {
+                        Some(w) => archive_train[weighted_pick(w, &mut plan_rng)],
+                        None => archive_train[plan_rng.below(archive_train.len())],
+                    }
                 } else {
                     match next.next() {
                         Some(it) => it,
@@ -842,6 +961,7 @@ pub fn teach_with(
             accepted = cand;
             accepted_score = s;
             accepted_correct = correct;
+            accepted_report = report.clone();
             learned = true;
             (focus_name(foci[ci]).to_string(), report)
         });
@@ -875,6 +995,24 @@ pub fn teach_with(
         }
     }
 
+    if let Some(r) = rewards {
+        if learned && !stopped {
+            r.record_report(&probes.heldout_items, &accepted_report, Origin::HeldOut, accepted.step, true);
+        }
+        let name = r.model.clone();
+        r.ledger.end_session(
+            &ledger_start,
+            &name,
+            &lesson_name,
+            (model.step, if learned { accepted.step } else { model.step }),
+            learned,
+            weighted,
+            quiz_rate,
+            (baseline.exact_rate(), accepted_score.exact_rate()),
+            (baseline.heldout_loss, accepted_score.heldout_loss),
+        );
+        observer(&rewarded_event(r, &ledger_start, "end", start_quiz));
+    }
     observer(&Event::Finished { accepted: learned, epochs_run: epochs.len() as u32, stopped });
     Ok(SessionResult {
         model: if learned { accepted } else { model.clone() },

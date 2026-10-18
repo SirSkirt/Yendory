@@ -7,9 +7,6 @@ let practiceTimer = null;
 const practiceCard = new TaskCard($("practiceCard"));
 const practiceTrack = { epochs: 1, candidates: 1, epochNow: 0, seen: [] };
 const ORIGIN_TEXT = { nova_confirmed: "Nova's answer, confirmed", teacher_correction: "your correction", lesson_answer: "the lesson's answer" };
-// Grading as the lesson would: its first accepted form, normalised like sentence grading.
-const norm = s => String(s || "").toLowerCase().replace(/n't/g, " not").replace(/[^a-z0-9]+/g, " ").trim();
-const matchesLesson = it => it.expected && it.expected.split("|").map(x => x.trim()).filter(x => x && !/^(must|never):|^!/.test(x)).some(x => norm(x) === norm(it.answer));
 
 async function refreshPractice() {
   const sources = await invoke("practice_sources").catch(() => []);
@@ -54,19 +51,29 @@ function showPractice(p) {
   const body = $("practiceTable").tBodies[0];
   body.replaceChildren();
   p.items.forEach((it, k) => {
-    const right = el("input", { type: "radio", name: `pm${k}`, checked: it.mark === "right" ? "" : null, disabled: done ? "" : null, onchange: () => { it.mark = "right"; marksChanged(); } });
-    const wrong = el("input", { type: "radio", name: `pm${k}`, checked: it.mark === "wrong" ? "" : null, disabled: done ? "" : null, onchange: () => { it.mark = "wrong"; marksChanged(); } });
+    const grade = el("input", { type: "number", min: 0, max: 100, step: 5, class: "narrow-num", value: it.grade ?? "", placeholder: "%", "aria-label": "Grade, 0 to 100", disabled: done ? "" : null,
+      oninput: e => {
+        const v = e.target.value === "" ? null : Math.max(0, Math.min(100, Number(e.target.value)));
+        it.grade = v;
+        // 100 goes with "right"; a partial grade is never trained as written.
+        if (v != null) { it.mark = v >= 100 ? "right" : "wrong"; right.checked = it.mark === "right"; wrong.checked = it.mark === "wrong"; }
+        marksChanged();
+      } });
+    const right = el("input", { type: "radio", name: `pm${k}`, checked: it.mark === "right" ? "" : null, disabled: done ? "" : null, onchange: () => { it.mark = "right"; it.grade = 100; grade.value = 100; marksChanged(); } });
+    const wrong = el("input", { type: "radio", name: `pm${k}`, checked: it.mark === "wrong" ? "" : null, disabled: done ? "" : null, onchange: () => { it.mark = "wrong"; if (it.grade == null || it.grade >= 100) { it.grade = 0; grade.value = 0; } marksChanged(); } });
+    const auto = it.auto ? el("div", { class: "note" }, `Automatic: ${it.auto.percent == null ? "uncertain" : Math.round(it.auto.percent) + "%"} (${it.auto.reason})`) : "";
     const correction = el("input", { type: "text", value: it.correction, placeholder: "Correction (trained instead of her answer)", disabled: done ? "" : null, oninput: e => { it.correction = e.target.value; marksChanged(); } });
     const note = el("input", { type: "text", value: it.note, placeholder: "Note (not taught)", disabled: done ? "" : null, oninput: e => { it.note = e.target.value; marksChanged(); } });
     body.append(el("tr", {},
       el("td", { class: "num" }, String(k + 1)),
       el("td", {}, it.question, it.expected ? el("div", { class: "note" }, `Lesson's answer: ${it.expected}`) : ""),
       el("td", {}, el("span", { class: "mono" }, it.answer || "(empty)"),
-        matchesLesson(it) ? el("div", { class: "note ok" }, "matches the lesson's answer") : "",
+        it.auto?.correct ? el("div", { class: "note ok" }, "matches the lesson's answer") : "",
         it.memories.length ? el("div", { class: "note" }, "Memories in front: " + it.memories.join(" · ")) : "",
         it.after != null ? el("div", { class: "note" }, "After training: ", el("span", { class: "mono" }, it.after || "(empty)")) : "",
         it.target ? el("div", { class: "note" }, `Trained on ${ORIGIN_TEXT[it.target[1]]}: ${it.target[0]}`) : ""),
-      el("td", {}, el("label", { class: "check-inline" }, right, "right"), " ", el("label", { class: "check-inline" }, wrong, "wrong")),
+      el("td", {}, el("label", { class: "check-inline" }, right, "right"), " ", el("label", { class: "check-inline" }, wrong, "wrong"),
+        el("div", {}, el("label", { class: "check-inline" }, "Grade ", grade, "%")), auto),
       el("td", {}, correction, note)));
   });
   for (const id of ["practiceTrain", "practiceAllRight"]) $(id).disabled = done || teaching;
@@ -83,7 +90,7 @@ function marksChanged() {
 async function saveMarks() {
   clearTimeout(practiceTimer);
   if (!practice || practice.result) return;
-  practice = await invoke("save_practice_marks", { id: practice.id, marks: practice.items.map(i => ({ mark: i.mark, correction: i.correction, note: i.note })) });
+  practice = await invoke("save_practice_marks", { id: practice.id, marks: practice.items.map(i => ({ mark: i.mark, correction: i.correction, note: i.note, grade: i.grade ?? null })) });
   $("practiceSaved").textContent = `Saved ${new Date().toLocaleTimeString()}`;
 }
 
@@ -99,14 +106,14 @@ $("practiceStart").addEventListener("click", safe(async () => {
     say("Nova answered. Mark her answers.");
   } finally { $("practiceStart").disabled = false; }
 }, "Start practice"));
-$("practiceAllRight").addEventListener("click", () => {
+$("practiceAllRight").addEventListener("click", safe(async () => {
   if (!practice) return;
-  let n = 0;
-  for (const it of practice.items) if (!it.mark && matchesLesson(it)) { it.mark = "right"; n++; }
-  showPractice(practice);
-  marksChanged();
-  say(`${n} answer(s) matching the lesson's marked right. Check them before training.`);
-});
+  await saveMarks();
+  const before = practice.items.filter(i => i.mark).length;
+  showPractice(await invoke("accept_practice_auto", { id: practice.id }));
+  const n = practice.items.filter(i => i.mark).length - before;
+  say(`${n} answer(s) marked from certain automatic grades (right, or 0% wrong). Partial and uncertain ones are left for you. Check them before training.`);
+}, "Accept automatic grades"));
 $("practiceTrain").addEventListener("click", safe(async () => {
   await saveMarks();
   const epochs = Number($("practiceEpochs").value);

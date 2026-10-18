@@ -8,7 +8,8 @@
 //! and the next attempt applies the remedy for that cause. See docs/LEARNING.md.
 use super::eval::{evaluate, sample_per_kind};
 use super::lessons::{parse_lesson, Item, Kind};
-use super::session::{teach_with, Event, Rejection, Score, SessionConfig, SessionResult, Strategy};
+use super::reward::{Origin, Rewards};
+use super::session::{teach_rewarded, Event, Rejection, Score, SessionConfig, SessionResult, Strategy};
 use crate::fingerprint::sha256_hex;
 use crate::model::{Ablation, Bicameral};
 use serde::{Deserialize, Serialize};
@@ -260,6 +261,7 @@ fn diagnose(
     previous: &Plan,
     base: &SessionConfig,
     generalising_tried: bool,
+    rewards: Option<&mut Rewards>,
 ) -> Result<(Diagnosis, Option<Plan>), String> {
     // Rejected candidates across the attempt: what stopped them?
     let candidates: Vec<_> =
@@ -278,6 +280,10 @@ fn diagnose(
     // Can the (current) model answer the lesson's own training questions?
     let training: Vec<&Item> = items.iter().filter(|i| !i.held_out && i.kind != Kind::Prose).collect();
     let report = evaluate(model, &training, Ablation::default())?;
+    // The model after the attempt is a saved checkpoint: its answers go into the ledger.
+    if let Some(r) = rewards {
+        r.record_report(&training, &report, Origin::Training, model.step, true);
+    }
     let correct_by_unit: Vec<bool> = {
         // Outcomes come in item order; conversations contribute one outcome per turn.
         let mut v = Vec::new();
@@ -430,7 +436,25 @@ pub fn teach_course_studying(
     files: &[CourseFile],
     archive: &[Item],
     cfg: &SessionConfig,
+    study: Option<&mut dyn crate::memory::StudyHook>,
+    observer: &mut dyn FnMut(&CourseEvent),
+    on_learned: &mut OnLearned,
+    stop: &AtomicBool,
+) -> Result<CourseResult, String> {
+    teach_course_rewarded(model, files, archive, cfg, study, None, observer, on_learned, stop)
+}
+
+/// [`teach_course_studying`] with rewards: answers are graded into the ledger, and with
+/// reward-guided training on, every session schedules its units by emphasis (see
+/// [`super::session::teach_rewarded`]).
+#[allow(clippy::too_many_arguments)]
+pub fn teach_course_rewarded(
+    model: &Bicameral,
+    files: &[CourseFile],
+    archive: &[Item],
+    cfg: &SessionConfig,
     mut study: Option<&mut dyn crate::memory::StudyHook>,
+    mut rewards: Option<&mut Rewards>,
     observer: &mut dyn FnMut(&CourseEvent),
     on_learned: &mut OnLearned,
     stop: &AtomicBool,
@@ -540,6 +564,7 @@ pub fn teach_course_studying(
                         &mut record,
                         &mut stopped,
                         &mut queue,
+                        rewards.as_deref_mut(),
                         observer,
                         on_learned,
                         stop,
@@ -593,6 +618,7 @@ pub(super) fn teach_lesson(
     record: &mut FileRecord,
     stopped: &mut bool,
     queue: &mut Queue,
+    mut rewards: Option<&mut Rewards>,
     observer: &mut dyn FnMut(&CourseEvent),
     on_learned: &mut OnLearned,
     stop: &AtomicBool,
@@ -615,12 +641,13 @@ pub(super) fn teach_lesson(
             remedy: plan.remedy.clone(),
         });
         let mut forward = |e: &Event| observer(&CourseEvent::Session { index, event: e.clone() });
-        let r = match teach_with(
+        let r = match teach_rewarded(
             current,
             items,
             plan.practice.as_deref(),
             &others,
             &plan.cfg,
+            rewards.as_deref_mut(),
             &mut forward,
             stop,
         ) {
@@ -669,7 +696,8 @@ pub(super) fn teach_lesson(
         if attempt == retries {
             return Ok(());
         }
-        let (mut diagnosis, mut next) = diagnose(current, items, &r, &plan, cfg, generalising_tried)?;
+        let (mut diagnosis, mut next) =
+            diagnose(current, items, &r, &plan, cfg, generalising_tried, rewards.as_deref_mut())?;
         // The same cause again after an attempt that changed nothing, and the remedy would set up
         // the same attempt again: repeating it would only repeat the result. Wait for other
         // lessons instead. (A remedy that changes something, e.g. a further halved rate, may run.)

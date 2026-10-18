@@ -235,7 +235,12 @@ pub async fn review_assess(app: AppHandle, studio: State<'_, Studio>, id: String
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut memory = super::study::study_mode(&app2).then(|| super::study::load_memory(&app2, &meta.id));
-        s.before = Some(assess(&model, &items, memory.as_mut(), now())?);
+        let before = assess(&model, &items, memory.as_mut(), now())?;
+        if let Some(mut r) = super::rewards::rewards_for(&app2, &meta.id) {
+            yendory_engine::learn::review::record_assessment(&mut r, &items, &before);
+            super::rewards::keep(&app2, &r);
+        }
+        s.before = Some(before);
         if let Some(m) = &memory {
             super::study::save_memory(&app2, &meta.id, m)?;
         }
@@ -288,22 +293,32 @@ pub fn train_review(
         let outcome = guarded(|| {
             let mut memory =
                 super::study::study_mode(&app).then(|| super::study::load_memory(&app, &meta.id));
+            let mut rewards = super::rewards::rewards_for(&app, &meta.id);
             if s.before.is_none() {
                 let _ = app.emit("review-event", serde_json::json!({"id": sid, "phase": "baseline"}));
-                s.before = Some(assess(&model, &items, memory.as_mut(), now())?);
+                let before = assess(&model, &items, memory.as_mut(), now())?;
+                if let Some(r) = rewards.as_mut() {
+                    yendory_engine::learn::review::record_assessment(r, &items, &before);
+                }
+                s.before = Some(before);
             }
             let mut observer = |e: &Event| {
                 let _ = app.emit("review-event", serde_json::json!({"id": sid, "event": e}));
             };
-            let r = yendory_engine::learn::session::teach_with(
+            let r = yendory_engine::learn::session::teach_rewarded(
                 &model,
                 &items,
                 None,
                 &archive,
                 &cfg,
+                rewards.as_mut(),
                 &mut observer,
                 &stop,
-            )?;
+            );
+            if let Some(rw) = &rewards {
+                super::rewards::keep(&app, rw);
+            }
+            let r = r?;
             if r.learned {
                 let mut m = meta.clone();
                 refresh_meta(&mut m, &r.model);
@@ -315,6 +330,10 @@ pub fn train_review(
             }
             let _ = app.emit("review-event", serde_json::json!({"id": sid, "phase": "after"}));
             let after = assess(&r.model, &items, memory.as_mut(), now())?;
+            if let Some(rw) = rewards.as_mut() {
+                yendory_engine::learn::review::record_assessment(rw, &items, &after);
+                super::rewards::keep(&app, rw);
+            }
             if let Some(m) = &memory {
                 super::study::save_memory(&app, &meta.id, m)?;
             }

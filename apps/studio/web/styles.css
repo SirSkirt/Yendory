@@ -72,10 +72,10 @@ button, input, select { font: inherit; color: inherit; }
 .motto { margin: 2px 0 0; font: italic 14px var(--serif); color: var(--ink-soft); }
 .current { justify-self: end; text-align: right; font: 14px var(--serif); color: var(--ink-soft); }
 .current b { color: var(--ink); font-weight: 600; }
-.contents { grid-column: 1 / -1; display: flex; gap: 4px; overflow-x: auto; margin-top: 10px; }
+.contents { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0 4px; margin-top: 10px; }
 .contents button {
   background: none; border: 0; border-bottom: 3px solid transparent;
-  padding: 8px 12px 9px; cursor: pointer; font: 16px var(--serif); color: var(--ink-soft);
+  padding: 8px 9px 9px; cursor: pointer; font: 16px var(--serif); color: var(--ink-soft);
   white-space: nowrap;
 }
 .contents button span { font: 12px var(--mono); margin-right: 6px; color: var(--margin); }
@@ -370,3 +370,7 @@ table { border-collapse: collapse; width: 100%; }
 .modal-box p { margin: 0 0 12px; font: 15px/1.5 var(--serif); }
 .modal-box input { width: 100%; margin-bottom: 6px; }
 .modal-box .actions { justify-content: flex-end; margin-bottom: 0; }
+
+/* Rewards page */
+.rw-checks label.check { display: block; margin: 8px 0; max-width: 90ch; }
+.reward-status { margin: 6px 0; }

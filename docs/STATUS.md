@@ -39,6 +39,9 @@ has been checked, how, and what has not.
 | A fresh 1.2M model learns to use memory lines: 88% of new random facts with them, 9% without (chance 12%), `examples/memory_probe.rs` | measured |
 | Practice, reflection and Review Training on a small model: targets keep their origin (Nova confirmed / teacher correction / lesson answer), nothing unapproved is trained, held-out questions judge every pass, before / after reported (`tests/study.rs`, `learn::review` and `learn::reflect` tests) | pass |
 | Lesson Designer: analysis, sources, checks (arithmetic, leaks, duplicates), Markdown to plain text, export read back by the parser (`learn::designer` tests) | pass |
+| Rewards, Stage 1 (`learn::reward` tests, `tests/reward.rs`): the grader admits uncertainty and judges meaning (negation, required words, numbers), letters only in spelling lessons; progress milestones credited once (the "Hallway" sequence: +0.10, 0, +0.18, 0, +0.72, 0), reworded copies share a cycle, budget capped; retention 0.6 / 0.2 / 0.1, nothing without training in between, lost answers recorded; never-trained questions earn generalization, not progress; memory answers on their own smaller track; teacher grades and notes recorded; protected exam questions refused | pass |
+| Recording rewards leaves training unchanged: the same session with and without the ledger gives bit-identical weights; a course run hands back its ledger and no final-exam question reaches it | pass |
+| Rewards, Stage 2: one emphasis plan per epoch, the same number of units as ordinary training (within rounding), every emphasis with its reasons, held-out questions never scheduled, known units kept at the minimum but still trained | pass |
 
 ## Yendory Studio (apps/studio)
 
@@ -60,6 +63,10 @@ into memory (3 of 6 sentences kept by surprise), memory added, retrieved in a co
 step through a shared concept) and logged; a practice session answered, marked, corrected and
 trained (accepted, held-out loss 3.19 → 2.52); a reflection on memories measured and written;
 review material generated as a Designer lesson, checked, assessed, trained and compared.
+Rewards, in the app: a practice session graded automatically (reasons shown, uncertain where no
+rule decides), certain grades accepted, a partial teacher grade (40%) and note given, trained
+(accepted); the § 8 Rewards page shows the ledger (credit, concepts, the session, questions with
+their emphasis and reasons, the audit log with withheld credit and reasons).
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

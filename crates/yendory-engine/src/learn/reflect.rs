@@ -208,6 +208,7 @@ fn item(o: &Observation, t: &str, memory_mode: bool, held_out: bool) -> Item {
         key: None,
         reading: None,
         context: Some(ctx),
+        spelling: false,
     }
 }
 
@@ -262,6 +263,8 @@ pub fn train(
             note: String::new(),
             target: None,
             after: None,
+            grade: None,
+            auto: None,
         };
         o.target = target(&as_practice);
         if o.target.is_some() {

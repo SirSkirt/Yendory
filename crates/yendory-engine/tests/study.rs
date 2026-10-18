@@ -52,6 +52,8 @@ fn practice_trains_on_marked_answers_with_their_origin() {
         note: String::new(),
         target: None,
         after: None,
+        grade: None,
+        auto: None,
     };
     let mut items =
         vec![item("Is Max a dog?", "Yes."), item("Is Bella a cat?", "Yes."), item("Is Kim a hen?", "")];

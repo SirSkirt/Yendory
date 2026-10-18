@@ -703,6 +703,8 @@ struct StudioHost<'a> {
     meta: Meta,
     /// Study Mode: the model's memory, studied into and used while the course is taught.
     study: Option<yendory_engine::memory::Studying>,
+    /// The model's reward ledger (taken by the run, given back when it ends).
+    rewards: Option<yendory_engine::learn::reward::Rewards>,
 }
 impl StudioHost<'_> {
     fn emit(&self, event: &ProgramEvent) {
@@ -736,6 +738,13 @@ impl CourseHost for StudioHost<'_> {
     }
     fn study(&mut self) -> Option<&mut dyn yendory_engine::memory::StudyHook> {
         self.study.as_mut().map(|s| s as &mut dyn yendory_engine::memory::StudyHook)
+    }
+    fn take_rewards(&mut self) -> Option<yendory_engine::learn::reward::Rewards> {
+        self.rewards.take()
+    }
+    fn return_rewards(&mut self, r: yendory_engine::learn::reward::Rewards) {
+        super::rewards::keep(self.app, &r);
+        self.rewards = Some(r);
     }
     fn save(&mut self, model: &Bicameral, archive: &[Item], run: &CourseRun) -> Res<()> {
         refresh_meta(&mut self.meta, model);
@@ -916,7 +925,8 @@ fn run_plan(
         let opts = RunOptions { word_limit: meta.word_limit };
         let study = super::study::study_mode(app)
             .then(|| yendory_engine::memory::Studying::new(super::study::load_memory(app, &meta.id), now()));
-        let mut host = StudioHost { app, plan: plan.clone(), meta: meta.clone(), study };
+        let rewards = super::rewards::rewards_for(app, &meta.id);
+        let mut host = StudioHost { app, plan: plan.clone(), meta: meta.clone(), study, rewards };
         let result = run_course(&model, &archive, &prep, &mut run, best, &opts, &mut host, stop);
         meta = host.meta;
         match result {

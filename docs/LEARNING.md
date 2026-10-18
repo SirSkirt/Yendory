@@ -213,6 +213,84 @@ questions; the comparison lists questions improved, regressed, still wrong and k
 score per concept word. What she answers with memory (remembered) is always shown apart from
 what she answers without it (neurally learned).
 
+## Rewards (`learn::reward`)
+
+Nova has no reinforcement learning: everything that changes her weights is supervised training
+on target text. Rewards add a measurement (Stage 1) and a way to decide how much each unit is
+practised (Stage 2). They never change what she is taught.
+
+**The grader** (`grade_reply`) gives 0-100%, or *uncertain*. With an answer key: the key's
+verdict (100%), its required words for partial credit (up to 60%), 0% for a forbidden word or a
+conflicting keyword. Without one: exact or normalised (case and punctuation) equality is 100%;
+the contradicted answer, the opposite meaning (negation) or nothing in common is 0%; a short
+answer contained in a longer reply is 75%; anything else is **uncertain** and earns nothing.
+Letters count only in lessons marked `Grading: spelling` (a first line in the lesson block) with
+the experiment on: the share of the answer's prefix spelled right. Conversations: share of turns
+right. The teacher's grade (Practice, 0-100%) replaces the automatic one.
+
+**The ledger** (`RewardLedger`, per model, `<model dir>/rewards.json` in Studio) keeps, for each
+question (lesson + canonical text) and its **reward cycle** (expected answer + the question's
+concept words, so a reworded copy shares the cycle):
+
+- **Progress**: one-time credit for a new milestone, network alone and with memories as separate
+  tracks (memory track: half the budget). A milestone is a better grade, or in spelling lessons a
+  longer correct prefix (by default 0.10 for the first letter, 0.09 for each further one).
+  Partial milestones together earn at most half the budget; the complete answer earns the rest.
+  The same answer again, in any capitalisation or punctuation, earns nothing; after 20 attempts
+  partial credit stops (the complete answer still counts); a complete cycle never reopens by
+  itself (the teacher can reset one). Never-trained questions earn no progress.
+- **Retention**: at saved checkpoints only (the start of a session, the model after an attempt),
+  once per checkpoint: the first correct answer of a taught question 0.6, then 0.2, 0.1, 0.05 ...
+  (at least 0.02) at later checkpoints, only when training happened in between. A lost answer is
+  recorded as forgotten; relearning continues the shrinking series, so forgetting and relearning
+  cannot farm credit.
+- **Generalization**: the first correct answer to a question Nova was never trained on (a
+  lesson's held-out questions, Review Training's evaluation questions): 1.0, the largest credit.
+- **Relevance** (diagnostic only): words from the question's own text (story, context) that a
+  wrong answer uses, 0.01 each up to 0.05 per cycle, once per word; words in neither the source
+  nor the answer are listed as invented. Never used by training.
+- An optional value for a certainly wrong (0%) answer (0 by default, may be negative), once per
+  distinct wrong answer; never applied to uncertain grades.
+
+Correctness is recorded apart from credit: a correct answer with its progress used up stays
+correct. Every answer is written to the audit log (last 20,000) with its grade and reason, the
+credit, the milestones already credited, and credit withheld with the reason. Session summaries
+feed the checks for reward hacking, which flag patterns to investigate: credit rising while
+held-out accuracy does not, one wrong answer given to many questions, answers creeping forward
+letter by letter, taught questions right but held-out ones not, recognised words without right
+answers.
+
+**Protected examinations.** A course's final exam is protected: `run_course` gives its questions
+to `Rewards::protect`, and the ledger refuses (and only counts) any answer to them. The Exams
+page never uses the ledger. Study Mode never stores held-out questions.
+
+**When answers are recorded.** In a teaching session (`session::teach_rewarded`): the held-out
+questions at the start and, when a change was accepted, at the end; a quiz of up to 64 taught
+units and 16 units of earlier lessons at the start (a saved checkpoint). After an attempt that did
+not pass, the course runner's diagnosis already asks every taught question; those answers are
+recorded too. Practice records the teacher's grades and notes; Review Training records its
+assessments (never-trained questions). Recording uses evaluation only and none of the training
+random streams, so ordinary training is unchanged (`tests/reward.rs` checks the weights are
+identical).
+
+**Stage 2: reward-guided supervised training** (experimental, off by default). Before each
+epoch Nova is quizzed on the lesson's taught units (the first epoch uses the start quiz), and
+each unit gets an emphasis from its history (`RewardLedger::emphasis`, every reason listed):
+1.0 plus up to 1.0 for the gap at its latest grade (a 0% answer is a full gap), up to 0.5 for repeated
+failures, 0.75 when forgotten, 0.25 for partial progress not yet complete, 0.5 x the weakness of
+its concept (other questions of the same pattern), 0.5 x how badly new variations of the concept
+were answered at first sight, 0.25 for long answers; a correct answer is multiplied by 0.6, and
+by 0.6 again per checkpoint it was retained (up to four). Units failing eight times in a row
+without any progress are capped at 1.5 and listed as stuck (they need the teacher, not endless
+repetition). Emphasis stays between 0.25 (never left out) and 3. The epoch's units are drawn with
+copies in proportion to emphasis, scaled to the same total as ordinary training (stochastic
+rounding, at most 4 copies), and rehearsal of earlier lessons favours units being forgotten.
+The targets are unchanged (the lesson's verified answers, the teacher's corrections, answers
+the teacher marked fully right), as are the candidates and every acceptance rule. Held-out and
+never-trained questions never influence emphasis, so they stay an independent judge. A partly
+right practice answer is never trained as written. `examples/reward_compare.rs` compares
+Stage 2 with ordinary training (results in docs/STATUS.md).
+
 ## Evaluation (`learn::eval`)
 
 - **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.

@@ -60,6 +60,13 @@ pub struct PracticeItem {
     /// Nova's answer to the same question after the training pass.
     #[serde(default)]
     pub after: Option<String>,
+    /// The teacher's grade, 0-100 (partial credit). 100 goes with "right"; anything lower is
+    /// never trained as Nova wrote it.
+    #[serde(default)]
+    pub grade: Option<f32>,
+    /// The automatic grade (a suggestion from the lesson's answer, when it has one).
+    #[serde(default)]
+    pub auto: Option<super::reward::Grade>,
 }
 
 /// The prompt for a practice question, with Study Mode memories in front when a store is given.
@@ -101,7 +108,12 @@ pub fn answer_all(
 /// The training target of a marked item and where it comes from (None: not trained).
 pub fn target(it: &PracticeItem) -> Option<(String, TargetOrigin)> {
     let clean = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    match it.mark? {
+    // A partly right answer (grade below 100) is never trained as written.
+    let mark = match (it.mark?, it.grade) {
+        (Mark::Right, Some(g)) if g < 100. => Mark::Wrong,
+        (m, _) => m,
+    };
+    match mark {
         Mark::Right if !it.answer.trim().is_empty() => Some((clean(&it.answer), TargetOrigin::NovaConfirmed)),
         Mark::Right => None,
         Mark::Wrong if !it.correction.trim().is_empty() => {
@@ -114,6 +126,95 @@ pub fn target(it: &PracticeItem) -> Option<(String, TargetOrigin)> {
             .filter(|e| !e.trim().is_empty())
             .map(|e| (clean(e), TargetOrigin::LessonAnswer)),
     }
+}
+
+/// Fills in the automatic grade of each answer (from the lesson's answer; uncertain without one).
+pub fn auto_grade(items: &mut [PracticeItem]) {
+    for it in items.iter_mut() {
+        it.auto = Some(match it.expected.as_deref().filter(|e| !e.trim().is_empty()) {
+            Some(e) => {
+                let key = super::grading::AnswerKey::parse(e, super::grading::GradeMode::Sentence)
+                    .filter(|k| k.accepted.len() > 1 || !k.must.is_empty());
+                let first = e.split('|').next().unwrap_or(e).trim();
+                super::reward::grade_reply(first, key.as_ref(), None, &it.answer, false)
+            }
+            None => {
+                super::reward::Grade::uncertain("no lesson answer to compare with: the teacher grades it")
+            }
+        });
+    }
+}
+
+/// Marks every answer whose automatic grade is certain (right at 100%, wrong at 0%), leaving
+/// partial and uncertain ones to the teacher. Returns how many were marked.
+pub fn accept_auto_grades(items: &mut [PracticeItem]) -> usize {
+    let mut n = 0;
+    for it in items.iter_mut().filter(|i| i.mark.is_none()) {
+        let Some(g) = &it.auto else { continue };
+        match g.percent {
+            Some(p) if g.correct => {
+                it.mark = Some(Mark::Right);
+                it.grade = Some(p);
+            }
+            Some(p) if p <= 0. => {
+                it.mark = Some(Mark::Wrong);
+                it.grade = Some(0.);
+            }
+            _ => continue,
+        }
+        n += 1;
+    }
+    n
+}
+
+/// The question as a lesson unit (for the reward ledger), answered with memories in front when
+/// it was.
+fn as_item(it: &PracticeItem, source: &str) -> Item {
+    let expected = it.expected.as_deref().map(|e| e.split('|').next().unwrap_or(e).trim().to_string());
+    Item {
+        kind: Kind::Dialogue,
+        source: source.to_string(),
+        held_out: false,
+        segments: qa(&it.question, expected.as_deref().unwrap_or("")),
+        prompt: Some(it.question.clone()),
+        answer: expected,
+        contradicted: None,
+        users: Vec::new(),
+        replies: Vec::new(),
+        key: None,
+        reading: None,
+        context: (!it.memories.is_empty()).then(|| {
+            it.memories.iter().map(|m| format!("{}{m}\n", crate::memory::MEMORY)).collect::<String>()
+        }),
+        spelling: false,
+    }
+}
+
+/// Records the teacher's grades and notes in the reward ledger (marked items only; a mark without
+/// a percentage counts as 100 or 0). Returns how many were recorded.
+pub fn record_grades(
+    rewards: &mut super::reward::Rewards,
+    items: &[PracticeItem],
+    source: &str,
+    step: u64,
+) -> usize {
+    use super::reward::{Answer, Evidence, Origin};
+    let mut n = 0;
+    for it in items {
+        let Some(mark) = it.mark else { continue };
+        let percent = it.grade.unwrap_or(if mark == Mark::Right { 100. } else { 0. });
+        let unit = as_item(it, source);
+        let recorded = rewards.record(Evidence {
+            item: &unit,
+            answer: Answer::Reply(&it.answer),
+            origin: Origin::Practice,
+            step,
+            checkpoint: false,
+            teacher: Some((percent, &it.note)),
+        });
+        n += usize::from(recorded.is_some());
+    }
+    n
 }
 
 /// Training units from the marked items.
@@ -135,6 +236,7 @@ pub fn training_items(items: &mut [PracticeItem], source: &str) -> Vec<Item> {
                 key: None,
                 reading: None,
                 context: None,
+                spelling: false,
             };
             item.held_out = false;
             out.push(item);
@@ -163,6 +265,32 @@ pub fn train(
     teach_with(model, lesson, Some(&practice), archive, cfg, observer, stop).map(Some)
 }
 
+/// [`train`] with rewards: the teacher's grades are recorded first, and with reward-guided
+/// training on, answers graded low are practised more (the targets stay the teacher's
+/// corrections, the lesson's answers, or answers the teacher marked fully right).
+#[allow(clippy::too_many_arguments)]
+pub fn train_rewarded(
+    model: &Bicameral,
+    items: &mut [PracticeItem],
+    lesson: &[Item],
+    archive: &[Item],
+    cfg: &SessionConfig,
+    mut rewards: Option<&mut super::reward::Rewards>,
+    observer: &mut dyn FnMut(&Event),
+    stop: &AtomicBool,
+) -> Result<Option<SessionResult>, String> {
+    let source = lesson.first().map(|i| i.source.clone()).unwrap_or_else(|| "practice".into());
+    if let Some(r) = rewards.as_deref_mut() {
+        record_grades(r, items, &source, model.step);
+    }
+    let practice = training_items(items, &source);
+    if practice.is_empty() {
+        return Ok(None);
+    }
+    super::session::teach_rewarded(model, lesson, Some(&practice), archive, cfg, rewards, observer, stop)
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +306,8 @@ mod tests {
             note: String::new(),
             target: None,
             after: None,
+            grade: None,
+            auto: None,
         }
     }
 
@@ -197,5 +327,12 @@ mod tests {
         );
         assert_eq!(target(&item("No.", Some(Mark::Wrong), "", None)), None);
         assert_eq!(target(&item("Yes.", None, "", Some("Yes."))), None, "unmarked items are never trained");
+        let mut partly = item("Max dog", Some(Mark::Right), "", Some("Yes, Max is a dog."));
+        partly.grade = Some(60.);
+        assert_eq!(
+            target(&partly),
+            Some(("Yes, Max is a dog.".into(), TargetOrigin::LessonAnswer)),
+            "a partly right answer is never trained as written"
+        );
     }
 }

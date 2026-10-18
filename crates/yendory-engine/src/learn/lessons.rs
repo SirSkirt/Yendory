@@ -123,6 +123,10 @@ pub struct Item {
     /// segments when trained, put before the prompt when evaluated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// From a block marked `Grading: spelling`: answers may earn letter-prefix progress (an
+    /// experimental reward option; other lessons are graded by meaning, never by letters).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spelling: bool,
 }
 impl Item {
     /// True for a conversation with Nexus lines (an environment, actions, results).
@@ -168,6 +172,7 @@ impl Item {
             key: None,
             reading: None,
             context: None,
+            spelling: false,
         }
     }
 }
@@ -350,6 +355,8 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
             continue;
         }
         let Some(kind) = block_kind(name) else { continue };
+        let (spelling, body) = grading_line(body).map_err(|e| format!("{source}: {e}"))?;
+        let first_item = items.len();
         let (explanation, examples) = match body.find("[examples]\n") {
             Some(i) => {
                 let rest = &body[i + "[examples]\n".len()..];
@@ -422,6 +429,11 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
             }
             Kind::Prose => unreachable!(),
         }
+        if spelling {
+            for it in &mut items[first_item..] {
+                it.spelling = it.kind != Kind::Prose;
+            }
+        }
     }
     if !evaluation.is_empty() {
         // The teacher chose the held-out questions: everything else is taught, except a unit
@@ -440,6 +452,21 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
         items = kept;
     }
     Ok(items)
+}
+
+/// The optional `Grading:` first line of a lesson block (`Grading: spelling` marks a spelling
+/// lesson; `Grading: meaning` is the default), and the text after it.
+fn grading_line(body: &str) -> Result<(bool, &str), String> {
+    let trimmed = body.trim_start_matches(['\n', ' ', '\t']);
+    if let Some(rest) = trimmed.strip_prefix("Grading:") {
+        let (value, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        return match value.trim().to_ascii_lowercase().as_str() {
+            "spelling" => Ok((true, after)),
+            "meaning" => Ok((false, after)),
+            v => Err(format!("Grading must be spelling or meaning, not '{v}'")),
+        };
+    }
+    Ok((false, body))
 }
 
 /// The optional `Mode:` first line of a `[Reading]` block, and the text after it.

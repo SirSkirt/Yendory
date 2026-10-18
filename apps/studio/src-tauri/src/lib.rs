@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_fs::{FsExt, OpenOptions};
 use yendory_engine::fingerprint::sha256_hex;
-use yendory_engine::learn::course::{teach_course, CourseEvent, CourseFile, FileOutcome, FileRecord};
+use yendory_engine::learn::course::{CourseEvent, CourseFile, FileOutcome, FileRecord};
 use yendory_engine::learn::eval::{evaluate, reply, Report};
 use yendory_engine::learn::session::{EducationStage, Event, RetryPolicy, SessionConfig};
 use yendory_engine::learn::{batch_loss_and_gradients, Row};
@@ -26,6 +26,7 @@ mod practice;
 mod reading;
 mod reflection;
 mod review;
+mod rewards;
 mod sources;
 mod study;
 
@@ -1218,19 +1219,25 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         // Study Mode: the model's memory is studied into and used while teaching, then saved.
         let mut memory = study::study_mode(&app)
             .then(|| yendory_engine::memory::Studying::new(study::load_memory(&app, &id), now()));
-        let result = guarded(|| match memory.as_mut() {
-            Some(studying) => yendory_engine::learn::course::teach_course_studying(
+        // Rewards: answers are graded into the model's ledger; with reward-guided training on,
+        // sessions schedule their units by emphasis.
+        let mut rewards = rewards::rewards_for(&app, &id);
+        let result = guarded(|| {
+            yendory_engine::learn::course::teach_course_rewarded(
                 &model,
                 &files,
                 &archive,
                 &cfg,
-                Some(studying),
+                memory.as_mut().map(|s| s as &mut dyn yendory_engine::memory::StudyHook),
+                rewards.as_mut(),
                 &mut observer,
                 &mut on_learned,
                 &stop,
-            ),
-            None => teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop),
+            )
         });
+        if let Some(r) = &rewards {
+            rewards::keep(&app, r);
+        }
         if let Some(studying) = &memory {
             if let Err(e) = study::save_memory(&app, &id, &studying.store) {
                 let _ = app.emit("device-notice", format!("Study Mode memory could not be saved: {e}"));
@@ -1516,6 +1523,15 @@ pub fn run() {
             practice::save_practice_marks,
             practice::delete_practice,
             practice::train_practice,
+            practice::accept_practice_auto,
+            rewards::reward_settings,
+            rewards::save_reward_settings,
+            rewards::reset_reward_settings,
+            rewards::reward_view,
+            rewards::reward_questions,
+            rewards::reward_audit,
+            rewards::reward_reset_cycle,
+            rewards::reward_clear,
             study::study_state,
             study::set_study_mode,
             study::memory_view,
