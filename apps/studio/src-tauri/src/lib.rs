@@ -22,8 +22,10 @@ use yendory_engine::{
 
 mod courses;
 mod designer;
+mod practice;
 mod reading;
 mod sources;
+mod study;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
 /// Large enough for the largest model the Engine accepts (1 billion parameters × 12 bytes,
@@ -1211,8 +1213,27 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             }
             Ok(())
         };
-        let result =
-            guarded(|| teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop));
+        // Study Mode: the model's memory is studied into and used while teaching, then saved.
+        let mut memory = study::study_mode(&app)
+            .then(|| yendory_engine::memory::Studying::new(study::load_memory(&app, &id), now()));
+        let result = guarded(|| match memory.as_mut() {
+            Some(studying) => yendory_engine::learn::course::teach_course_studying(
+                &model,
+                &files,
+                &archive,
+                &cfg,
+                Some(studying),
+                &mut observer,
+                &mut on_learned,
+                &stop,
+            ),
+            None => teach_course(&model, &files, &archive, &cfg, &mut observer, &mut on_learned, &stop),
+        });
+        if let Some(studying) = &memory {
+            if let Err(e) = study::save_memory(&app, &id, &studying.store) {
+                let _ = app.emit("device-notice", format!("Study Mode memory could not be saved: {e}"));
+            }
+        }
         // Persist the per-file records (learned or not) and the final metadata.
         let finished = match result {
             Ok(r) => {
@@ -1269,14 +1290,21 @@ fn clean_message(s: &str) -> Res<String> {
 
 /// The model's greedy reply. `history` holds earlier (user, model) turns of this conversation.
 #[tauri::command]
-async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message: String) -> Res<String> {
+async fn ask(
+    app: AppHandle,
+    studio: State<'_, Studio>,
+    history: Vec<(String, String)>,
+    message: String,
+) -> Res<Answer> {
     let message = clean_message(&message)?;
-    let model = with_active(&studio, |a| Ok(a.model.clone()))?;
+    let (model_id, model) = with_active(&studio, |a| Ok((a.meta.id.clone(), a.model.clone())))?;
     let context = model.config.max_tokens;
     let reply_tokens = reply_length(context);
+    // Study Mode: memories related to the message go first, marked as memory.
+    let (memory, memories) = study::conversation_memories(&app, &model_id, &model, &message);
     // Keep as many recent turns as fit in the context, leaving room for the reply.
     let question = format!("U: {message}\nN: ");
-    let mut used = model.tokenizer.encode(&question)?.len();
+    let mut used = model.tokenizer.encode(&question)?.len() + model.tokenizer.encode(&memory)?.len();
     let mut turns = Vec::new();
     for (user, said) in history.iter().rev() {
         let turn = format!(
@@ -1291,9 +1319,19 @@ async fn ask(studio: State<'_, Studio>, history: Vec<(String, String)>, message:
         used += n;
         turns.push(turn);
     }
-    let prompt: String = turns.into_iter().rev().chain(std::iter::once(question)).collect();
+    let prompt: String =
+        std::iter::once(memory).chain(turns.into_iter().rev()).chain(std::iter::once(question)).collect();
     // Shown readably: a marker the model writes appears as "Action:" and so on.
-    Ok(yendory_engine::nexus::readable(&reply(&model, &prompt, reply_tokens, Ablation::default())?))
+    let reply = yendory_engine::nexus::readable(&reply(&model, &prompt, reply_tokens, Ablation::default())?);
+    Ok(Answer { reply, memories })
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Answer {
+    reply: String,
+    /// Study Mode memories put in front of the message (empty when Study Mode is off).
+    memories: Vec<String>,
 }
 
 /// Longest reply in tokens: a quarter of the context, at least 48 (Nova-2's) and at most 512.
@@ -1455,6 +1493,20 @@ pub fn run() {
             benchmark_training,
             page_settings,
             save_page_settings,
+            practice::practice_sources,
+            practice::list_practice,
+            practice::practice_detail,
+            practice::start_practice,
+            practice::save_practice_marks,
+            practice::delete_practice,
+            practice::train_practice,
+            study::study_state,
+            study::set_study_mode,
+            study::memory_view,
+            study::memory_decide,
+            study::memory_add,
+            study::memory_try,
+            study::study_text,
             designer::list_designs,
             designer::create_design,
             designer::import_design,

@@ -10,6 +10,7 @@ pub mod eval;
 pub mod generate;
 pub mod grading;
 pub mod lessons;
+pub mod practice;
 pub mod program;
 pub mod session;
 

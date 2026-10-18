@@ -188,6 +188,8 @@ table { border-collapse: collapse; width: 100%; }
 .transcript p { margin: 0; overflow-wrap: anywhere; }
 .transcript .who { font: 600 13px var(--mono); color: var(--margin); margin-right: 8px; }
 .transcript .model .who { color: var(--accent); }
+.transcript .memory { color: var(--ink-soft); font-size: 13px; }
+.transcript .memory .who { color: var(--brain-right); }
 
 /* Brain specimen plate: Neural Nova's hemisphere shapes, drawn in the notebook palette. */
 :root {
@@ -353,3 +355,11 @@ table { border-collapse: collapse; width: 100%; }
 .lesson-file { white-space: pre-wrap; font: 12.5px/1.5 var(--mono); max-height: 360px; overflow: auto; background: var(--paper); border: 1px solid var(--rule); padding: 8px 12px; }
 .flash { animation: flash 1.2s; }
 @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, transparent); } }
+
+/* Study */
+.study-text { width: 100%; min-height: 110px; font: 13.5px/1.5 var(--mono); background: var(--paper); color: var(--ink); border: 1px solid var(--rule); padding: 8px; }
+#memoryTable td input[type=text] { width: 100%; }
+#memoryTable tr.off td { opacity: .55; }
+.chips button.chip { font: 13px var(--mono); padding: 2px 8px; border-radius: 3px; }
+.chips button.chip.on { background: var(--accent); color: var(--accent-ink); }
+.conflict { border-left: 3px solid var(--warn); padding: 4px 10px; margin: 6px 0; font-size: 13.5px; }

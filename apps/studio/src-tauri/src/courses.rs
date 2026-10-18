@@ -701,6 +701,8 @@ struct StudioHost<'a> {
     app: &'a AppHandle,
     plan: Plan,
     meta: Meta,
+    /// Study Mode: the model's memory, studied into and used while the course is taught.
+    study: Option<yendory_engine::memory::Studying>,
 }
 impl StudioHost<'_> {
     fn emit(&self, event: &ProgramEvent) {
@@ -732,9 +734,15 @@ impl CourseHost for StudioHost<'_> {
             );
         }
     }
+    fn study(&mut self) -> Option<&mut dyn yendory_engine::memory::StudyHook> {
+        self.study.as_mut().map(|s| s as &mut dyn yendory_engine::memory::StudyHook)
+    }
     fn save(&mut self, model: &Bicameral, archive: &[Item], run: &CourseRun) -> Res<()> {
         refresh_meta(&mut self.meta, model);
         save_all(self.app, &self.meta, model, archive)?;
+        if let Some(s) = &self.study {
+            super::study::save_memory(self.app, &self.meta.id, &s.store)?;
+        }
         let studio = self.app.state::<Studio>();
         if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == self.meta.id) {
             a.model = model.clone();
@@ -906,7 +914,9 @@ fn run_plan(
         }
         let best = load_best(app, &plan.id);
         let opts = RunOptions { word_limit: meta.word_limit };
-        let mut host = StudioHost { app, plan: plan.clone(), meta: meta.clone() };
+        let study = super::study::study_mode(app)
+            .then(|| yendory_engine::memory::Studying::new(super::study::load_memory(app, &meta.id), now()));
+        let mut host = StudioHost { app, plan: plan.clone(), meta: meta.clone(), study };
         let result = run_course(&model, &archive, &prep, &mut run, best, &opts, &mut host, stop);
         meta = host.meta;
         match result {

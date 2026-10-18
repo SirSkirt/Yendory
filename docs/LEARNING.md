@@ -102,6 +102,69 @@ taught. Finished lessons go to the Classroom list or into a course (new or exist
 name carries the lesson's stage word. Drafts are saved as they are edited and can be left
 unfinished.
 
+## Study Mode memory (`memory`)
+
+Study Mode (Studio § 7, a switch) gives a model a **memory** of statements it chose to keep from
+its reading. The memory is not part of the network, and nothing in it is counted as learned.
+
+**Forming memories.** Each sentence (3–40 words, not a question) of a Reading block in `memory`
+or `combined` mode is a candidate. The network reads each candidate on its own and its mean
+loss per token (its surprise) ranks them: it keeps the sentences it cannot already predict,
+those at or above the passage's median and above `KNOWN_LOSS` (0.5 nats per token), at most half
+of the passage, so passages are never copied whole. The ranking is the network's; the median,
+the 0.5 level and the half limit are fixed supporting rules. As the model learns, sentences it
+predicts drop out of what it keeps. A sentence matching a held-out question or answer of the
+lesson is never stored. The same sentence studied again is merged (counted, with its new
+source); memories that share most words but differ by a negation are flagged as possible
+contradictions for the teacher. Every memory keeps its sources (lesson, Reading fingerprint,
+sentence number), the model step and its surprise when stored, how often it was retrieved, and
+reflection's usefulness measurement. The teacher can edit, switch off (kept, not retrieved),
+mark checked, delete or add memories; each decision is recorded with the statement and its
+surprise, as labelled examples of what is worth remembering for a learned selection later.
+
+**Retrieval** is an index: memories sharing words with the question (function words left out,
+plural endings removed), weighted by how rare each word is among the memories, plus half that
+weight for memories sharing a word with those (one step), up to 4, within a third to a half of
+the context. "Does Max need water?" retrieves "Max is a dog" and "Animals need water", and
+through them "Dogs are animals". Retrieved memories go in front of the question as lines
+starting with `\x03` (never present in outside text; lesson files and typed messages have it
+removed). Every retrieval is recorded (training, grading with memory, conversation, reflection,
+review).
+
+**Teaching with Study Mode** (`memory::Studying`, `teach_course_studying`, `CourseHost::study`):
+before a lesson is taught its memory-mode reading is studied (`CourseEvent::Studied`); each
+taught question with related memories gets a copy with them in front (the memory lines weigh 0,
+they are never a training target) added to training next to the original, so the network
+learns to use memories and to answer without them. Grading stays without memory: the session's
+held-out score and the lesson grade are the network's alone. After the lesson its held-out
+questions are asked again with memories in front, recorded as `with_memory` (remembered
+knowledge) beside `final_score` (neurally learned). Reading in `combined` mode also trains the
+weights; `memory` mode does not. With Study Mode off nothing is read or written, `memory` mode
+reading does nothing and `combined` is neural reading only; saved memories are kept. The
+Studio's conversation puts related memories in front of a message and shows them.
+
+**The network can learn to use memories** (`examples/memory_probe.rs`): every training question
+("What is Max?") had two memory lines in front, the fact asked about and an unrelated one, and
+which animal a name is changed from example to example, so the memory was the only way to know.
+A fresh 1.2M model, batch 16: after 250 steps 86% of new random facts answered right with the
+memory lines and 11% without them (chance 12%); 88% / 9% after 1,500 steps.
+
+## Interactive practice (`learn::practice`)
+
+In a practice session (Studio § 7) Nova answers a lesson's practice questions herself: the
+Practice blocks of a Lesson Designer lesson, or the taught questions of a Classroom lesson (up to
+40), each answered greedily by the network (with Study Mode memories in front when it is on,
+shown with the answer). The teacher marks each answer right or wrong and may write a correction
+and a note; marks are saved as they are made, and nothing is trained until the teacher starts
+the training pass. A marked item's training target is Nova's own answer when marked right, the
+teacher's correction when marked wrong (or the lesson's answer when there is no correction);
+which of the three is recorded for every item, so teacher corrections are never mixed up with
+Nova's own answers. The training pass is an ordinary teaching session on those targets
+(`session::teach_with`), judged by the lesson's held-out questions with the usual acceptance
+rules; afterwards Nova answers the same questions again, and with Study Mode the held-out
+questions are also scored with memory. Sessions are stored with every answer, mark, note,
+target, before/after score and step, and the model's history records the pass.
+
 ## Evaluation (`learn::eval`)
 
 - **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.

@@ -809,8 +809,9 @@ $("send").addEventListener("click", safe(async () => {
     addLine("you", message, "user");
     $("message").value = "";
     const answer = await invoke("ask", { history: conversation, message });
-    conversation.push([message, answer]);
-    addLine(active.name, answer || "(empty reply)", "model");
+    if (answer.memories.length) addLine("memory", answer.memories.join(" · "), "memory");
+    conversation.push([message, answer.reply]);
+    addLine(active.name, answer.reply || "(empty reply)", "model");
   } finally { $("send").disabled = false; }
 }, "Ask"));
 $("message").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("send").click(); } });

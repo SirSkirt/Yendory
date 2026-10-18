@@ -37,8 +37,8 @@ fn store(app: &AppHandle, d: &StoredDesign) -> Res<()> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesignSummary {
-    id: String,
-    name: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
     source_file: String,
     finished: bool,
     blocks: usize,
@@ -70,6 +70,12 @@ pub struct DesignView {
     lesson: Result<Exported, String>,
     file_name: String,
     updated: u64,
+}
+
+impl DesignView {
+    pub(crate) fn draft_ref(&self) -> &LessonDraft {
+        &self.draft
+    }
 }
 
 fn view(d: &StoredDesign) -> DesignView {

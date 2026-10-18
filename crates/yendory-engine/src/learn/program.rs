@@ -267,6 +267,10 @@ pub trait CourseHost {
     fn save(&mut self, model: &Bicameral, archive: &[Item], run: &CourseRun) -> Result<(), String>;
     /// Saves the best checkpoint of the run.
     fn save_best(&mut self, best: &Snapshot) -> Result<(), String>;
+    /// Study Mode for the course's lessons (see `memory::Studying`); none by default.
+    fn study(&mut self) -> Option<&mut dyn crate::memory::StudyHook> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -613,13 +617,31 @@ pub fn run_course(
                     pass_mark: lesson.pass_mark,
                     own_before: super::course::own_rate(&current, &lesson.items).ok(),
                     own_after: None,
+                    with_memory: None,
                 };
                 let mut stopped = false;
                 let stage = lesson.stage;
+                let studied = match host.study() {
+                    Some(st) => Some(st.before_lesson(&current, &lesson.name, &lesson.items)?),
+                    None => None,
+                };
+                let taught = match studied {
+                    Some((taught, report, copies)) => {
+                        if let Some(report) = report {
+                            host.event(&ProgramEvent::Lesson {
+                                index,
+                                stage,
+                                event: CourseEvent::Studied { index, report, copies },
+                            });
+                        }
+                        taught
+                    }
+                    None => lesson.items.clone(),
+                };
                 teach_lesson(
                     &mut current,
                     &mut archive,
-                    &lesson.items,
+                    &taught,
                     index,
                     cfg.retry.retries,
                     &cfg,
@@ -640,6 +662,7 @@ pub fn run_course(
                     return Err(format!("{}: {e}", lesson.name));
                 }
                 record.own_after = super::course::own_rate(&current, &lesson.items).ok();
+                record.with_memory = host.study().and_then(|st| st.after_lesson(&current, &lesson.items));
                 if record.outcome != FileOutcome::Passed {
                     record.outcome = if pass == 1 && prep.settings.requeue {
                         run.queue.defer(index);

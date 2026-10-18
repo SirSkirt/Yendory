@@ -132,6 +132,10 @@ pub struct FileRecord {
     pub own_before: Option<f32>,
     #[serde(default)]
     pub own_after: Option<f32>,
+    /// Study Mode: held-out questions answered right WITH retrieved memories in front of them,
+    /// of how many, after this pass (`final_score` is always without memory).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub with_memory: Option<(usize, usize)>,
 }
 fn first_pass() -> u32 {
     1
@@ -176,6 +180,13 @@ pub enum CourseEvent {
     },
     /// Sent when a file's pass ends: once per pass, so a deferred file has two records.
     FileFinished(FileRecord),
+    /// Study Mode: what was studied from the lesson's reading before it was taught, and how
+    /// many memory copies of its questions join training.
+    Studied {
+        index: usize,
+        report: crate::memory::StudyReport,
+        copies: usize,
+    },
 }
 
 pub struct CourseResult {
@@ -407,6 +418,23 @@ pub fn teach_course(
     on_learned: &mut OnLearned,
     stop: &AtomicBool,
 ) -> Result<CourseResult, String> {
+    teach_course_studying(model, files, archive, cfg, None, observer, on_learned, stop)
+}
+
+/// [`teach_course`] with Study Mode: `study` studies each lesson's reading into memory before
+/// it is taught, adds memory copies of its questions to training, and measures its held-out
+/// questions with memory afterwards (grading itself stays without memory).
+#[allow(clippy::too_many_arguments)]
+pub fn teach_course_studying(
+    model: &Bicameral,
+    files: &[CourseFile],
+    archive: &[Item],
+    cfg: &SessionConfig,
+    mut study: Option<&mut dyn crate::memory::StudyHook>,
+    observer: &mut dyn FnMut(&CourseEvent),
+    on_learned: &mut OnLearned,
+    stop: &AtomicBool,
+) -> Result<CourseResult, String> {
     let mut current = model.clone();
     let mut archive = archive.to_vec();
     let mut finals: Vec<Option<FileRecord>> = vec![None; files.len()];
@@ -462,6 +490,7 @@ pub fn teach_course(
             pass_mark: cfg.pass_mark,
             own_before: None,
             own_after: None,
+            with_memory: None,
         };
         let duplicate =
             (pass == 1).then(|| seen.iter().find(|(h, _)| *h == sha256).map(|(_, n)| n.clone())).flatten();
@@ -491,10 +520,20 @@ pub fn teach_course(
                     );
                 } else {
                     record.own_before = own_rate(&current, &items).ok();
+                    let taught = match study.as_deref_mut() {
+                        Some(st) => {
+                            let (taught, report, copies) = st.before_lesson(&current, &file.name, &items)?;
+                            if let Some(report) = report {
+                                observer(&CourseEvent::Studied { index, report, copies });
+                            }
+                            taught
+                        }
+                        None => items.clone(),
+                    };
                     teach_lesson(
                         &mut current,
                         &mut archive,
-                        &items,
+                        &taught,
                         index,
                         retries,
                         cfg,
@@ -507,6 +546,8 @@ pub fn teach_course(
                     )?;
                     if !stopped {
                         record.own_after = own_rate(&current, &items).ok();
+                        record.with_memory =
+                            study.as_deref_mut().and_then(|st| st.after_lesson(&current, &items));
                     }
                     if record.outcome != FileOutcome::Passed && !stopped && record.error.is_none() {
                         record.outcome = if pass == 1 && cfg.retry.requeue {

@@ -424,14 +424,85 @@
   <!-- § 7 Study -->
   <section class="page" id="page-study" hidden>
     <h2><span class="sec">§ 7</span> Study</h2>
-    <p class="lede">Study Mode, practice with your marking, reflection and review training.</p>
+    <p class="lede">Study Mode gives Nova a memory of statements she chose to keep from her reading. It is not part of her network and never answers for her: retrieved memories are put in front of a question, and she has to learn through training how to use them. What she answers without memory (neurally learned) is always measured apart from what she answers with it (remembered).</p>
+
+    <div class="entry" id="studyModeEntry">
+      <div class="line-form">
+        <h3 style="margin:8px 0">Study Mode: <span id="studyModeState">—</span></h3>
+        <button type="button" id="studyToggle" class="primary">Turn on</button>
+      </div>
+      <p class="note" id="studyModeNote">—</p>
+    </div>
+
+    <h3>Memory</h3>
+    <p class="note" id="memorySummary">Open a model to see its memory.</p>
+    <div id="memoryConflicts"></div>
+    <div class="line-form">
+      <label for="memoryQuery">Try retrieval</label>
+      <input type="text" id="memoryQuery" maxlength="300" placeholder="A question, e.g. Does Max need water?">
+      <button type="button" id="memoryTry">Retrieve</button>
+    </div>
+    <ol class="note" id="memoryTried"></ol>
+    <h4>Concepts</h4>
+    <p class="note">Words shared by several memories: the connections between what Nova has kept. Click one to show its memories.</p>
+    <div class="chips" id="memoryConcepts"></div>
+    <table class="ledger compact" id="memoryTable">
+      <thead><tr><th>#</th><th>Statement</th><th>Source</th><th class="num" title="Nova's mean loss per token on the statement when she kept it: how much she could not predict it">Surprise</th><th class="num">Retrieved</th><th class="num" title="Measured by reflection: how much the memory lowered Nova's loss on related reading">Useful</th><th></th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">No memories yet.</td></tr></tbody>
+    </table>
+    <div class="line-form">
+      <input type="text" id="memoryNew" maxlength="300" placeholder="Add a memory in your own words">
+      <button type="button" id="memoryAdd">Add</button>
+    </div>
+    <details>
+      <summary>Study a text now (memory only: the weights do not change)</summary>
+      <textarea id="studyTextInput" class="study-text" placeholder="Paste reading text. Nova ranks its sentences by her own surprise and keeps the ones she cannot already predict (at most half)."></textarea>
+      <div class="actions"><input type="text" id="studyTextLabel" placeholder="Name of this text"><button type="button" id="studyTextGo">Study</button></div>
+      <div id="studyTextReport"></div>
+    </details>
+    <h4>Retrievals</h4>
+    <table class="ledger compact" id="memoryLog">
+      <thead><tr><th>When</th><th>For</th><th>Question</th><th>Memories</th></tr></thead>
+      <tbody><tr><td colspan="4" class="empty">Nothing retrieved yet.</td></tr></tbody>
+    </table>
+
+    <h3>Practice</h3>
+    <p class="note">Nova answers a lesson's practice questions herself. You mark each answer right or wrong, and may write a correction and a note. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
+    <div class="actions">
+      <select id="practiceSource" aria-label="Lesson to practise"><option value="">Choose a lesson…</option></select>
+      <button type="button" id="practiceStart" class="primary">Nova answers</button>
+    </div>
+    <table class="ledger compact" id="practiceList">
+      <thead><tr><th>Lesson</th><th>Model</th><th class="num">Marked</th><th>Trained</th><th>Started</th><th></th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">No practice yet.</td></tr></tbody>
+    </table>
+    <div class="entry" id="practiceEntry" hidden>
+      <h3 id="practiceTitle">Practice</h3>
+      <div id="practiceCard" hidden></div>
+      <div class="actions">
+        <button type="button" id="practiceAllRight" class="quiet">Mark the answers that match the lesson's as right</button>
+        <span class="note" id="practiceSaved">—</span>
+      </div>
+      <table class="ledger compact" id="practiceTable">
+        <thead><tr><th>#</th><th>Question</th><th>Nova's answer</th><th>Your mark</th><th>Correction and note</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="actions">
+        <label class="check-inline">Epochs <input type="number" id="practiceEpochs" min="1" max="30" value="8" class="narrow-num"></label>
+        <label class="check-inline">Learning rate <input type="number" id="practiceRate" min="0.000001" max="0.01" step="0.0001" value="0.001" class="narrow-num"></label>
+        <button type="button" id="practiceTrain" class="primary">Train on the marked answers</button>
+        <button type="button" id="practiceStop" disabled>Stop</button>
+        <button type="button" id="practiceDelete" class="quiet">Delete this session</button>
+      </div>
+      <div id="practiceResult"></div>
+    </div>
     <div id="studyBody"></div>
   </section>
 
   <!-- § 8 Exams -->
   <section class="page" id="page-exams" hidden>
     <h2><span class="sec">§ 8</span> Exams</h2>
-    <p class="lede">Every reply here is generated by the model, token by token. Nothing is looked up or scripted.</p>
+    <p class="lede">Every reply here is generated by the model, token by token. Nothing is scripted. With Study Mode on, memories related to your message are put in front of it (shown as memory lines); the reply is still the model's own.</p>
 
     <h3>Conversation</h3>
     <div class="transcript" id="transcript"><p class="empty">Ask the open model something.</p></div>
@@ -517,5 +588,7 @@
 <script src="js/courses.js"></script>
 <script src="js/designer.js"></script>
 <script src="js/progress.js"></script>
+<script src="js/study.js"></script>
+<script src="js/practice.js"></script>
 </body>
 </html>
