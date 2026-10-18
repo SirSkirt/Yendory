@@ -60,9 +60,9 @@ function showDesign(view) {
   $("designStage").value = draft.stage || "";
   $("designFinished").checked = !!draft.finished;
   $("designNotes").value = draft.notes || "";
-  $("designSource").textContent = draft.sourceFile || draft.source_file
-    ? `Imported from ${draft.source_file} (fingerprint ${String(draft.source_sha256 || "").slice(0, 12)}…). Every block and question keeps the line it came from.`
-    : "Started from nothing.";
+  $("designSource").textContent = !draft.source_file ? "Started from nothing."
+    : draft.source_sha256 ? `Imported from ${draft.source_file} (fingerprint ${draft.source_sha256.slice(0, 12)}…). Every block and question keeps the line it came from.`
+    : `Made from ${draft.source_file}. Every question names what it was made from.`;
   $("designPreviewPane").hidden = true;
   $("designFilePane").hidden = true;
   renderChecks();
@@ -180,8 +180,8 @@ function blockCard(b, i) {
     el("button", { class: "quiet", title: "Move up", onclick: () => moveBlock(i, -1) }, "↑"),
     el("button", { class: "quiet", title: "Move down", onclick: () => moveBlock(i, 1) }, "↓"),
     el("button", { class: "quiet", title: "Merge with the next block", onclick: () => mergeNext(i) }, "merge"),
-    el("button", { class: "quiet", title: "Delete block", onclick: () => {
-      if ((b.items.length || b.text.trim()) && !confirm(`Delete this ${KIND_LABEL[b.kind]} block and its content?`)) return;
+    el("button", { class: "quiet", title: "Delete block", onclick: async () => {
+      if ((b.items.length || b.text.trim()) && !await askYes(`Delete this ${KIND_LABEL[b.kind]} block and its content?`)) return;
       draft.blocks.splice(i, 1); changed(true);
     } }, "delete"));
   card.append(el("div", { class: "db-head" }, kind, title, use, originTag(b), tools),
@@ -238,7 +238,7 @@ function itemTable(b) {
     const verify = el("label", { class: "check-inline item-meta" }, el("input", { type: "checkbox", checked: it.verified ? "" : null,
       onchange: e => { it.verified = e.target.checked; changed(); } }), "verified");
     const metaParts = () => [
-      `${ORIGIN_LABEL[it.origin] || it.origin}${it.source ? ` · line ${it.source.line}` : ""}${it.edited ? " · edited" : ""} · answer ${ANSWER_LABEL[it.answer_source] || it.answer_source}`,
+      `${ORIGIN_LABEL[it.origin] || it.origin}${it.source ? (it.source.line ? ` · line ${it.source.line}` : ` · from ${it.source.file}`) : ""}${it.edited ? " · edited" : ""} · answer ${ANSWER_LABEL[it.answer_source] || it.answer_source}${it.verified ? " · checked" : ""}`,
       ...(it.verified || it.edited ? [] : it.flags.map(f => el("div", { class: "flag" }, f))),
     ];
     const meta = el("div", { class: "item-meta" }, ...metaParts());
@@ -260,8 +260,14 @@ function itemTable(b) {
   });
   if (!b.items.length) body.append(el("tr", {}, el("td", { colspan: 4, class: "empty" }, "No questions.")));
   table.append(body);
+  const unchecked = b.items.filter(it => !it.verified && it.answer.trim()).length;
   return el("div", {}, table, el("div", { class: "actions" },
-    el("button", { onclick: () => { b.items.push(blankItem()); b.edited = true; changed(true); } }, "Add a question")));
+    el("button", { onclick: () => { b.items.push(blankItem()); b.edited = true; changed(true); } }, "Add a question"),
+    unchecked ? el("button", { class: "quiet", onclick: async () => {
+      if (!await askYes(`Mark the ${unchecked} answer(s) in this block as checked? Only do this after reading every one of them.`)) return;
+      for (const it of b.items) if (it.answer.trim()) it.verified = true;
+      changed(true);
+    } }, `Mark all ${unchecked} answer(s) as checked`) : ""));
 }
 
 // ---- whole-lesson preview ------------------------------------------------------------------
@@ -355,7 +361,7 @@ $("designToCourse").addEventListener("click", safe(async () => {
   if (typeof refreshCourses === "function") refreshCourses().catch(() => {});
 }, "Save into course"));
 $("designDelete").addEventListener("click", safe(async () => {
-  if (!draft || !confirm(`Delete the lesson draft "${draft.name}"? Lessons already saved in courses are not affected.`)) return;
+  if (!draft || !await askYes(`Delete the lesson draft "${draft.name}"? Lessons already saved in courses are not affected.`)) return;
   clearTimeout(designTimer);
   designDirty = false;
   await invoke("delete_design", { id: draft.id });

@@ -519,7 +519,7 @@ fn in_exam_pool(it: &Item) -> bool {
 }
 
 /// Gives every question an answer key (accepted forms and rules) and trains on the first form.
-fn apply_keys(items: &mut [Item], mode: GradeMode) -> Result<(), String> {
+pub(crate) fn apply_keys(items: &mut [Item], mode: GradeMode) -> Result<(), String> {
     for it in items.iter_mut() {
         if !matches!(it.kind, Kind::Dialogue | Kind::Understanding | Kind::Reasoning) {
             continue;

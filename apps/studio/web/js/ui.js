@@ -178,3 +178,39 @@ class TaskCard {
 // Study Mode, shown in the footer of progress cards (set by the Study page).
 let studyModeOn = false;
 const studyFooter = () => `Study Mode: ${studyModeOn ? "on" : "off"}`;
+
+// ---- Dialogs -------------------------------------------------------------------------------
+// In-page confirmation and text dialogs that wait for the answer. (The webview's confirm() and
+// prompt() do not reliably wait on every platform, so they are not used.)
+function modal(message, withInput, initial) {
+  return new Promise(resolve => {
+    const before = document.activeElement;
+    const input = withInput ? el("input", { type: "text", value: initial ?? "", "aria-label": message }) : null;
+    const ok = el("button", { class: "primary" }, "OK");
+    const cancel = el("button", {}, "Cancel");
+    const overlay = el("div", { class: "modal" }, el("div", { class: "modal-box", role: "dialog", "aria-modal": "true" },
+      el("p", {}, message), input || "", el("div", { class: "actions" }, cancel, ok)));
+    const answer = yes => withInput ? (yes ? input.value : null) : yes;
+    const done = yes => {
+      overlay.remove();
+      document.removeEventListener("keydown", key, true);
+      before?.focus?.();
+      resolve(answer(yes));
+    };
+    const key = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+      else if (e.key === "Enter" && document.activeElement !== cancel) { e.preventDefault(); e.stopPropagation(); done(true); }
+      else if (e.key === "Tab") { e.preventDefault(); (document.activeElement === ok ? (input || cancel) : document.activeElement === input ? cancel : ok).focus(); }
+    };
+    ok.addEventListener("click", () => done(true));
+    cancel.addEventListener("click", () => done(false));
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(false); });
+    document.addEventListener("keydown", key, true);
+    document.body.append(overlay);
+    if (input) { input.focus(); input.select(); } else ok.focus();
+  });
+}
+/** Resolves true (OK) or false (Cancel). */
+const askYes = message => modal(message, false);
+/** Resolves the text entered, or null (Cancel). */
+const askText = (message, initial) => modal(message, true, initial);

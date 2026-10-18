@@ -114,7 +114,7 @@ async function openModel(id) {
   say(`Opened ${active.name}.`);
 }
 async function deleteModel(m) {
-  if (!confirm(`Delete "${m.name}" and its teaching record? Export it first if you want to keep it. This cannot be undone.`)) return;
+  if (!await askYes(`Delete "${m.name}" and its teaching record? Export it first if you want to keep it. This cannot be undone.`)) return;
   await invoke("delete_model", { id: m.id });
   if (active?.id === m.id) showActive(null);
   await refreshModels();
@@ -303,7 +303,7 @@ $("exportModel").addEventListener("click", safe(async () => {
 }, "Export"));
 $("vocabLimit").addEventListener("click", safe(async () => {
   if (!active) return;
-  const answer = prompt(`Vocabulary limit for ${active.name}: the most words it may learn. It knows ${fmt(active.words)} now and has ${fmt(active.slots)} slots. Leave empty to keep only the slots it has.`, active.wordLimit ?? "");
+  const answer = await askText(`Vocabulary limit for ${active.name}: the most words it may learn. It knows ${fmt(active.words)} now and has ${fmt(active.slots)} slots. Leave empty to keep only the slots it has.`, active.wordLimit ?? "");
   if (answer === null) return;
   const limit = answer.trim() === "" ? null : Number(answer.replace(/[ ,_]/g, ""));
   if (limit !== null && !(Number.isInteger(limit) && limit >= 0)) throw new Error("Enter a whole number of words");
@@ -312,7 +312,7 @@ $("vocabLimit").addEventListener("click", safe(async () => {
 }, "Vocabulary limit"));
 $("contextLimit").addEventListener("click", safe(async () => {
   if (!active) return;
-  const answer = prompt(`Context for ${active.name} in tokens (now ${fmt(active.context)}). No weights change; the model uses a longer context well once it has read or been taught text that long.`, active.context);
+  const answer = await askText(`Context for ${active.name} in tokens (now ${fmt(active.context)}). No weights change; the model uses a longer context well once it has read or been taught text that long.`, active.context);
   if (answer === null || answer.trim() === "") return;
   const context = Number(answer.replace(/[ ,_]/g, ""));
   if (!(Number.isInteger(context) && context >= 16)) throw new Error("Enter a context of at least 16 tokens");
@@ -321,7 +321,7 @@ $("contextLimit").addEventListener("click", safe(async () => {
 }, "Context"));
 $("renameModel").addEventListener("click", safe(async () => {
   if (!active) return;
-  const name = prompt("New name for this model", active.name);
+  const name = await askText("New name for this model", active.name);
   if (!name) return;
   showActive({ ...active, ...(await invoke("rename_model", { id: active.id, name })) });
   await refreshModels();
@@ -557,7 +557,7 @@ function renderSources() {
         el("button", { onclick: safe(async () => {
           const want = s.sizeMb > s.defaultMb ? Number(size.value) || s.defaultMb : s.sizeMb;
           const used = corporaList.reduce((a, c) => a + c.bytes, 0);
-          if (used + want * 1048576 > BUDGET && !confirm(`This would bring the corpora on this device to about ${mb(used + want * 1048576)}, over the 1 GB budget. Download anyway?`)) return;
+          if (used + want * 1048576 > BUDGET && !await askYes(`This would bring the corpora on this device to about ${mb(used + want * 1048576)}, over the 1 GB budget. Download anyway?`)) return;
           await invoke("download_corpus", { source: s.id, maxMb: want });
           $("downloadEntry").hidden = false;
           $("downloadTitle").textContent = `Downloading ${s.name}`;
@@ -591,7 +591,7 @@ function renderCorpora() {
       el("td", { class: "num" }, `${fmt(c.documents)} (${fmt(c.heldOut)} held out)`),
       el("td", {}, c.license),
       el("td", {}, el("button", { class: "quiet", disabled: teaching ? "" : null, onclick: safe(async () => {
-        if (!confirm(`Delete the corpus "${c.name}" from this device?`)) return;
+        if (!await askYes(`Delete the corpus "${c.name}" from this device?`)) return;
         corporaList = await invoke("delete_corpus", { id: c.id }); renderCorpora();
       }, "Delete corpus") }, "delete"))));
   }

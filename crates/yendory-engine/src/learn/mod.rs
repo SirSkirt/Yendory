@@ -12,6 +12,8 @@ pub mod grading;
 pub mod lessons;
 pub mod practice;
 pub mod program;
+pub mod reflect;
+pub mod review;
 pub mod session;
 
 use crate::model::{Ablation, Bicameral, Focus};

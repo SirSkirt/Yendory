@@ -105,18 +105,18 @@ function showCourse(c) {
 const refreshCoursesQuiet = () => refreshCourses().catch(e => log("ERROR", e));
 
 $("newCourse").addEventListener("click", safe(async () => {
-  const name = prompt("Name of the new course (e.g. Basic English I)");
+  const name = await askText("Name of the new course (e.g. Basic English I)");
   if (!name) return;
   showCourse(await invoke("create_course", { name }));
 }, "New course"));
 $("addCourseFiles").addEventListener("click", safe(async () => showCourse(await invoke("add_course_files", { id: course.id })), "Add files"));
 $("chooseExam").addEventListener("click", safe(async () => showCourse(await invoke("choose_exam", { id: course.id })), "Exam"));
 $("renameCourse").addEventListener("click", safe(async () => {
-  const name = prompt("New name for this course", course.name);
+  const name = await askText("New name for this course", course.name);
   if (name) await edit({ type: "rename", name });
 }, "Rename course"));
 $("deleteCourse").addEventListener("click", safe(async () => {
-  if (!confirm(`Delete the course "${course.name}"? Plans that use it will stop at it.`)) return;
+  if (!await askYes(`Delete the course "${course.name}"? Plans that use it will stop at it.`)) return;
   await invoke("delete_course", { id: course.id });
   course = null;
   $("courseEditor").hidden = true;
@@ -309,7 +309,7 @@ function onPlanEvent({ planId, event: e }) {
 
 $("newPlan").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open the model the plan should teach first");
-  const name = prompt(`Name of the new plan for ${active.name}`);
+  const name = await askText(`Name of the new plan for ${active.name}`);
   if (!name) return;
   showPlan(await invoke("create_plan", { name }));
 }, "New plan"));
@@ -345,7 +345,7 @@ $("planRestart").addEventListener("click", safe(async () => {
   showPlan(await invoke("restart_course", { id: plan.id, confirmOverride }));
 }, "Restart course"));
 $("planDelete").addEventListener("click", safe(async () => {
-  if (!confirm(`Delete the plan "${plan.name}"? The model and courses are kept.`)) return;
+  if (!await askYes(`Delete the plan "${plan.name}"? The model and courses are kept.`)) return;
   await invoke("delete_plan", { id: plan.id });
   plan = null;
   $("planEditor").hidden = true;

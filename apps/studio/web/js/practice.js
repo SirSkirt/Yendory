@@ -120,7 +120,7 @@ $("practiceTrain").addEventListener("click", safe(async () => {
 }, "Train practice"));
 $("practiceStop").addEventListener("click", safe(async () => { await invoke("stop_teaching"); $("practiceStop").disabled = true; }, "Stop practice"));
 $("practiceDelete").addEventListener("click", safe(async () => {
-  if (!practice || !confirm("Delete this practice session? The model is not affected.")) return;
+  if (!practice || !await askYes("Delete this practice session? The model is not affected.")) return;
   await invoke("delete_practice", { id: practice.id });
   practice = null;
   $("practiceEntry").hidden = true;

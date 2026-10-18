@@ -24,6 +24,8 @@ mod courses;
 mod designer;
 mod practice;
 mod reading;
+mod reflection;
+mod review;
 mod sources;
 mod study;
 
@@ -1493,6 +1495,20 @@ pub fn run() {
             benchmark_training,
             page_settings,
             save_page_settings,
+            review::review_topics,
+            review::generate_review,
+            review::list_reviews,
+            review::review_detail,
+            review::delete_review,
+            review::review_assess,
+            review::train_review,
+            reflection::reflection_sources,
+            reflection::list_reflections,
+            reflection::reflection_detail,
+            reflection::delete_reflection,
+            reflection::start_reflection,
+            reflection::save_reflection_marks,
+            reflection::train_reflection,
             practice::practice_sources,
             practice::list_practice,
             practice::practice_detail,

@@ -37,6 +37,7 @@ has been checked, how, and what has not.
 | **GPU training** (`--features gpu`, `tests/gpu.rs`, run in CI on a software GPU, lavapipe): loss, every gradient and two AdamW steps (Joint and Dense-only focus) against the CPU; reading and a Foundation lesson on the GPU, with the CPU checking at the same time | loss equal to 6 digits; gradients within 1.7e-6 (largest 2.6); weights within 5e-7; the same checkpoints, candidates and early stop as on the CPU |
 | Study Mode memory: a sentence the model predicts (loss below 0.5) is not kept, at most half a passage, studying again merges; held-out questions never stored; lessons train with memory copies while grading stays without memory, `with_memory` measured separately (`tests/memory.rs`) | pass |
 | A fresh 1.2M model learns to use memory lines: 88% of new random facts with them, 9% without (chance 12%), `examples/memory_probe.rs` | measured |
+| Practice, reflection and Review Training on a small model: targets keep their origin (Nova confirmed / teacher correction / lesson answer), nothing unapproved is trained, held-out questions judge every pass, before / after reported (`tests/study.rs`, `learn::review` and `learn::reflect` tests) | pass |
 | Lesson Designer: analysis, sources, checks (arithmetic, leaks, duplicates), Markdown to plain text, export read back by the parser (`learn::designer` tests) | pass |
 
 ## Yendory Studio (apps/studio)

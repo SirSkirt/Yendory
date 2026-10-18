@@ -63,7 +63,7 @@ function renderMemory() {
           textCell.replaceChildren(input, save);
           input.focus();
         } }, "edit"),
-        el("button", { class: "quiet", onclick: async () => { if (confirm(`Delete memory #${m.id}?`)) await decide("deleted")(); } }, "delete"))));
+        el("button", { class: "quiet", onclick: async () => { if (await askYes(`Delete memory #${m.id}?`)) await decide("deleted")(); } }, "delete"))));
   }
   const log = $("memoryLog").tBodies[0];
   log.replaceChildren(...(v.log.length ? v.log.map(r => el("tr", {},

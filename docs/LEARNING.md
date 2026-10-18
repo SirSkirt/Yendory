@@ -165,6 +165,48 @@ rules; afterwards Nova answers the same questions again, and with Study Mode the
 questions are also scored with memory. Sessions are stored with every answer, mark, note,
 target, before/after score and step, and the model's history records the pass.
 
+## Reflection (`learn::reflect`)
+
+Nova revisits what she has read: her Study Mode memories (shown to her as memory lines), or,
+with Study Mode off, the sentences of a lesson's Reading blocks. Three parts are kept apart:
+
+* **Yendory** proposes pairs of statements sharing a concept word and measures, with Nova's own
+  network, how much one helps her predict the other: her loss on the second read alone minus
+  her loss on it with the first in front (nats per token, the larger direction). The best
+  pairs (by that measurement) are kept. With Study Mode the measurement is stored on the
+  helping memory as its usefulness, and each pair is recorded as a retrieval.
+* **Nova** is shown each pair with the question "What do these tell you together?" and writes an
+  observation (greedy generation, at most 32 tokens). Yendory never writes or edits it.
+* **The teacher** marks each observation right or wrong, may write their own version and a
+  note, and may approve a training pass: at least three approved observations, every fourth
+  held out to judge the pass (an ordinary teaching session; the pair is context, never a
+  target). Targets keep their origin (Nova's observation, confirmed; or the teacher's
+  version). Before and after: the held-out observations' score and loss, and Nova's loss on the
+  reflected statements read alone; afterwards she reflects on the same pairs again.
+
+## Review Training (`learn::review`)
+
+Turns Study Mode memories into review material, as a Lesson Designer draft (needs Study Mode on
+to prepare). The teacher chooses concepts (words shared by memories) or the lessons the memories
+were read in. Simple sentence patterns ("X is a Y", "X has Y", "X can Y", any "X <verb> Y",
+negations) give, per statement, a direct question as a worked example ("Is Max a dog?" / "Yes,
+Max is a dog.") and held-out review questions in other words ("Is it true that Max is a dog?",
+"What is Max?"); level 3 adds questions combining two memories ("Max is a dog" + "Dogs are
+animals" -> "Is Max an animal?"), marked inferred, half as worked examples with their reason and
+half held out. A held-out question never repeats an example. Every answer is generated and
+unverified, with the memory (and lesson) it came from; nothing can be assessed or trained until
+the teacher has checked each one in the Designer, where the material is edited like any lesson
+(move questions between examples and held-out, add, delete, reword). Answers carry accepted
+forms and rules (`Yes, Max is a dog. | Yes. | must: yes | never: not`), graded like course
+sentences.
+
+The **initial assessment** asks the held-out review questions without memory (and, separately,
+with memory). **Review training** is an ordinary teaching session on the worked examples, judged
+by the held-out questions, with no memory in front. The **assessment after** asks the same
+questions; the comparison lists questions improved, regressed, still wrong and kept, and the
+score per concept word. What she answers with memory (remembered) is always shown apart from
+what she answers without it (neurally learned).
+
 ## Evaluation (`learn::eval`)
 
 - **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.

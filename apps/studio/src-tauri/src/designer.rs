@@ -88,6 +88,19 @@ fn view(d: &StoredDesign) -> DesignView {
     }
 }
 
+/// Saves a draft made elsewhere (Review Training) as a new Designer lesson; returns its id.
+pub(crate) fn create_from(app: &AppHandle, mut draft: LessonDraft) -> Res<String> {
+    draft.id = fresh_id('d');
+    let t = now();
+    let id = draft.id.clone();
+    store(app, &StoredDesign { draft, created: t, updated: t })?;
+    Ok(id)
+}
+
+pub(crate) fn load_draft(app: &AppHandle, id: &str) -> Res<LessonDraft> {
+    Ok(load(app, id)?.draft)
+}
+
 #[tauri::command]
 pub fn list_designs(app: AppHandle) -> Res<Vec<DesignSummary>> {
     let mut out = Vec::new();
