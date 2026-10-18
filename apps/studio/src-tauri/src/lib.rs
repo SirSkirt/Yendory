@@ -21,6 +21,7 @@ use yendory_engine::{
 };
 
 mod courses;
+mod designer;
 mod reading;
 mod sources;
 
@@ -1454,6 +1455,14 @@ pub fn run() {
             benchmark_training,
             page_settings,
             save_page_settings,
+            designer::list_designs,
+            designer::create_design,
+            designer::import_design,
+            designer::design_detail,
+            designer::save_design,
+            designer::delete_design,
+            designer::design_to_classroom,
+            designer::design_to_course,
             courses::list_courses,
             courses::create_course,
             courses::course_detail,

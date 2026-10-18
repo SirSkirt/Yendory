@@ -122,7 +122,8 @@ fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outc
         }
         _ => {
             let (Some(q), Some(expected)) = (&it.prompt, &it.answer) else { return Ok(out) };
-            let prompt = chat_prompt(q);
+            // Study Mode memories retrieved for the question come before it.
+            let prompt = format!("{}{}", it.context.as_deref().unwrap_or(""), chat_prompt(q));
             let got = reply(model, &prompt, MAX_REPLY_TOKENS, abl)?;
             let prefers_supported = match (&it.kind, &it.contradicted) {
                 (Kind::Reasoning, Some(bad)) => Some(

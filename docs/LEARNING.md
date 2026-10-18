@@ -16,6 +16,13 @@ trained the step-19,000 checkpoint):
 | `[Reasoning Lesson]` — `Premise: … Question: … Supported: … Contradicted: …` | `U: premise question\nN: ` + `supported\n`; the contradicted answer is used only for the preference check | premise + question |
 | `[Multi-Turn Conversation Lesson]` — `[session]` with `User:` / other speaker lines | the whole session as alternating `U: …\nN: ` / `reply\n` | the session text |
 | Text before `[examples]` | `T: text\n` (weight 0.3), never held out | — |
+| `[Reading]` — optional first line `Mode: neural`, `memory` or `combined`, then text | the text at weight 1.0 in units of about 800 characters (paragraph and sentence boundaries), never held out; `memory` text is not trained (Study Mode only) | — |
+| `[Evaluation]` — `question  answer` | not trained: these are the file's held-out questions | the question |
+
+`[Reading]` and `[Evaluation]` are Yendory additions (the reference pipeline ignores them; files
+without them parse exactly as before). When a file has an `[Evaluation]` block, its questions
+are the held-out units, nothing else is held out by hash, and a taught unit asking an
+evaluation question is dropped so it cannot leak the answer.
 
 About 10% of units in every block are **held out** by `crc32(lowercased, whitespace-collapsed
 key) % 100 < 10`. The split depends only on the text, so reordering or re-importing lessons
@@ -50,6 +57,50 @@ slots train at 725 tokens/s, 262,144 at 53 and 1,000,000 at 7 (256 slots: 1,715)
 Verified: on the owner's 27 lessons the Rust pipeline reproduces the reference split, the
 step-19,000 vocabulary word for word, and the published held-out scores of step 19,000 exactly
 (see docs/STATUS.md).
+
+## Lesson Designer (`learn::designer`)
+
+The Studio's Lesson Designer (§ 4) turns an imported `.txt` dataset into a lesson draft of
+blocks: **Reading** (text Nova reads: neural reading, Study Mode memory, or both), **Lesson**
+(instruction), **Examples**, **Practice**, **Extra Practice**, **Evaluation** (the teacher's
+held-out questions), **Unified text** (blocks of the lesson format kept as written) and
+**Unsorted** (material the analysis could not place; never taught).
+
+**Analysis** (`analyze`) reads the file's layout, nothing more: Markdown headings and
+`Lesson 3:`-style lines start sections; `Q:`/`A:`, `Question:`/`Answer:`, `User:`/`Nova:`,
+`Problem:`/`Solution:`, `question  answer`, tab and `->` pairs are questions with answers; a line
+ending in `?` takes the short line directly below it as its answer, flagged "paired by position"
+until the teacher checks it; a question without an answer stays without one (shown, not
+trained). Worked examples (`Example:`, `Solution:`) become Examples; otherwise about a third of
+a section's answered questions are proposed as Examples, the rest Practice, and a fifth of a
+long list Extra Practice. Prose in a section with questions is instruction, in a section without
+them reading. Lines with no letters are Unsorted. A dataset with more than 40 questions or 3,000
+words is divided into lessons at its top-level headings, and no lesson gets more than 60
+questions (optional). Unified lesson files are imported block by block. Every block keeps the
+lines it came from and every question its line; the file's SHA-256 is kept with the draft.
+
+**Origins.** Items and blocks record who wrote them (imported, generated, teacher), whether the
+teacher edited them, and where each answer came from (the file, generated, the teacher,
+missing). A generated answer must be verified before it becomes a training target; until then
+the lesson cannot be saved for teaching and the item is left out of the file.
+
+**Checks** (`validate`) flag, without changing anything: missing answers, unverified generated
+answers, answers paired by position, wrong arithmetic (`3 + 4 = 8`) and answers that disagree
+with a sum in the question (`What is 5 + 2?` / `8`), duplicate questions, a question that is
+both evaluated and taught (an error: it would leak), taught questions nearly identical to a
+held-out one (80% of words in common), held-out questions appearing in reading or instruction
+text, too few held-out questions (fewer than 8 makes grades coarse; none means the lesson cannot
+be graded), Unsorted material, empty blocks and Unified text that does not parse.
+
+**The lesson file** (`export`): each Lesson block and the examples and practice after it become a
+`[Dialogue Lesson]` (the instruction as its explanation); Reading becomes `[Reading]`, Extra
+Practice `[Extra Practice]`, Evaluation `[Evaluation]`; blocks not used in teaching and Unsorted
+blocks are left out. Markdown is for the teacher: the file gets plain text (headings, emphasis,
+links and HTML removed with their text kept, bullets as `- `, table rows as cells separated by
+`; `), converted to ASCII. The file is read back with the lesson parser to report what will be
+taught. Finished lessons go to the Classroom list or into a course (new or existing); the file
+name carries the lesson's stage word. Drafts are saved as they are edited and can be left
+unfinished.
 
 ## Evaluation (`learn::eval`)
 

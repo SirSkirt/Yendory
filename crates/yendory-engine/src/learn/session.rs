@@ -604,7 +604,7 @@ pub fn teach_with(
     let train: Vec<&Item> = practice
         .unwrap_or(lesson)
         .iter()
-        .filter(|it| !it.held_out && (cfg.strategy == Strategy::Standard || it.kind != Kind::Prose))
+        .filter(|it| it.trainable() && (cfg.strategy == Strategy::Standard || it.kind != Kind::Prose))
         .collect();
     let heldout: Vec<&Item> = lesson.iter().filter(|it| it.held_out && it.kind != Kind::Prose).collect();
     if train.is_empty() || heldout.is_empty() {
@@ -626,7 +626,7 @@ pub fn teach_with(
 
     let mut rng = Rng::new(cfg.seed);
     let probe_items = sample_per_kind(&heldout, cfg.eval_limit, cfg.seed);
-    let archive_train: Vec<&Item> = archive.iter().filter(|it| !it.held_out).collect();
+    let archive_train: Vec<&Item> = archive.iter().filter(|it| it.trainable()).collect();
     let archive_heldout: Vec<&Item> =
         archive.iter().filter(|it| it.held_out && it.kind != Kind::Prose).collect();
     let kinds = archive_heldout.iter().map(|it| it.kind).collect::<std::collections::BTreeSet<_>>().len();

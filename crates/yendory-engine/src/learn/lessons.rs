@@ -6,6 +6,15 @@
 //! weight). About 10% of units in every block are held out by a stable hash of their text, so
 //! the same question never lands in both training and test. Nothing here runs at inference;
 //! answers are only training targets and evaluation keys.
+//!
+//! Two more blocks (written by the Lesson Designer, usable by hand):
+//!
+//! * `[Reading]`: text the model reads, trained at full weight like corpus reading and never
+//!   held out. An optional first line `Mode: neural`, `Mode: memory` or `Mode: combined` says
+//!   whether it trains the weights, is only studied into Study Mode memory, or both (default
+//!   neural).
+//! * `[Evaluation]`: the teacher's own held-out questions, one `question  answer` per line.
+//!   When a file has one, these are its held-out units and nothing else is held out by hash.
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,6 +46,48 @@ impl Kind {
     }
 }
 
+/// What a `[Reading]` block is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingMode {
+    /// Read into the weights (trained like corpus reading).
+    #[default]
+    Neural,
+    /// Studied into Study Mode memory only; the weights do not change.
+    Memory,
+    /// Both.
+    Combined,
+}
+impl ReadingMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            ReadingMode::Neural => "neural",
+            ReadingMode::Memory => "memory",
+            ReadingMode::Combined => "combined",
+        }
+    }
+    pub fn parse(s: &str) -> Option<ReadingMode> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "neural" => Some(ReadingMode::Neural),
+            "memory" => Some(ReadingMode::Memory),
+            "combined" => Some(ReadingMode::Combined),
+            _ => None,
+        }
+    }
+    /// The weights are trained on the text.
+    pub fn trains(self) -> bool {
+        self != ReadingMode::Memory
+    }
+    /// The text is studied into Study Mode memory.
+    pub fn studies(self) -> bool {
+        self != ReadingMode::Neural
+    }
+}
+
+/// Reading text is split into units of about this many characters (at paragraph and sentence
+/// boundaries), so a long passage is read in full across an epoch instead of one window of it.
+pub const READING_CHUNK_CHARS: usize = 800;
+
 /// A piece of training text and the loss weight of the tokens it encodes to.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
@@ -65,6 +116,13 @@ pub struct Item {
     /// key the answer must match exactly, as in the reference evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<super::grading::AnswerKey>,
+    /// Reading text (prose items from a `[Reading]` block): what it is for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading: Option<ReadingMode>,
+    /// Context the model sees before the question (Study Mode memories); part of the item's
+    /// segments when trained, put before the prompt when evaluated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 impl Item {
     /// True for a conversation with Nexus lines (an environment, actions, results).
@@ -82,6 +140,10 @@ impl Item {
             history.push_str(&seg.text);
         }
         out
+    }
+    /// True when training may use the item: not held out, and not reading meant only for memory.
+    pub fn trainable(&self) -> bool {
+        !self.held_out && self.reading.map_or(true, ReadingMode::trains)
     }
     /// How many outcomes evaluating this item gives: one per conversation turn, else one.
     pub fn outcome_count(&self) -> usize {
@@ -104,6 +166,8 @@ impl Item {
             users: Vec::new(),
             replies: Vec::new(),
             key: None,
+            reading: None,
+            context: None,
         }
     }
 }
@@ -248,9 +312,43 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     // Nexus markers come only from `Environment:`, `Action:` and `Result:` lines, never from
     // the file's own characters.
-    let text = text.replace([crate::nexus::ENVIRONMENT, crate::nexus::ACTION, crate::nexus::RESULT], "");
+    let text = text.replace(
+        [crate::nexus::ENVIRONMENT, crate::nexus::ACTION, crate::nexus::RESULT, crate::memory::MEMORY],
+        "",
+    );
     let mut items = Vec::new();
+    // Positions of the items from `[Evaluation]` blocks.
+    let mut evaluation: BTreeSet<usize> = BTreeSet::new();
     for (name, body) in blocks(&text) {
+        if name == "Reading" {
+            let (mode, body) = reading_mode(body).map_err(|e| format!("{source}: {e}"))?;
+            for chunk in reading_chunks(body) {
+                let mut it = Item::new(
+                    Kind::Prose,
+                    source,
+                    false,
+                    vec![Segment { text: format!("{chunk}\n"), weight: 1.0 }],
+                );
+                it.reading = Some(mode);
+                items.push(it);
+            }
+            continue;
+        }
+        if name == "Evaluation" {
+            for line in split_lines(body) {
+                let Some(i) = line.find("  ") else { continue };
+                let (q, a) = (strip(&line[..i]), strip(&line[i + 2..]));
+                if q.is_empty() || a.is_empty() {
+                    continue;
+                }
+                let mut it = Item::new(Kind::Dialogue, source, true, qa(q, a));
+                it.prompt = Some(q.into());
+                it.answer = Some(a.into());
+                evaluation.insert(items.len());
+                items.push(it);
+            }
+            continue;
+        }
         let Some(kind) = block_kind(name) else { continue };
         let (explanation, examples) = match body.find("[examples]\n") {
             Some(i) => {
@@ -325,7 +423,96 @@ pub fn parse_lesson(text: &str, source: &str) -> Result<Vec<Item>, String> {
             Kind::Prose => unreachable!(),
         }
     }
+    if !evaluation.is_empty() {
+        // The teacher chose the held-out questions: everything else is taught, except a unit
+        // asking an evaluation question (it would leak the answer).
+        let eval_keys: BTreeSet<String> =
+            evaluation.iter().filter_map(|&i| items[i].prompt.as_deref().map(canonical)).collect();
+        let mut kept = Vec::with_capacity(items.len());
+        for (i, mut it) in items.into_iter().enumerate() {
+            if evaluation.contains(&i) {
+                kept.push(it);
+            } else if it.prompt.as_deref().map_or(true, |p| !eval_keys.contains(&canonical(p))) {
+                it.held_out = false;
+                kept.push(it);
+            }
+        }
+        items = kept;
+    }
     Ok(items)
+}
+
+/// The optional `Mode:` first line of a `[Reading]` block, and the text after it.
+fn reading_mode(body: &str) -> Result<(ReadingMode, &str), String> {
+    let trimmed = body.trim_start_matches(['\n', ' ', '\t']);
+    if let Some(rest) = trimmed.strip_prefix("Mode:") {
+        let (value, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        let mode = ReadingMode::parse(value).ok_or_else(|| {
+            format!("[Reading] Mode must be neural, memory or combined, not '{}'", value.trim())
+        })?;
+        return Ok((mode, after));
+    }
+    Ok((ReadingMode::Neural, body))
+}
+
+/// Splits reading text into units of about [`READING_CHUNK_CHARS`]: whole paragraphs where
+/// they fit, long paragraphs at sentence ends.
+pub fn reading_chunks(text: &str) -> Vec<String> {
+    let mut pieces = Vec::new();
+    for para in text.split("\n\n").map(strip).filter(|p| !p.is_empty()) {
+        let para = para.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+        if para.len() <= READING_CHUNK_CHARS {
+            pieces.push(para);
+            continue;
+        }
+        let mut current = String::new();
+        for sentence in sentences(&para) {
+            if !current.is_empty() && current.len() + 1 + sentence.len() > READING_CHUNK_CHARS {
+                pieces.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(sentence);
+        }
+        if !current.is_empty() {
+            pieces.push(current);
+        }
+    }
+    // Short paragraphs are joined (a blank line between them) up to the chunk size.
+    let mut out: Vec<String> = Vec::new();
+    for p in pieces {
+        match out.last_mut() {
+            Some(last) if last.len() + 2 + p.len() <= READING_CHUNK_CHARS => {
+                last.push_str("\n\n");
+                last.push_str(&p);
+            }
+            _ => out.push(p),
+        }
+    }
+    out
+}
+
+/// Sentences of a paragraph: split after `.`, `!` or `?` followed by a space (the punctuation
+/// stays with its sentence).
+pub fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let b = text.as_bytes();
+    let mut start = 0;
+    for i in 0..b.len() {
+        if matches!(b[i], b'.' | b'!' | b'?') && (i + 1 == b.len() || b[i + 1] == b' ') {
+            let s = text[start..=i].trim();
+            if !s.is_empty() {
+                out.push(s);
+            }
+            start = i + 1;
+        }
+    }
+    let rest = text[start..].trim();
+    if !rest.is_empty() {
+        out.push(rest);
+    }
+    out
 }
 
 /// A capitalized word that is rarely written in lowercase is treated as a name and kept
@@ -344,7 +531,7 @@ pub fn grow_vocabulary(
     min_count: usize,
 ) -> Vec<String> {
     let texts =
-        items.iter().filter(|it| !it.held_out).flat_map(|it| it.segments.iter().map(|s| s.text.as_str()));
+        items.iter().filter(|it| it.trainable()).flat_map(|it| it.segments.iter().map(|s| s.text.as_str()));
     grow_vocabulary_from_texts(existing, texts, capacity, min_count)
 }
 
@@ -402,5 +589,33 @@ mod tests {
         assert_eq!(items[3].users, ["hi"]);
         assert_eq!(items[3].replies, ["Hello!"]);
         assert!(parse_lesson("caf\u{e9}", "t").is_err());
+    }
+
+    #[test]
+    fn reading_and_evaluation_blocks() {
+        let long = "Dogs are animals. ".repeat(60);
+        let text = format!(
+            "[Reading]\nMode: combined\nMax is a dog.\n\n{long}\n[/Reading]\n[Reading]\nPlain reading.\n[/Reading]\n\
+             [Dialogue Lesson]\n[examples]\nIs Max a dog?  Yes.\nDo dogs bark?  Yes.\nDoes Max need water?  Yes.\n[/examples]\n[/Dialogue Lesson]\n\
+             [Evaluation]\nDoes Max need water?  Yes.\nIs Max an animal?  Yes.\n[/Evaluation]\n"
+        );
+        let items = parse_lesson(&text, "t").unwrap();
+        let reading: Vec<&Item> = items.iter().filter(|i| i.reading.is_some()).collect();
+        assert!(reading.len() >= 3, "the long paragraph is split into units");
+        assert!(reading.iter().all(|i| !i.held_out && i.segments[0].weight == 1.0 && i.kind == Kind::Prose));
+        assert!(reading.iter().all(|i| i.segments[0].text.len() <= READING_CHUNK_CHARS + 1));
+        assert_eq!(reading[0].reading, Some(ReadingMode::Combined));
+        assert_eq!(reading.last().unwrap().reading, Some(ReadingMode::Neural));
+        // The teacher's evaluation questions are the held-out units; nothing else is held out,
+        // and the taught copy of an evaluation question is dropped.
+        let held: Vec<&str> =
+            items.iter().filter(|i| i.held_out).filter_map(|i| i.prompt.as_deref()).collect();
+        assert_eq!(held, ["Does Max need water?", "Is Max an animal?"]);
+        let taught: Vec<&str> =
+            items.iter().filter(|i| !i.held_out).filter_map(|i| i.prompt.as_deref()).collect();
+        assert_eq!(taught, ["Is Max a dog?", "Do dogs bark?"]);
+        let memory_only = parse_lesson("[Reading]\nMode: memory\nText.\n[/Reading]\n", "t").unwrap();
+        assert!(!memory_only[0].trainable());
+        assert!(parse_lesson("[Reading]\nMode: dreaming\nText.\n[/Reading]\n", "t").is_err());
     }
 }

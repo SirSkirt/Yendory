@@ -11,20 +11,20 @@ use yendory_engine::learn::program::{
     RemediationRecord, Restart, RunOptions, RunSummary, Snapshot,
 };
 
-fn data_dir(app: &AppHandle, name: &str) -> Res<PathBuf> {
+pub(crate) fn data_dir(app: &AppHandle, name: &str) -> Res<PathBuf> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join(name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
-fn check_id(id: &str) -> Res<()> {
+pub(crate) fn check_id(id: &str) -> Res<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("Invalid id".into());
     }
     Ok(())
 }
 
-fn fresh_id(prefix: char) -> String {
+pub(crate) fn fresh_id(prefix: char) -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{prefix}{nanos:x}")
 }
@@ -38,13 +38,13 @@ fn course_path(app: &AppHandle, id: &str) -> Res<PathBuf> {
     Ok(data_dir(app, "courses")?.join(format!("{id}.json")))
 }
 
-fn load_course(app: &AppHandle, id: &str) -> Res<CourseDef> {
+pub(crate) fn load_course(app: &AppHandle, id: &str) -> Res<CourseDef> {
     let bytes =
         std::fs::read(course_path(app, id)?).map_err(|_| "This course no longer exists".to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
-fn save_course(app: &AppHandle, def: &CourseDef) -> Res<()> {
+pub(crate) fn save_course(app: &AppHandle, def: &CourseDef) -> Res<()> {
     write_atomic(&course_path(app, &def.id)?, &serde_json::to_vec(def).map_err(|e| e.to_string())?)
 }
 

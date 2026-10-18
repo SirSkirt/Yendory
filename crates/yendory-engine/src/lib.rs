@@ -23,6 +23,7 @@ pub mod fingerprint;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod learn;
+pub mod memory;
 pub mod model;
 pub mod nexus;
 pub mod tokenizer;

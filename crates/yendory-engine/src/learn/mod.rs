@@ -5,6 +5,7 @@ pub mod bench;
 pub mod corpus;
 pub mod course;
 pub mod curriculum;
+pub mod designer;
 pub mod eval;
 pub mod generate;
 pub mod grading;

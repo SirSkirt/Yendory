@@ -17,11 +17,13 @@
     <button type="button" data-page="models" class="active"><span>1</span>Models</button>
     <button type="button" data-page="reading"><span>2</span>Reading</button>
     <button type="button" data-page="classroom"><span>3</span>Classroom</button>
-    <button type="button" data-page="courses"><span>4</span>Courses</button>
-    <button type="button" data-page="planner"><span>5</span>Planner</button>
-    <button type="button" data-page="exams"><span>6</span>Exams</button>
-    <button type="button" data-page="brain"><span>7</span>Brain</button>
-    <button type="button" data-page="library"><span>8</span>Library</button>
+    <button type="button" data-page="designer"><span>4</span>Designer</button>
+    <button type="button" data-page="courses"><span>5</span>Courses</button>
+    <button type="button" data-page="planner"><span>6</span>Planner</button>
+    <button type="button" data-page="study"><span>7</span>Study</button>
+    <button type="button" data-page="exams"><span>8</span>Exams</button>
+    <button type="button" data-page="brain"><span>9</span>Brain</button>
+    <button type="button" data-page="library"><span>10</span>Library</button>
   </nav>
 </header>
 
@@ -254,9 +256,75 @@
     </table>
   </section>
 
-  <!-- § 4 Courses -->
+  <!-- § 4 Lesson Designer -->
+  <section class="page" id="page-designer" hidden>
+    <h2><span class="sec">§ 4</span> Lesson Designer</h2>
+    <p class="lede">Turn a text dataset into a lesson. Yendory proposes blocks from the file's layout (headings, questions and answers, worked examples); the proposal is only a draft, and you decide what the lesson finally contains. Finished lessons go to the Classroom or into a course.</p>
+    <div class="actions">
+      <button type="button" id="importDesign" class="primary">Import a .txt dataset…</button>
+      <label class="check-inline"><input type="checkbox" id="designSplit" checked> Divide a large dataset into several lessons</label>
+      <button type="button" id="newDesign">New empty lesson</button>
+    </div>
+    <table class="ledger" id="designList">
+      <thead><tr><th>Lesson</th><th>From</th><th class="num">Blocks · questions</th><th>Status</th><th>Saved</th><th></th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">No lessons yet. Import a dataset or start an empty lesson.</td></tr></tbody>
+    </table>
+
+    <div class="entry" id="designEditor" hidden>
+      <div class="line-form">
+        <label for="designName">Lesson</label>
+        <input type="text" id="designName" placeholder="Lesson name (its first number orders it in a course)">
+        <label for="designStage">Stage</label>
+        <select id="designStage">
+          <option value="">Whole brain</option>
+          <option value="dense_knowledge">Stage A: Dense</option>
+          <option value="transformer_language">Stage B: Transformer</option>
+          <option value="cooperative">Stage C: Co-op</option>
+        </select>
+        <label class="check-inline"><input type="checkbox" id="designFinished"> Finished</label>
+        <span class="note" id="designSaved">—</span>
+      </div>
+      <p class="note" id="designSource">—</p>
+      <details>
+        <summary>Teacher notes</summary>
+        <textarea id="designNotes" placeholder="Notes about this lesson (never taught)"></textarea>
+      </details>
+
+      <h4>Checks</h4>
+      <p class="note" id="designSummary">—</p>
+      <ul class="issue-list" id="designIssues"></ul>
+
+      <div class="actions">
+        <select id="designAddKind" aria-label="Block to add">
+          <option value="">Add a block…</option>
+          <option value="reading">Reading</option>
+          <option value="lesson">Lesson (instruction)</option>
+          <option value="examples">Examples</option>
+          <option value="practice">Practice</option>
+          <option value="extra_practice">Extra Practice</option>
+          <option value="evaluation">Evaluation (held out)</option>
+        </select>
+        <button type="button" id="designPreview">Preview the whole lesson</button>
+        <button type="button" id="designFile" class="quiet">Show the lesson file</button>
+      </div>
+      <div id="designPreviewPane" hidden></div>
+      <pre class="lesson-file" id="designFilePane" hidden></pre>
+      <div id="designBlocks"></div>
+
+      <h4>Use the lesson</h4>
+      <div class="actions">
+        <button type="button" id="designToClassroom">Add to the Classroom list</button>
+        <select id="designCourse" aria-label="Course"><option value="">New course…</option></select>
+        <input type="text" id="designNewCourse" placeholder="New course name">
+        <button type="button" id="designToCourse" class="primary">Save into the course</button>
+        <button type="button" id="designDelete" class="quiet">Delete this lesson</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- § 5 Courses -->
   <section class="page" id="page-courses" hidden>
-    <h2><span class="sec">§ 4</span> Courses</h2>
+    <h2><span class="sec">§ 5</span> Courses</h2>
     <p class="lede">A course is a set of lesson files with pass marks, extra practice material held in reserve, and a final exam. Its grade is 70% lessons (re-graded at the end of the course) and 30% final exam; it passes when the grade reaches the average of its lesson pass marks.</p>
     <p class="note">File names decide everything: the first number orders the lessons; the words <b>Dense</b>, <b>Transformer</b> or <b>Co-op</b> choose Stage A, B or C; a file named <b>Practice</b> is extra practice for the lesson with the same number and stage (an <code>[Extra Practice]</code> block inside a lesson works too); a file named <b>Exam</b> is the final exam, with <code>[Dense]</code>, <code>[Transformer]</code>, <code>[Co-op]</code> or <code>[Whole Brain]</code> sections. Answers may list accepted forms and rules, separated by <code>|</code>: <code>animal | creature | !plant</code> (Dense: keywords, a <code>!</code> word must not appear) or <code>A robin is an animal. | must: robin animal | never: not</code> (sentences). Training uses the first form.</p>
     <div class="actions"><button type="button" id="newCourse" class="primary">New course…</button></div>
@@ -314,9 +382,9 @@
     </div>
   </section>
 
-  <!-- § 5 Planner -->
+  <!-- § 6 Planner -->
   <section class="page" id="page-planner" hidden>
-    <h2><span class="sec">§ 5</span> Planner</h2>
+    <h2><span class="sec">§ 6</span> Planner</h2>
     <p class="lede">A plan teaches saved courses to one model, in order and unattended. Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
     <div class="actions"><button type="button" id="newPlan" class="primary">New plan for the open model…</button></div>
     <table class="ledger" id="planList">
@@ -350,9 +418,16 @@
     </div>
   </section>
 
-  <!-- § 6 Exams -->
+  <!-- § 7 Study -->
+  <section class="page" id="page-study" hidden>
+    <h2><span class="sec">§ 7</span> Study</h2>
+    <p class="lede">Study Mode, practice with your marking, reflection and review training.</p>
+    <div id="studyBody"></div>
+  </section>
+
+  <!-- § 8 Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 6</span> Exams</h2>
+    <h2><span class="sec">§ 8</span> Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is looked up or scripted.</p>
 
     <h3>Conversation</h3>
@@ -369,9 +444,9 @@
     <div id="examResult"></div>
   </section>
 
-  <!-- § 5 Brain -->
+  <!-- § 9 Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 7</span> Brain</h2>
+    <h2><span class="sec">§ 9</span> Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
     <div class="plate-wrap">
       <figure class="plate">
@@ -420,9 +495,9 @@
     <div id="thinkTree" class="think-tree"><p class="empty">Trace a reply to see how it was produced.</p></div>
   </section>
 
-  <!-- § 6 Library -->
+  <!-- § 10 Library -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 8</span> Library</h2>
+    <h2><span class="sec">§ 10</span> Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>
@@ -435,6 +510,8 @@
 </footer>
 <script src="js/brain.js"></script>
 <script src="js/app.js"></script>
+<script src="js/ui.js"></script>
 <script src="js/courses.js"></script>
+<script src="js/designer.js"></script>
 </body>
 </html>
