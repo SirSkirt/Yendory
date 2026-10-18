@@ -189,8 +189,8 @@ function blockCard(b, i) {
   if (b.kind === "reading") {
     const mode = el("select", { "aria-label": "Reading mode", onchange: e => { b.mode = e.target.value; b.edited = true; changed(); } },
       el("option", { value: "neural" }, "Neural reading: the weights learn from the text"),
-      el("option", { value: "memory" }, "Study Mode memory only: no weight change"),
-      el("option", { value: "combined" }, "Combined: neural reading and Study Mode memory"));
+      el("option", { value: "memory", disabled: studyModeOn ? null : "" }, `Study Mode memory only: no weight change${studyModeOn ? "" : " (needs Study Mode)"}`),
+      el("option", { value: "combined", disabled: studyModeOn ? null : "" }, `Combined: neural reading and Study Mode memory${studyModeOn ? "" : " (needs Study Mode)"}`));
     mode.value = b.mode || "neural";
     card.append(el("div", { class: "actions" }, mode,
       b.mode !== "neural" ? el("span", { class: studyModeOn ? "note" : "note warn" },

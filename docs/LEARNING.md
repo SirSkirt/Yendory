@@ -122,6 +122,12 @@ reflection's usefulness measurement. The teacher can edit, switch off (kept, not
 mark checked, delete or add memories; each decision is recorded with the statement and its
 surprise, as labelled examples of what is worth remembering for a learned selection later.
 
+**Models and checkpoints.** A model's memory belongs to it in the Studio (`memory.json` in the
+model's folder) and is plain text, so it stays valid when the weights change: later lessons,
+a restored best checkpoint or a changed vocabulary leave it as it is, and every memory records
+the training step it was stored at. Exporting a `.nnova2` checkpoint does not carry the memory
+(the checkpoint format is unchanged), and a model imported from a checkpoint starts with none.
+
 **Retrieval** is an index: memories sharing words with the question (function words left out,
 plural endings removed), weighted by how rare each word is among the memories, plus half that
 weight for memories sharing a word with those (one step), up to 4, within a third to a half of

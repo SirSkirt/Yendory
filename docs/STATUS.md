@@ -52,7 +52,15 @@ graded it, started remediation, was stopped mid-remediation and resumed at the n
 Reading sources: GSM8K downloaded and converted in the app; generated practice, a GSM8K and a
 prose corpus read together in bicameral mode (held-out loss 5.31 → 3.02, each corpus checked
 and recorded with its stage and licence). The other sources are downloaded and converted by
-CI (this container cannot reach their hosts). Not checked: the Windows installer and Android APK on real devices (CI builds them).
+CI (this container cannot reach their hosts). Lesson Designer, Study Mode, practice, reflection
+and Review Training, in the app: a text dataset imported and proposed as blocks with source lines
+(a wrong sum, an answer paired by position and a missing answer flagged), edited, saved into a
+new course and into the Classroom list and taught there with the progress card; a text studied
+into memory (3 of 6 sentences kept by surprise), memory added, retrieved in a conversation (one
+step through a shared concept) and logged; a practice session answered, marked, corrected and
+trained (accepted, held-out loss 3.19 → 2.52); a reflection on memories measured and written;
+review material generated as a Designer lesson, checked, assessed, trained and compared.
+Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified
 
