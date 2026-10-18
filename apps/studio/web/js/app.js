@@ -739,9 +739,7 @@ $("read").addEventListener("click", safe(async () => {
   readParts = parts;
   $("evalTable").tBodies[0].replaceChildren();
   $("readEntry").hidden = false;
-  $("readBar").style.width = "0%";
   $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}${deviceLabel()}`;
-  $("readLine").textContent = "Preparing the corpora…";
   await invoke("read_corpus", { options });
   readStart = 0;
   setTeaching(true);
@@ -759,14 +757,10 @@ function onReadEvent(e) {
     readParts = e.parts || [];
     const stageName = { dense_knowledge: "Stage A", transformer_language: "Stage B", cooperative: "Stage C" };
     const parts = readParts.map(p => `${p.name} ${Math.round(100 * p.share)}%${p.stage ? " in " + stageName[p.stage] : ""}`).join(", ");
-    $("readLine").textContent = `${fmt(e.train_documents)} documents to read (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps${parts ? " · " + parts : ""}. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`;
+    // Shown in the Reading card; also kept in the diagnostics log.
+    log("INFO", `Reading: ${fmt(e.train_documents)} documents (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps${parts ? " · " + parts : ""}. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`);
     $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", { class: "num" }, (e.baseline_dense_reliance ?? 0).toFixed(3)), el("td", {}, "starting point"), el("td", {}, "")));
   } else if (e.type === "batch") {
-    $("readBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
-    const secs = (performance.now() - readStart) / 1000;
-    const rate = e.tokens / Math.max(secs, 1e-3);
-    const left = (e.steps - e.step) * (e.tokens / e.step) / rate;
-    $("readLine").textContent = `step ${fmt(e.step)}/${fmt(e.steps)}${readParts.length > 1 ? " · " + (readParts[e.part]?.name ?? "") : ""} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)} · rate ${e.learning_rate.toExponential(2)} · ${fmt(Math.round(rate))} tokens/s · about ${Math.ceil(left / 60)} min left`;
   } else if (e.type === "evaluated") {
     $("evalTable").tBodies[0].append(el("tr", { class: e.accepted ? "current-row" : "" },
       el("td", { class: "num" }, fmt(e.tokens)),
@@ -784,7 +778,6 @@ function onReadEvent(e) {
 function onReadFinished(f) {
   setTeaching(false);
   if (f.model) showActive(f.model);
-  $("readBar").style.width = "100%";
   const text = f.error ? `Reading ended with an error: ${f.error}`
     : f.accepted ? `${f.stopped ? "Stopped" : f.earlyStop ? "Finished early (no further improvement)" : "Finished"} after ${fmt(f.tokens)} tokens: held-out loss ${f.baselineLoss.toFixed(4)} → ${f.bestLoss.toFixed(4)}. The best checkpoint is saved.`
     : `${f.stopped ? "Stopped" : "Finished"}: no checkpoint lowered the held-out loss, so the model is unchanged.`;

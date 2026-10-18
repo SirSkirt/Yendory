@@ -68,7 +68,8 @@ onReadEvent = e => {
     const part = readParts.length > 1 ? `${readParts[e.part]?.name ?? ""} · ` : "";
     readCard.step("read", { state: "running", progress: e.step / Math.max(1, e.steps),
       progressLabel: `Step ${fmt(e.step)} of ${fmt(e.steps)} · ${part}${fmt(Math.round(rate))} tokens/s · about ${Math.max(1, Math.ceil(left / 60))} min left`,
-      detail: readTrack.checks ? `${readTrack.checks} held-out check(s), ${readTrack.kept} kept; best held-out loss ${readTrack.best.toFixed(3)}.` : "The first held-out check comes after about a twentieth of the steps." });
+      detail: `Train loss ${e.loss.toFixed(4)} · learning rate ${e.learning_rate.toExponential(2)} · ${fmt(e.tokens)} tokens read. ` +
+        (readTrack.checks ? `${readTrack.checks} held-out check(s), ${readTrack.kept} kept; best held-out loss ${readTrack.best.toFixed(3)}.` : "The first held-out check comes after about a twentieth of the steps.") });
   } else if (e.type === "evaluated") {
     readTrack.checks++;
     if (e.accepted) { readTrack.kept++; readTrack.best = e.held_out_loss; }
