@@ -6,7 +6,7 @@
 //! again, so gains, losses, forgetting of earlier lessons and survival of improvements can be
 //! counted. Course grades are the first grade after teaching (before any remediation).
 //!
-//! cargo run --release --example guard_compare -- <strict|net|relative|both> <start.nnova2>
+//! GC_SEED=<n> cargo run --release --example guard_compare -- <strict|net|relative|both> <start.nnova2>
 //!     <out.json> <threads> <relative share, e.g. 0.03> <course: lesson files separated by ,>...
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,7 +122,9 @@ fn main() {
         let stop = AtomicBool::new(false);
         let latest = RefCell::new(None);
         let events = RefCell::new(Vec::new());
-        let mut run = CourseRun::new(prep, false, 7 + ci as u64);
+        // GC_SEED chooses another seed for a repeat of the comparison (default 7).
+        let seed: u64 = std::env::var("GC_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+        let mut run = CourseRun::new(prep, false, seed + ci as u64);
         let opts = RunOptions { word_limit: Some(7500) };
         // Teach lesson by lesson; after each, ask every lesson's questions again.
         let mut host = Host { stop: &stop, latest: &latest, events: &events };
