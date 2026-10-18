@@ -175,7 +175,23 @@ Findings:
   noise. The gap between net and strict (7 answers, every lesson in the same direction) is the
   only clear one. Times are not comparable (the runs shared the CPU differently).
 
-No default was changed: strict stays the default until net is confirmed with another seed.
+**Second seed (101), strict against net**, everything else the same:
+
+| | strict | net |
+|---|---|---|
+| Held-out answers right at the end (of 108; 3 at start) | 32 | **35** |
+| Gained / lost | 29 / 0 | 32 / 0 |
+| Course 1 lessons: right after course 1 → after course 2 | 24 → 23 | 28 → 24 |
+| Course 2 lessons right at the end (of 62) | **9** | 11 |
+| Held-out loss at the end, 02A / 02B / 03A / 03B | 1.05 / 0.80 / 0.97 / 0.83 | **1.00 / 0.76 / 0.76 / 0.74** |
+| Course grade, course 1 / course 2 | 0.52 / 0.14 | **0.61 / 0.18** |
+
+Net is ahead again on both seeds: more answers at the end (38 vs 31, 35 vs 32), no answer the
+model had at the start lost, lower held-out loss on every lesson, better course grades. The
+margin is smaller on seed 101 (3 answers), and one lesson (03A) ended one answer behind strict.
+Net still forgets a little more of course 1 during course 2 on both seeds, and still ends
+level with or above strict on it. No default has been changed yet; making net the default is a
+decision for the owner.
 
 ## Decisions still open
 
