@@ -306,9 +306,13 @@ table { border-collapse: collapse; width: 100%; }
 .tc-icon.failed { border: 2px solid var(--bad); color: var(--bad); }
 .tc-icon.skipped { border: 2px dotted var(--rule-strong); color: var(--ink-soft); }
 .tc-icon.waiting { border: 2px dotted var(--rule-strong); }
+.tc-icon.active { border: 2px solid var(--accent); }
+.tc-icon.active::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .tc-icon.running { border: 2.5px solid var(--accent-soft); border-top-color: var(--accent); animation: tc-spin .9s linear infinite; }
 @keyframes tc-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .tc-icon.running { animation: none; border-color: var(--accent); } }
+@media (prefers-reduced-motion: reduce) { .tc-icon.active { border: 2px solid var(--accent); }
+.tc-icon.active::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.tc-icon.running { animation: none; border-color: var(--accent); } }
 .tc-title { font-weight: 600; font-size: 14.5px; line-height: 22px; }
 .tc-step.waiting .tc-title, .tc-step.skipped .tc-title { color: var(--ink-soft); font-weight: 500; }
 .tc-detail { font-size: 13.5px; color: var(--ink-soft); overflow-wrap: anywhere; }

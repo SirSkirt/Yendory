@@ -133,7 +133,8 @@ function renderMarkdown(md) {
 
 // ---- Progress card -------------------------------------------------------------------------
 // A card with a header (what is being taught, the current part, a status), a timeline of steps
-// (done, running with real progress, waiting, failed, skipped) and a footer line.
+// (done, running with real progress, active: under way alongside the running step, waiting,
+// failed, skipped) and a footer line.
 //   const card = new TaskCard($("someContainer"));
 //   card.set({ title, subtitle, status, footer, steps: [{ id, title, detail, state, progress }] });
 //   card.step("train", { state: "running", progress: 0.4, detail: "..." });
@@ -155,7 +156,7 @@ class TaskCard {
     this.container.hidden = false;
     const icon = s => el("span", { class: "tc-icon " + (s.state || "waiting"), "aria-hidden": "true" },
       s.state === "done" ? "✓" : s.state === "failed" ? "✕" : s.state === "skipped" ? "–" : "");
-    const label = { done: "done", running: "in progress", waiting: "waiting", failed: "failed", skipped: "skipped" };
+    const label = { done: "done", running: "in progress", active: "under way", waiting: "waiting", failed: "failed", skipped: "skipped" };
     const list = el("ol", { class: "tc-steps" }, ...d.steps.map(s => el("li", { class: "tc-step " + (s.state || "waiting") },
       icon(s),
       el("div", { class: "tc-body" },
