@@ -234,6 +234,28 @@ Reward-guided training stays **off** (not the default). Stage 3 is not proposed 
 Any adjusted schedule would have to be judged on new seeds (and ideally other lessons), not
 tuned on these two runs.
 
+### Gentler reward-guided training, on new seeds (211 and 307)
+
+The gentler schedule (fixed before any of its results were seen: known answers keep regular
+practice, emphasis 0.6-2.0, no concept or variation boosts) against ordinary training, same
+start checkpoint, courses and settings (net safeguard, the default), seeds new to the reward
+experiments. Both arms of a seed ran from the same build.
+
+| | Seed 211: ordinary | Seed 211: gentle | Seed 307: ordinary | Seed 307: gentle |
+|---|---|---|---|---|
+| Held-out answers right at the end (of 108; 3 at start) | **34** | 29 | 33 | **36** |
+| Answers gained / lost | 31 / 0 | 27 / 1 | 31 / 1 | 34 / 1 |
+| Answers lost after their own course (forgetting) | **0** | 3 | **0** | 5 |
+| Final exam (protected), course 1 / course 2 | **0.63 / 0.12** | 0.59 / 0.12 | 0.55 / 0.14 | **0.63 / 0.18** |
+| Candidates rejected as unstable | 60 | 70 | 96 | **48** |
+| Ledger credit: progress / retention / generalization | 385 / 371 / 40 | 477 / 442 / 35 | 549 / 533 / 32 | 629 / 576 / 46 |
+
+Findings: one seed each way (-5 and +3 answers; four seeds in all, the reward schedules are
+behind on three). Gentle forgot more after each course on both seeds (3 and 5 answers against
+0), and its ledger credit was higher on both, including seed 211 where its real results were
+lower. The spread between seeds (29 to 36 answers) is as large as any difference between the
+arms. Reward-guided training stays off.
+
 ## Decisions still open
 
 | # | Decision | Status |
