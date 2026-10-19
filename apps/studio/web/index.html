@@ -32,7 +32,7 @@
   <!-- § 1 Models -->
   <section class="page" id="page-models">
     <h2><span class="sec">§ 1</span> Models</h2>
-    <p class="lede">Every model uses the same Bicameral engine. What makes Nova different from Echo is only what each one is taught.</p>
+    <p class="lede">Every model runs on the same Yendory Engine. Nova Bicameral is the default architecture; Nova Neuro is an experimental one you can build from specialised networks. What makes Nova different from Echo is what each one is taught.</p>
 
     <div class="entry" id="activeEntry" hidden>
       <h3 id="activeName">—</h3>
@@ -69,6 +69,14 @@
       <span class="note" id="benchNote">Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest.</span>
     </div>
     <div id="benchResult" hidden></div>
+    <div class="line-form">
+      <label for="archChoice">Architecture</label>
+      <select id="archChoice">
+        <option value="bicameral">Nova Bicameral: transformer + Dense hemisphere (default)</option>
+        <option value="neuro">Nova Neuro (experimental): build a brain from specialised networks</option>
+      </select>
+    </div>
+    <div id="neuroBuilder" hidden></div>
     <table class="ledger compact" id="sizeTable">
       <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">Transformer · dense · interconnect</th><th class="num">File</th><th class="num">Memory: talking · reading · teaching</th><th>Speed on this device</th></tr></thead>
       <tbody></tbody>
@@ -109,7 +117,7 @@
       <input id="newName" maxlength="60" placeholder="e.g. Echo" autocomplete="off">
       <button type="button" id="createModel" class="primary">Create untrained model</button>
       <span class="or">or</span>
-      <button type="button" id="importModel">Import a .nnova2 checkpoint…</button>
+      <button type="button" id="importModel">Import a checkpoint (.nnova2 or .nneuro)…</button>
     </div>
 
     <h3>Library of models</h3>
@@ -699,6 +707,7 @@
       </aside>
     </div>
 
+    <div id="neuroActivity" hidden></div>
     <h3>Thinking tree</h3>
     <p class="note">Nova-2 does not write out reasoning steps. For every token, its lower stage runs once and its upper stage runs several thinking rounds, exchanging signals with the dense hemisphere before each round. This tree records that computation while the model answers the question above: the token chosen at each step and the alternatives it weighed, what it would have said after the lower stage and after each round, how much the dense hemisphere changed the decision, and, at the closest calls, where the runner-up would have led. Every value is measured from the model.</p>
     <div class="actions">
@@ -732,5 +741,6 @@
 <script src="js/reflection.js"></script>
 <script src="js/review.js"></script>
 <script src="js/rewards.js"></script>
+<script src="js/neuro.js"></script>
 </body>
 </html>

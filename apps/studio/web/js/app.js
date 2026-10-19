@@ -60,6 +60,12 @@ function showActive(meta) {
   $("activeName").textContent = meta.name;
   $("activeStep").textContent = fmt(meta.step);
   $("activeWords").textContent = fmt(meta.words);
+  const neuroModel = meta.architecture === "neuro";
+  const label = (id, text) => { const th = $(id).previousElementSibling; if (th) th.textContent = text; };
+  label("activeLeft", neuroModel ? "Language core (transformer)" : "Transformer (left)");
+  label("activeRight", neuroModel ? "Modules (Nova Neuro)" : "Dense (right)");
+  label("activeInter", neuroModel ? "Communication (bus, controller)" : "Interconnect");
+  $("exportModel").textContent = neuroModel ? "Export .nneuro…" : "Export .nnova2…";
   $("activeLeft").textContent = fmt(meta.groups[0]);
   $("activeRight").textContent = fmt(meta.groups[1]);
   $("activeInter").textContent = fmt(meta.groups[2]);
@@ -95,7 +101,7 @@ async function refreshModels() {
   for (const m of models) {
     const isOpen = active?.id === m.id;
     const row = el("tr", { class: isOpen ? "current-row" : "" },
-      el("td", {}, m.name),
+      el("td", {}, m.name, m.architecture === "neuro" ? el("span", { class: "tag", title: "Nova Neuro (experimental)" }, " Neuro") : ""),
       el("td", { class: "num" }, millions(m.parameters)),
       el("td", { class: "num" }, fmt(m.step)),
       el("td", { class: "num" }, fmt(m.words)),
@@ -285,6 +291,13 @@ $("vocabCustom").addEventListener("input", safe(updateVocabNote, "Vocabulary"));
 $("createModel").addEventListener("click", safe(async () => {
   const name = $("newName").value.trim();
   if (!name) { $("newName").focus(); throw new Error("Give the new model a name"); }
+  if ($("archChoice").value === "neuro") {
+    showActive(await invoke("create_neuro_model", { name, input: neuroInput(), wordLimit: chosenLimit(), context: chosenContext() }));
+    $("newName").value = "";
+    await refreshModels();
+    say(`Created ${active.name}: an untrained Nova Neuro model with ${fmt(active.parameters)} parameters.`);
+    return;
+  }
   showActive(await invoke("create_model", { name, size: chosenSize, wordLimit: chosenLimit(), context: chosenContext() }));
   $("newName").value = "";
   await refreshModels();
@@ -866,6 +879,7 @@ function showMeasure(m, caption) {
   sel.value = String(m.trace.stages.length - 1);
   renderMeasure();
   $("brainDetail").textContent = caption;
+  window.showNeuroActivity?.(m);
 }
 $("inspect").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open a model first");

@@ -374,3 +374,15 @@ table { border-collapse: collapse; width: 100%; }
 /* Rewards page */
 .rw-checks label.check { display: block; margin: 8px 0; max-width: 90ch; }
 .reward-status { margin: 6px 0; }
+
+/* Nova Neuro brain builder */
+.nb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 10px 0; }
+.nb-module { border: 1px solid var(--rule-strong); border-radius: 6px; padding: 8px 12px 10px; background: var(--sheet); }
+.nb-module.off { opacity: 0.7; }
+.nb-module legend { padding: 0 4px; }
+.nb-module p.note { margin: 2px 0 8px; }
+.nb-fields { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.nb-fields label { display: flex; flex-direction: column; font-size: 13px; color: var(--ink-soft); }
+.nb-bar { display: inline-block; width: 120px; height: 8px; background: color-mix(in srgb, var(--ink-soft) 15%, transparent); border-radius: 4px; overflow: hidden; vertical-align: middle; }
+.nb-bar i { display: block; height: 100%; background: var(--accent); }
+tr.nb-later td { color: var(--ink-soft); }

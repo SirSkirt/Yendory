@@ -22,6 +22,7 @@ use yendory_engine::{
 
 mod courses;
 mod designer;
+mod neuro;
 mod practice;
 mod reading;
 mod reflection;
@@ -42,7 +43,8 @@ fn now() -> u64 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Models library: <app data>/models/<id>/{model.nnova2, meta.json, archive.json, history.jsonl}
+// Models library: <app data>/models/<id>/{model.nnova2, meta.json, archive.json, history.jsonl}.
+// model.nnova2 holds either format: its header says Bicameral (.nnova2) or Nova Neuro (.nneuro).
 // ---------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +87,15 @@ pub struct Meta {
     /// Corpora this model has read (pre-training), oldest first.
     #[serde(default)]
     read: Vec<reading::ReadRecord>,
+    /// "bicameral" or "neuro" (Nova Neuro, experimental).
+    #[serde(default = "bicameral")]
+    architecture: String,
+    /// Nova Neuro: the modules and their sizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    design: Option<yendory_engine::model::NeuroSpec>,
+}
+fn bicameral() -> String {
+    "bicameral".into()
 }
 
 struct Active {
@@ -137,6 +148,8 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
     meta.words = model.tokenizer.words().len();
     meta.slots = model.word_capacity();
     meta.context = model.config.max_tokens;
+    meta.architecture = model.architecture().into();
+    meta.design = model.neuro.clone();
     meta.updated = now();
 }
 
@@ -188,6 +201,8 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         slots: 0,
         word_limit: None,
         context: 0,
+        architecture: bicameral(),
+        design: None,
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -902,29 +917,36 @@ fn read_picked(app: &AppHandle, path: &FilePath, limit: usize) -> Res<Vec<u8>> {
 #[tauri::command]
 async fn import_model(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<Meta>> {
     not_teaching(&studio)?;
-    let Some(path) = app.dialog().file().add_filter("Bicameral checkpoint", &["nnova2"]).blocking_pick_file()
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("Nova checkpoint (Bicameral .nnova2, Neuro .nneuro)", &["nnova2", "nneuro"])
+        .blocking_pick_file()
     else {
         return Ok(None);
     };
     let bytes = read_picked(&app, &path, MAX_CHECKPOINT_BYTES)?;
     let model = Bicameral::from_bytes(&bytes)?;
     let file = display_name(&path);
-    let name = file.trim_end_matches(".nnova2").to_string();
+    let name = file.trim_end_matches(".nnova2").trim_end_matches(".nneuro").to_string();
     install(&app, &studio, if name.trim().is_empty() { "Imported model" } else { &name }, model, &file)
         .map(Some)
 }
 
 #[tauri::command]
 async fn export_model(app: AppHandle, studio: State<'_, Studio>) -> Res<Option<String>> {
-    let (name, step, bytes) =
-        with_active(&studio, |a| Ok((a.meta.name.clone(), a.model.step, a.model.to_bytes()?)))?;
+    let (name, step, bytes, neuro) = with_active(&studio, |a| {
+        Ok((a.meta.name.clone(), a.model.step, a.model.to_bytes()?, a.model.neuro.is_some()))
+    })?;
+    let (kind, ext) =
+        if neuro { ("Nova Neuro checkpoint", "nneuro") } else { ("Bicameral checkpoint", "nnova2") };
     let safe: String =
         name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     let Some(path) = app
         .dialog()
         .file()
-        .add_filter("Bicameral checkpoint", &["nnova2"])
-        .set_file_name(format!("{safe}-step{step}.nnova2"))
+        .add_filter(kind, &[ext])
+        .set_file_name(format!("{safe}-step{step}.{ext}"))
         .blocking_save_file()
     else {
         return Ok(None);
@@ -1524,6 +1546,9 @@ pub fn run() {
             practice::delete_practice,
             practice::train_practice,
             practice::accept_practice_auto,
+            neuro::neuro_presets,
+            neuro::neuro_plan,
+            neuro::create_neuro_model,
             rewards::reward_settings,
             rewards::save_reward_settings,
             rewards::reset_reward_settings,
