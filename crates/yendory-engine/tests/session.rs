@@ -254,3 +254,79 @@ fn training_continues_through_flat_epochs() {
     assert!(r.learned);
     assert_eq!(r.final_score, r.epochs.last().unwrap().accepted_score);
 }
+
+fn stories() -> std::sync::Arc<Vec<String>> {
+    std::sync::Arc::new(
+        (0..60)
+            .map(|i| format!("Once upon a time, a little dog named Rex {i} found a red ball in the park. He was happy and played all day."))
+            .collect(),
+    )
+}
+
+/// Dropout and general-reading rehearsal are off by default: with both off (and reading text
+/// present but unused) a session trains exactly as before, bit for bit.
+#[test]
+fn training_switches_off_change_nothing() {
+    let (lesson, archive) = course();
+    let start = model();
+    let run = |cfg: &SessionConfig| {
+        teach(&start, &lesson, &archive, cfg, &mut |_| {}, &AtomicBool::new(false)).unwrap()
+    };
+    let base = run(&quick());
+    let off = run(&SessionConfig { dropout: 0., reading_share: 0., reading: Some(stories()), ..quick() });
+    assert_eq!(base.model.weights, off.model.weights);
+    assert_eq!(base.epochs, off.epochs);
+}
+
+/// Dropout trains differently (and still selects safely); general reading replaces lesson rows
+/// without changing the number of batches per epoch.
+#[test]
+fn dropout_and_reading_rehearsal_train() {
+    let (lesson, _) = course();
+    let start = model();
+    // No archive (no lesson rehearsal), so an epoch's rows are exactly its lesson units.
+    let run = |cfg: &SessionConfig| {
+        let mut batches = Vec::new();
+        let r = teach(
+            &start,
+            &lesson,
+            &[],
+            cfg,
+            &mut |e| {
+                if let Event::Batch { epoch, focus, batches: n, .. } = e {
+                    if focus == "joint" {
+                        batches.push((*epoch, *n));
+                    }
+                }
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        batches.dedup();
+        (r, batches)
+    };
+    let (base, base_batches) = run(&quick());
+    let (dropped, _) = run(&SessionConfig { dropout: 0.1, ..quick() });
+    assert_ne!(dropped.epochs[0].candidates[0].train_loss, base.epochs[0].candidates[0].train_loss);
+    let (read, read_batches) =
+        run(&SessionConfig { reading_share: 0.2, reading: Some(stories()), ..quick() });
+    assert_eq!(read_batches, base_batches, "the same number of batches per epoch");
+    assert_ne!(read.epochs[0].candidates[0].train_loss, base.epochs[0].candidates[0].train_loss);
+    // Reading without text is refused rather than silently ignored.
+    let missing = teach(
+        &start,
+        &lesson,
+        &[],
+        &SessionConfig { reading_share: 0.2, ..quick() },
+        &mut |_| {},
+        &AtomicBool::new(false),
+    );
+    assert!(missing.is_err());
+    for r in [&dropped, &read] {
+        for e in &r.epochs {
+            for c in &e.candidates {
+                assert_ne!(c.selected, !c.rejections.is_empty());
+            }
+        }
+    }
+}

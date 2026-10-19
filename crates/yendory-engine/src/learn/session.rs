@@ -92,6 +92,18 @@ pub struct SessionConfig {
     /// least this much to be accepted: smaller changes are noise, not learning.
     #[serde(default = "default_min_loss_improvement")]
     pub min_loss_improvement: f32,
+    /// Dropout rate while training (0 = off): applied to the transformer blocks' attention and
+    /// feed-forward outputs during the session's training steps only, never when scoring.
+    #[serde(default)]
+    pub dropout: f32,
+    /// Share of each epoch's rows drawn from general reading text (`reading`) instead of the
+    /// lesson (0 = off). Rows per epoch stay as without it, so the training budget is the same.
+    #[serde(default)]
+    pub reading_share: f32,
+    /// General reading text for `reading_share`: documents, e.g. a corpus the model has read.
+    /// Not saved with settings.
+    #[serde(skip)]
+    pub reading: Option<std::sync::Arc<Vec<String>>>,
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -160,7 +172,36 @@ impl Default for SessionConfig {
             retry: RetryPolicy::default(),
             pass_mark: default_pass_mark(),
             min_loss_improvement: default_min_loss_improvement(),
+            dropout: 0.,
+            reading_share: 0.,
+            reading: None,
         }
+    }
+}
+
+/// Reading windows for general-reading rehearsal: each document encoded once.
+struct ReadingRows {
+    docs: Vec<Vec<crate::TokenId>>,
+    window: usize,
+}
+impl ReadingRows {
+    fn new(model: &Bicameral, texts: &[String]) -> Result<Self, String> {
+        let mut docs = Vec::new();
+        for t in texts {
+            let ids = model.tokenizer.encode(t.trim())?;
+            if ids.len() >= 8 {
+                docs.push(ids);
+            }
+        }
+        Ok(ReadingRows { docs, window: model.config.max_tokens.min(64) })
+    }
+    /// A random window of a random document, every token trained at full weight.
+    fn row(&self, rng: &mut Rng) -> Row {
+        let doc = &self.docs[rng.below(self.docs.len())];
+        let n = doc.len().min(self.window + 1);
+        let start = rng.below(doc.len() - n + 1);
+        let w = &doc[start..start + n];
+        Row { ids: w[..n - 1].to_vec(), targets: w[1..].to_vec(), mask: vec![1.; n - 1] }
     }
 }
 
@@ -788,6 +829,19 @@ pub fn teach_rewarded(
         start.tokenizer.set_words(words);
     }
 
+    if !(0. ..1.).contains(&cfg.dropout) {
+        return Err("Dropout must be at least 0 and below 1".into());
+    }
+    if !(0. ..1.).contains(&cfg.reading_share)
+        || (cfg.reading_share > 0. && cfg.reading_share + cfg.rehearsal_share >= 1.)
+    {
+        return Err("The reading and rehearsal shares must leave room for the lesson".into());
+    }
+    let reading = match (&cfg.reading, cfg.reading_share > 0.) {
+        (Some(texts), true) => Some(ReadingRows::new(&start, texts)?).filter(|r| !r.docs.is_empty()),
+        (None, true) => return Err("General-reading rehearsal needs reading text".into()),
+        _ => None,
+    };
     let mut rng = Rng::new(cfg.seed);
     let probe_items = sample_per_kind(&heldout, cfg.eval_limit, cfg.seed);
     let archive_train: Vec<&Item> = archive.iter().filter(|it| it.trainable()).collect();
@@ -913,9 +967,27 @@ pub fn teach_rewarded(
         }
         let mut plan: Vec<Vec<Row>> = Vec::with_capacity(batches_per_epoch);
         let mut next = order.into_iter();
+        // General-reading rehearsal: reading rows take the place of lesson rows. The epoch has
+        // the rows it has without reading (its lesson units and, on average, the rehearsal rows
+        // drawn with them), so the training budget is unchanged; the lesson units left over
+        // differ between epochs because the order is shuffled every epoch.
+        let mut budget = reading.as_ref().map(|_| {
+            let rehearsal = if archive_train.is_empty() { 0. } else { cfg.rehearsal_share as f64 };
+            (train.len() as f64 / (1. - rehearsal)).round() as usize
+        });
         'plan: loop {
             let mut rows = Vec::with_capacity(cfg.batch_size);
             while rows.len() < cfg.batch_size {
+                if let (Some(r), Some(left)) = (&reading, budget.as_mut()) {
+                    if *left == 0 {
+                        break;
+                    }
+                    *left -= 1;
+                    if plan_rng.unit() < cfg.reading_share as f64 {
+                        rows.push(r.row(&mut plan_rng));
+                        continue;
+                    }
+                }
                 let it = if !archive_train.is_empty() && plan_rng.unit() < cfg.rehearsal_share as f64 {
                     match &rehearsal_weights {
                         Some(w) => archive_train[weighted_pick(w, &mut plan_rng)],
@@ -961,7 +1033,21 @@ pub fn teach_rewarded(
                     }
                     let step = (epoch as u64 - 1) * batches_per_epoch as u64 + b as u64;
                     let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1);
-                    let loss = trainer.step(&mut cand, rows, Ablation::default(), lr, focus)?;
+                    // Dropout masks depend on the epoch and batch, so every candidate of an
+                    // epoch sees the same ones.
+                    let abl = if cfg.dropout > 0. {
+                        Ablation {
+                            dropout: Some(crate::model::Dropout {
+                                rate: cfg.dropout,
+                                seed: cfg.seed ^ 0xD20F_0D20 ^ (step + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                                row: 0,
+                            }),
+                            ..Ablation::default()
+                        }
+                    } else {
+                        Ablation::default()
+                    };
+                    let loss = trainer.step(&mut cand, rows, abl, lr, focus)?;
                     losses += loss as f64;
                     observer(&Event::Batch {
                         epoch,

@@ -9,6 +9,11 @@
 //! final exams (protected from the ledger), held-out loss, candidates rejected as unstable, and
 //! the ledger's totals and flags.
 //!
+//! Ordinary-training experiments (default off): RC_DROPOUT=<rate> trains lessons with dropout;
+//! RC_READING=<text file> (documents separated by <|endoftext|>) with RC_READING_SHARE=<share>
+//! (default 0.1) replaces that share of each epoch's rows with general reading. The reading text
+//! is checked first: no lesson evaluation or exam question may appear in it.
+//!
 //! RC_VARIANT=gentle (optional) RC_SEED=<n> cargo run --release --example reward_compare -- <standard|rewarded> <start.nnova2>
 //!     <out.json> <threads> <course: lesson files separated by ,>...
 use std::cell::RefCell;
@@ -92,12 +97,23 @@ fn main() {
     let courses: Vec<Vec<String>> =
         args[5..].iter().map(|c| c.split(',').map(String::from).collect()).collect();
     let seed: u64 = std::env::var("RC_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
+    let env_f32 = |k: &str| std::env::var(k).ok().map(|v| v.parse::<f32>().expect(k));
+    let dropout = env_f32("RC_DROPOUT").unwrap_or(0.);
+    let reading_text = std::env::var("RC_READING").ok().map(|p| std::fs::read_to_string(p).unwrap());
+    let reading_share = if reading_text.is_some() { env_f32("RC_READING_SHARE").unwrap_or(0.1) } else { 0. };
+    let reading: Option<std::sync::Arc<Vec<String>>> = reading_text.as_ref().map(|t| {
+        std::sync::Arc::new(
+            t.split("<|endoftext|>").map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect(),
+        )
+    });
 
     let preps: Vec<PreparedCourse> = courses
         .iter()
         .enumerate()
         .map(|(ci, files)| {
             let mut def = CourseDef::new(&format!("c{ci}"), &format!("Course {}", ci + 1));
+            def.settings.dropout = dropout;
+            def.settings.reading_share = reading_share;
             def.add_files(
                 files
                     .iter()
@@ -118,6 +134,29 @@ fn main() {
             p.lessons.iter().map(|l| (l.name.clone(), l.eval_items().into_iter().cloned().collect()))
         })
         .collect();
+    // No question the courses grade (lesson evaluation units or exam items) may be in the
+    // reading text.
+    if let Some(text) = &reading_text {
+        let lower = text.to_lowercase();
+        let graded = preps.iter().flat_map(|p| {
+            p.lessons.iter().flat_map(|l| l.eval_items()).chain(p.exam.iter().flat_map(|s| s.items.iter()))
+        });
+        let mut checked = 0;
+        for it in graded {
+            for seg in &it.segments {
+                let s =
+                    seg.text.trim().trim_start_matches("U:").trim_start_matches("N:").trim().to_lowercase();
+                if s.len() >= 12 {
+                    assert!(!lower.contains(&s), "graded text appears in the reading text: {s:?}");
+                    checked += 1;
+                }
+            }
+        }
+        println!(
+            "reading text: {} documents; {checked} graded texts checked, none present",
+            reading.as_ref().unwrap().len()
+        );
+    }
 
     let mut config = RewardConfig { weighted_training: mode == "rewarded", ..RewardConfig::default() };
     // RC_VARIANT=gentle: the gentler schedule, fixed before any of its results were seen (known
@@ -154,7 +193,7 @@ fn main() {
         let stop = AtomicBool::new(false);
         let events = RefCell::new(Vec::new());
         let mut run = CourseRun::new(prep, false, seed + ci as u64);
-        let opts = RunOptions { word_limit: Some(7500) };
+        let opts = RunOptions { word_limit: Some(7500), reading: reading.clone() };
         let mut host = Host { stop: &stop, events: &events, rewards: rewards.take() };
         let r = run_course(&model, &archive, prep, &mut run, None, &opts, &mut host, &stop).unwrap();
         rewards = host.rewards.take();
@@ -214,7 +253,8 @@ fn main() {
     }
     let ledger = rewards.as_ref().map(|r| r.ledger.summary());
     let summary = serde_json::json!({
-        "mode": mode, "variant": variant, "seed": seed, "seconds": t.elapsed().as_secs(),
+        "mode": mode, "variant": variant, "seed": seed, "dropout": dropout, "reading_share": reading_share,
+        "reading_documents": reading.as_ref().map(|r| r.len()), "seconds": t.elapsed().as_secs(),
         "correct_start": start_answers.iter().map(|v| count(v)).sum::<usize>(),
         "correct_end": end.iter().map(|v| count(v)).sum::<usize>(),
         "questions": start_answers.iter().map(|v| v.len()).sum::<usize>(),

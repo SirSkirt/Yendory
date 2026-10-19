@@ -128,6 +128,75 @@ pub struct Ablation {
     pub no_controller: bool,
     /// Nova Neuro: one computation round instead of the model's rounds.
     pub one_round: bool,
+    /// Training only: dropout on the transformer blocks' attention and feed-forward outputs.
+    /// Never set when evaluating, measuring or generating.
+    pub dropout: Option<Dropout>,
+}
+
+/// Dropout while training: each value of a transformer block's attention output and
+/// feed-forward output is zeroed with probability `rate`, the others scaled by 1 / (1 - rate).
+/// Whether a value is kept is a hash of (seed, site, row, position, column), so the CPU (one
+/// row at a time), the GPU (a padded batch) and hybrid training drop the same values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dropout {
+    pub rate: f32,
+    pub seed: u64,
+    /// The batch index of the first row of this forward pass.
+    pub row: u64,
+}
+
+impl Ablation {
+    /// The same ablation for the forward pass of the batch's row `offset` rows further on.
+    pub fn at_row(mut self, offset: usize) -> Ablation {
+        if let Some(d) = self.dropout.as_mut() {
+            d.row += offset as u64;
+        }
+        self
+    }
+}
+
+fn splitmix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// The dropout sites of one forward pass, numbered in the order the pass reaches them (the
+/// same order on every device).
+pub(crate) struct DropSites {
+    dropout: Option<Dropout>,
+    /// Tokens in this forward pass (rows x positions) and positions per row.
+    tokens: usize,
+    seq: usize,
+    next: u64,
+}
+
+impl DropSites {
+    pub(crate) fn new(abl: Ablation, tokens: usize, seq: usize) -> Self {
+        DropSites { dropout: abl.dropout.filter(|d| d.rate > 0.), tokens, seq: seq.max(1), next: 0 }
+    }
+    /// `x` (tokens x `d`) with dropout applied (unchanged without dropout).
+    pub(crate) fn apply<G: Graph>(&mut self, t: &mut G, x: usize, d: usize) -> usize {
+        let site = self.next;
+        self.next += 1;
+        let Some(dp) = self.dropout else { return x };
+        let scale = 1. / (1. - dp.rate);
+        let threshold = (dp.rate as f64 * (1u64 << 32) as f64) as u64;
+        let base = splitmix(dp.seed ^ splitmix(site.wrapping_add(0xD1B5_4A32_D192_ED03)));
+        let mut mask = vec![0f32; self.tokens * d];
+        for (tok, chunk) in mask.chunks_exact_mut(d).enumerate() {
+            let row = dp.row + (tok / self.seq) as u64;
+            let pos = (tok % self.seq) as u64;
+            let key = splitmix(base ^ splitmix(row.wrapping_mul(0x1_0000_0001).wrapping_add(pos)));
+            for (col, m) in chunk.iter_mut().enumerate() {
+                let u = splitmix(key ^ col as u64) >> 32;
+                *m = if u >= threshold { scale } else { 0. };
+            }
+        }
+        let m = t.input(mask);
+        t.mul(x, m)
+    }
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Slot {
@@ -395,7 +464,7 @@ impl Bicameral {
         let b = bias.map(|n| self.param(t, n));
         t.linear(h, w, b, slot.cols, slot.rows)
     }
-    fn block<G: Graph>(&self, t: &mut G, i: usize, h: usize, tokens: usize) -> usize {
+    fn block<G: Graph>(&self, t: &mut G, i: usize, h: usize, tokens: usize, drops: &mut DropSites) -> usize {
         let c = &self.config;
         let p = |n: &str| format!("b{i}.{n}");
         let x = self.norm(t, h, &p("ln1"));
@@ -406,6 +475,7 @@ impl Bicameral {
         let k = t.rope_dim(k, c.heads, c.d, c.rope_base);
         let a = t.attention(q, k, v, tokens, c.d, c.heads);
         let a = self.lin(t, a, &p("wo"), None);
+        let a = drops.apply(t, a, c.d);
         let h = t.add(h, a);
         let x = self.norm(t, h, &p("ln2"));
         let gate = self.lin(t, x, &p("w_gate"), None);
@@ -413,6 +483,7 @@ impl Bicameral {
         let up = self.lin(t, x, &p("w_up"), None);
         let f = t.mul(gate, up);
         let down = self.lin(t, f, &p("w_down"), None);
+        let down = drops.apply(t, down, c.d);
         t.add(h, down)
     }
     fn efferent<G: Graph>(&self, t: &mut G, z1: usize, h: usize, abl: Ablation) -> usize {
@@ -459,13 +530,14 @@ impl Bicameral {
     ) -> usize {
         let c = &self.config;
         let tok = ids.iter().map(|&v| v as usize).collect::<Vec<_>>();
+        let mut drops = DropSites::new(abl, tok.len(), seq);
         if self.neuro.is_some() {
-            return self.neuro_hidden(t, &tok, seq, abl);
+            return self.neuro_hidden(t, &tok, seq, abl, &mut drops);
         }
         let embed = self.param(t, "embed");
         let mut h = t.embed(&tok, embed, c.d);
         for i in 0..c.split {
-            h = self.block(t, i, h, seq);
+            h = self.block(t, i, h, seq, &mut drops);
         }
         let feat = t.input(feats);
         let z1 = self.lin(t, feat, "r.w1", Some("r.b1"));
@@ -480,7 +552,7 @@ impl Bicameral {
                 h = self.inject(t, h, z2, "c.n2", "c.g2w", "c.g2b", "c.a2");
             }
             for i in c.split..c.blocks {
-                h = self.block(t, i, h, seq);
+                h = self.block(t, i, h, seq, &mut drops);
             }
             if round + 1 < c.loops {
                 z2 = self.efferent(t, z1, h, abl);
@@ -742,6 +814,83 @@ impl Bicameral {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dropout(rate: f32, seed: u64) -> Ablation {
+        Ablation { dropout: Some(Dropout { rate, seed, row: 0 }), ..Ablation::default() }
+    }
+
+    /// Dropout drops about its rate of values (scaling the rest), changes the loss, is the same
+    /// for the same seed, and a rate of 0 is exactly no dropout.
+    #[test]
+    fn dropout_masks_and_off_switch() {
+        let m = Bicameral::with_config(Config::default(), 4);
+        let ids = m.tokenizer.encode("U: Where is the key?\nN: In the box.\n").unwrap();
+        let (x, y) = (&ids[..ids.len() - 1], &ids[1..]);
+        let mask = vec![1.; x.len()];
+        let plain = m.loss_and_gradients(x, y, &mask, Ablation::default()).unwrap();
+        assert_eq!(m.loss_and_gradients(x, y, &mask, dropout(0., 5)).unwrap(), plain, "rate 0 is off");
+        let a = m.loss_and_gradients(x, y, &mask, dropout(0.1, 5)).unwrap();
+        assert_ne!(a.0, plain.0);
+        assert_eq!(m.loss_and_gradients(x, y, &mask, dropout(0.1, 5)).unwrap(), a, "same seed, same mask");
+        assert_ne!(m.loss_and_gradients(x, y, &mask, dropout(0.1, 6)).unwrap().0, a.0);
+        // The share of dropped values.
+        let mut t = tape::Tape::new(&m.weights, None);
+        let mut sites = DropSites::new(dropout(0.1, 9), 4000, 200);
+        let input = t.input(vec![1.; 4000 * 16]);
+        let out = sites.apply(&mut t, input, 16);
+        let v = t.values(out);
+        let dropped = v.iter().filter(|&&x| x == 0.).count() as f64 / v.len() as f64;
+        assert!((dropped - 0.1).abs() < 0.01, "{dropped}");
+        assert!(v.iter().all(|&x| x == 0. || (x - 1. / 0.9).abs() < 1e-6));
+    }
+
+    /// With a fixed mask the loss is an ordinary function of the weights: the gradient matches
+    /// finite differences.
+    #[test]
+    fn dropout_gradients_match_finite_differences() {
+        let m = Bicameral::with_config(Config::default(), 4);
+        let ids = m.tokenizer.encode("U: hi\nN: Hello!\n").unwrap();
+        let (x, y) = (&ids[..ids.len() - 1], &ids[1..]);
+        let mask = vec![1.; x.len()];
+        let abl = dropout(0.2, 3);
+        let (_, g) = m.loss_and_gradients(x, y, &mask, abl).unwrap();
+        let mut rng = crate::learn::Rng::new(2);
+        let mut checked = 0;
+        for name in ["b0.wo", "b0.w_down", "b3.wv", "c.a1"] {
+            let r = m.slot(name).range.clone();
+            for _ in 0..4 {
+                let i = r.start + rng.below(r.len());
+                let e = 1e-2;
+                let (mut p, mut q) = (m.clone(), m.clone());
+                p.weights[i] += e;
+                q.weights[i] -= e;
+                let fd = (p.loss(x, y, &mask, abl).unwrap() as f64
+                    - q.loss(x, y, &mask, abl).unwrap() as f64)
+                    / (2. * e as f64);
+                let scale = fd.abs().max(g[i].abs() as f64).max(1e-3);
+                assert!((fd - g[i] as f64).abs() < 0.05 * scale, "{name}[{i}]: {fd} vs {}", g[i]);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 16);
+    }
+
+    /// A row's mask depends on its place in the batch, not on how the batch is computed: one row
+    /// alone at offset k sees the values row k of a padded batch sees.
+    #[test]
+    fn dropout_masks_follow_the_row() {
+        let m = Bicameral::with_config(Config::default(), 4);
+        let (seq, d, rows) = (7usize, 8usize, 3usize);
+        let mut t = tape::Tape::new(&m.weights, None);
+        let all = t.input(vec![1.; rows * seq * d]);
+        let batch = DropSites::new(dropout(0.3, 11), rows * seq, seq).apply(&mut t, all, d);
+        let batch = t.values(batch).to_vec();
+        for r in 0..rows {
+            let one = t.input(vec![1.; seq * d]);
+            let alone = DropSites::new(dropout(0.3, 11).at_row(r), seq, seq).apply(&mut t, one, d);
+            assert_eq!(t.values(alone), &batch[r * seq * d..(r + 1) * seq * d]);
+        }
+    }
 
     /// Gradient clipping uses the norm of the gradients a step applies. A frozen group's
     /// gradient, however large, does not change a focused step; a whole-brain (Joint) step is

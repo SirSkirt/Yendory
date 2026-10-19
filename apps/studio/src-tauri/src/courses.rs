@@ -922,7 +922,7 @@ fn run_plan(
             break;
         }
         let best = load_best(app, &plan.id);
-        let opts = RunOptions { word_limit: meta.word_limit };
+        let opts = RunOptions { word_limit: meta.word_limit, ..RunOptions::default() };
         let study = super::study::study_mode(app)
             .then(|| yendory_engine::memory::Studying::new(super::study::load_memory(app, &meta.id), now()));
         let rewards = super::rewards::rewards_for(app, &meta.id);

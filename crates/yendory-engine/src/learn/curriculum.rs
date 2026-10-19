@@ -225,6 +225,11 @@ pub struct CourseSettings {
     pub retention_relative: Option<f32>,
     /// Earlier-lesson held-out units per kind for that loss.
     pub retention_units: usize,
+    /// Dropout while training lessons (0 = off; see `SessionConfig::dropout`).
+    pub dropout: f32,
+    /// Share of each epoch's rows taken from general reading text (0 = off; the text comes from
+    /// `RunOptions::reading`; see `SessionConfig::reading_share`).
+    pub reading_share: f32,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -242,6 +247,8 @@ impl Default for CourseSettings {
             protect_answers_net: true,
             retention_relative: None,
             retention_units: 16,
+            dropout: 0.,
+            reading_share: 0.,
         }
     }
 }

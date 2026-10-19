@@ -184,19 +184,21 @@ fn batch_sums(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<Partial,
     let parts: Vec<Result<Partial, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = rows
             .chunks(chunk)
-            .map(|part| {
+            .enumerate()
+            .map(|(ci, part)| {
                 scope.spawn(move || {
                     let mut grads = vec![0f32; model.parameter_count()];
                     let (mut loss, mut weight) = (0f64, 0f64);
-                    for row in part {
+                    for (j, row) in part.iter().enumerate() {
                         let sum: f32 = row.mask.iter().sum();
                         // Undo the per-row normalisation (the tape divides by max(sum, 1)).
                         let scale = sum.max(1.);
+                        // Dropout masks follow the row's place in the batch.
                         let l = model.accumulate_loss_and_gradients(
                             &row.ids,
                             &row.targets,
                             &row.mask,
-                            abl,
+                            abl.at_row(ci * chunk + j),
                             &mut grads,
                             scale,
                         )?;
@@ -540,7 +542,8 @@ fn hybrid_step(
         let cpu = if cpu_rows.is_empty() {
             Ok(None)
         } else {
-            batch_part_loss_and_gradients(model_ref, cpu_rows, abl, denom).map(Some)
+            // The CPU's rows come after the GPU's in the batch (dropout masks follow the row).
+            batch_part_loss_and_gradients(model_ref, cpu_rows, abl.at_row(split), denom).map(Some)
         };
         let cpu_secs = t.elapsed().as_secs_f64();
         (

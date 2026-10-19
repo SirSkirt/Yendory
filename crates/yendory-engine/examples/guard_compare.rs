@@ -125,7 +125,7 @@ fn main() {
         // GC_SEED chooses another seed for a repeat of the comparison (default 7).
         let seed: u64 = std::env::var("GC_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
         let mut run = CourseRun::new(prep, false, seed + ci as u64);
-        let opts = RunOptions { word_limit: Some(7500) };
+        let opts = RunOptions { word_limit: Some(7500), ..RunOptions::default() };
         // Teach lesson by lesson; after each, ask every lesson's questions again.
         let mut host = Host { stop: &stop, latest: &latest, events: &events };
         let r = run_course(&model, &archive, prep, &mut run, None, &opts, &mut host, &stop).unwrap();

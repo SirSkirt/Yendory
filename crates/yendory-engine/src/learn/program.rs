@@ -283,6 +283,8 @@ pub trait CourseHost {
 pub struct RunOptions {
     /// Vocabulary limit of the model (see `SessionConfig::word_limit`).
     pub word_limit: Option<usize>,
+    /// General reading text for `CourseSettings::reading_share` (documents).
+    pub reading: Option<std::sync::Arc<Vec<String>>>,
 }
 
 pub struct RunResult {
@@ -387,6 +389,9 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         patience: s.flat_epochs.max(1),
         word_limit: opts.word_limit,
         seed,
+        dropout: s.dropout,
+        reading_share: s.reading_share,
+        reading: opts.reading.clone(),
         ..SessionConfig::default()
     }
 }

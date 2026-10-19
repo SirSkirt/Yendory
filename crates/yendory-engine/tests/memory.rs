@@ -94,6 +94,9 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         },
         pass_mark: 0.5,
         min_loss_improvement: 0.01,
+        dropout: 0.,
+        reading_share: 0.,
+        reading: None,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);

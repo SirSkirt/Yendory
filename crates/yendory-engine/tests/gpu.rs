@@ -286,3 +286,40 @@ fn gpu_clipping_uses_only_the_trained_groups() {
         close("momentum", &back.momentum, &cpu.momentum);
     }
 }
+
+/// Dropout drops the same values on the GPU (a padded batch), on the CPU (one row at a time) and
+/// in hybrid training (rows split between them): losses, gradients and steps match.
+#[test]
+fn dropout_matches_on_every_device() {
+    use yendory_engine::learn::{set_device, Device, Trainer};
+    use yendory_engine::Dropout;
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    let Some(gpu) = gpu() else { return };
+    let model = Bicameral::with_config(Config::default(), 8);
+    let rows = rows(&model);
+    let abl = Ablation { dropout: Some(Dropout { rate: 0.1, seed: 77, row: 0 }), ..Ablation::default() };
+    let (cpu_loss, cpu_grads) = batch_loss_and_gradients(&model, &rows, abl).unwrap();
+    let (plain, _) = batch_loss_and_gradients(&model, &rows, Ablation::default()).unwrap();
+    assert_ne!(cpu_loss, plain, "dropout is applied");
+    let g = GpuModel::upload(&gpu, &model).unwrap();
+    let (gpu_loss, gpu_grads) = g.loss_and_gradients(&model, &rows, abl).unwrap();
+    println!("dropout loss: GPU {gpu_loss} CPU {cpu_loss}");
+    assert!((gpu_loss - cpu_loss).abs() < 1e-4 * cpu_loss.abs().max(1.));
+    close("gradients with dropout", &gpu_grads, &cpu_grads);
+    let train = |device: Device| {
+        set_device(device);
+        let mut m = model.clone();
+        let mut t = Trainer::new(&m);
+        for _ in 0..3 {
+            t.step(&mut m, &rows, abl, 2e-3, Focus::Joint).unwrap();
+        }
+        t.sync(&mut m).unwrap();
+        let share = t.gpu_share();
+        set_device(Device::Cpu);
+        (m, share)
+    };
+    let (cpu, _) = train(Device::Cpu);
+    let (hybrid, share) = train(Device::Hybrid(yendory_engine::gpu::Api::Auto));
+    assert!(share.is_some(), "hybrid training was used");
+    close("hybrid weights with dropout", &hybrid.weights, &cpu.weights);
+}

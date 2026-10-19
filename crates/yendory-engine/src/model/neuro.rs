@@ -227,13 +227,14 @@ impl Bicameral {
         ids: &[usize],
         seq: usize,
         abl: Ablation,
+        drops: &mut super::DropSites,
     ) -> usize {
         let c = &self.config;
         let n = self.neuro.as_ref().expect("a Nova Neuro model");
         let embed = self.nparam(t, "embed");
         let mut h = t.embed(ids, embed, c.d);
         for i in 0..c.split {
-            h = self.block(t, i, h, seq);
+            h = self.block(t, i, h, seq, drops);
         }
         let modules = n.modules();
         let k = modules.len();
@@ -311,7 +312,7 @@ impl Bicameral {
                 h = t.add(h, fused);
             }
             for i in c.split..c.blocks {
-                h = self.block(t, i, h, seq);
+                h = self.block(t, i, h, seq, drops);
             }
         }
         self.norm(t, h, "ln_f")
