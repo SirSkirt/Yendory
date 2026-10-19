@@ -182,9 +182,13 @@ fn main() {
     // Evaluation sets (never trained on).
     let mut rng = Rng::new(EVAL_SEED);
     let mut in_dist = Vec::new();
+    let mut unseen_counts = serde_json::Map::new();
     for family in Family::ALL {
-        let mut n = 0;
-        while n < 40 {
+        // Up to 40 per family that never appear in the training text. A family whose every
+        // question was read (a small question space) has fewer, and the report says how many.
+        let (mut n, mut tries) = (0, 0);
+        while n < 40 && tries < 20_000 {
+            tries += 1;
             let ex = example(family, 2, &mut rng);
             let Some((prompt, answer)) = split_qa(&ex) else { continue };
             let question = prompt.trim_end_matches("\nN: ").trim_start_matches("U: ");
@@ -198,6 +202,8 @@ fn main() {
             in_dist.push(Question { family: family.name().into(), prompt, answer, place });
             n += 1;
         }
+        eprintln!("{}: {n} unseen questions ({tries} drawn)", family.name());
+        unseen_counts.insert(family.name().to_string(), serde_json::json!({"unseen": n, "drawn": tries}));
     }
     let unseen_names: Vec<Question> = (0..80).map(|_| story(&mut rng, &NEW_NAMES, &SEEN_PLACES)).collect();
     let unseen_all: Vec<Question> = (0..80).map(|_| story(&mut rng, &NEW_NAMES, &NEW_PLACES)).collect();
@@ -265,7 +271,7 @@ fn main() {
         "tokens_read": r.tokens, "reading_seconds": seconds, "tokens_per_second": r.tokens as f64 / seconds,
         "baseline_loss": r.baseline_loss, "best_held_out_loss": r.best_loss, "evaluations": evals,
         "activation_floats_per_token": Bicameral::activation_floats_for(&model.config, model.neuro.as_ref()),
-        "scores": full, "ablations": ablations,
+        "unseen_questions_per_family": unseen_counts, "scores": full, "ablations": ablations,
     });
     std::fs::write(out, serde_json::to_string_pretty(&summary).unwrap()).unwrap();
     model.save(format!("{out}.model")).unwrap();
