@@ -1,5 +1,5 @@
-// Yendory Engine GPU kernels: the training step of the Bicameral network (forward, backward
-// and AdamW) as compute shaders. Every kernel computes the same values as the CPU tape
+// Yendory Engine GPU kernels: the training step of the Bicameral and Nova Neuro networks
+// (forward, backward and AdamW) as compute shaders. Every kernel computes the same values as the CPU tape
 // (src/model/tape.rs); only the order in which floating-point numbers are added differs.
 //
 // All kernels share one binding layout: a uniform block of 16 parameters (four vec4<u32>, read
@@ -966,6 +966,124 @@ fn xent(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3
         var q = exp(f0[base + j] - mx) / sum;
         if (j == tg) { q = q - 1.0; }
         f0[base + j] = q * scale;
+    }
+}
+
+// ---- Nova Neuro ---------------------------------------------------------------------------
+
+// One workgroup per row of f0 (rows x cols): f1 = the row's softmax.   p: cols, rows
+@compute @workgroup_size(256)
+fn softmax_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let r = wg.y * nwg.x + wg.x;
+    if (r >= p.a.y) { return; }
+    let n = p.a.x;
+    let base = r * n;
+    var mx = -3.4e38;
+    for (var j = li; j < n; j = j + 256u) { mx = max(mx, f0[base + j]); }
+    red[li] = mx;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s >> 1u) {
+        if (li < s) { red[li] = max(red[li], red[li + s]); }
+        workgroupBarrier();
+    }
+    mx = red[0];
+    workgroupBarrier();
+    var sum = 0.0;
+    for (var j = li; j < n; j = j + 256u) { sum = sum + exp(f0[base + j] - mx); }
+    red[li] = sum;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s >> 1u) {
+        if (li < s) { red[li] = red[li] + red[li + s]; }
+        workgroupBarrier();
+    }
+    sum = red[0];
+    for (var j = li; j < n; j = j + 256u) { f1[base + j] = exp(f0[base + j] - mx) / sum; }
+}
+
+// Backward, one workgroup per row: f2 = y * (g - dot(g, y)) with upstream g (f0) and the
+// softmax output y (f1).   p: cols, rows
+@compute @workgroup_size(256)
+fn softmax_rows_back(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let r = wg.y * nwg.x + wg.x;
+    if (r >= p.a.y) { return; }
+    let n = p.a.x;
+    let base = r * n;
+    var dot = 0.0;
+    for (var j = li; j < n; j = j + 256u) { dot = dot + f0[base + j] * f1[base + j]; }
+    red[li] = dot;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s >> 1u) {
+        if (li < s) { red[li] = red[li] + red[li + s]; }
+        workgroupBarrier();
+    }
+    dot = red[0];
+    for (var j = li; j < n; j = j + 256u) { f2[base + j] = f1[base + j] * (f0[base + j] - dot); }
+}
+
+// f2[i] = f0[i] * f1[row * gcols + k], row = i / cols: each row scaled by column k of the
+// gates (also the backward pass to the input, with f0 the upstream gradient).
+// p: n, cols, gcols, k
+@compute @workgroup_size(256)
+fn gate_col(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    f2[i] = f0[i] * f1[(i / p.a.y) * p.a.z + p.a.w];
+}
+
+// Backward to the gates, one thread per row: f2[row * gcols + k] = dot of the row of the
+// upstream gradient (f0) and of the input (f1).   p: rows, cols, gcols, k
+@compute @workgroup_size(256)
+fn gate_col_back(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let r = id(wg, nwg, li);
+    if (r >= p.a.x) { return; }
+    let cols = p.a.y;
+    var s = 0.0;
+    for (var j = 0u; j < cols; j = j + 1u) { s = s + f0[r * cols + j] * f1[r * cols + j]; }
+    f2[r * p.a.z + p.a.w] = s;
+}
+
+// minGRU scan, one thread per (sequence, column): m_t = (1 - z_t) m_(t-1) + z_t c_t, starting
+// from zero at each sequence's first row. z f0, c f1, m f2 (rows x cols).
+// p: sequences * cols, cols, seq, rows
+@compute @workgroup_size(256)
+fn scan(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    let cols = p.a.y;
+    let seq = p.a.z;
+    let r0 = (i / cols) * seq;
+    let j = i % cols;
+    let r1 = min(p.a.w, r0 + seq);
+    var prev = 0.0;
+    for (var r = r0; r < r1; r = r + 1u) {
+        let x = r * cols + j;
+        let z = f0[x];
+        prev = (1.0 - z) * prev + z * f1[x];
+        f2[x] = prev;
+    }
+}
+
+// Backward of the scan, one thread per (sequence, column), from the last row to the first:
+// upstream f0, z f1, c f2, m f3 -> dz f4, dc f5.   p: sequences * cols, cols, seq, rows
+@compute @workgroup_size(256)
+fn scan_back(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    let cols = p.a.y;
+    let seq = p.a.z;
+    let r0 = (i / cols) * seq;
+    let j = i % cols;
+    let r1 = min(p.a.w, r0 + seq);
+    var carry = 0.0;
+    for (var r = r1; r > r0; r = r - 1u) {
+        let x = (r - 1u) * cols + j;
+        let total = f0[x] + carry;
+        let z = f1[x];
+        var prev = 0.0;
+        if (r - 1u > r0) { prev = f3[x - cols]; }
+        f4[x] = total * (f2[x] - prev);
+        f5[x] = total * z;
+        carry = total * (1.0 - z);
     }
 }
 

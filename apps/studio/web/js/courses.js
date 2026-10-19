@@ -321,6 +321,7 @@ $("planAdd").addEventListener("click", safe(async () => {
 $("planStart").addEventListener("click", safe(async () => {
   $("planLog").replaceChildren();
   $("planBar").style.width = "0%";
+  cpuFallback = false;
   const v = await invoke("start_plan", { id: plan.id });
   planRunning = true;
   setTeaching(true);

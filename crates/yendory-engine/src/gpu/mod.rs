@@ -1,4 +1,4 @@
-//! GPU training (feature `gpu`): the Bicameral network's training step as compute shaders
+//! GPU training (feature `gpu`): the training step (Bicameral and Nova Neuro) as compute shaders
 //! through wgpu (DirectX 12 on Windows, Vulkan on Linux and Android, Metal on macOS).
 //!
 //! The model is defined once (`Bicameral::forward_hidden` over the [`Graph`] trait); this module
@@ -44,8 +44,14 @@ enum K {
     Sumsq,
     NormFinish,
     Adam,
+    SoftmaxRows,
+    SoftmaxRowsBack,
+    GateCol,
+    GateColBack,
+    Scan,
+    ScanBack,
 }
-const KERNELS: [(K, &str); 25] = [
+const KERNELS: [(K, &str); 31] = [
     (K::Fill, "fill"),
     (K::AddInto, "add_into"),
     (K::Binary, "binary"),
@@ -71,6 +77,12 @@ const KERNELS: [(K, &str); 25] = [
     (K::Sumsq, "sumsq"),
     (K::NormFinish, "norm_finish"),
     (K::Adam, "adam"),
+    (K::SoftmaxRows, "softmax_rows"),
+    (K::SoftmaxRowsBack, "softmax_rows_back"),
+    (K::GateCol, "gate_col"),
+    (K::GateColBack, "gate_col_back"),
+    (K::Scan, "scan"),
+    (K::ScanBack, "scan_back"),
 ];
 fn kernel_name(k: K) -> &'static str {
     KERNELS.iter().find(|e| e.0 == k).map_or("?", |e| e.1)
@@ -517,6 +529,28 @@ enum Op {
         heads: usize,
         stats: B,
     },
+    SoftmaxRows {
+        src: usize,
+        cols: usize,
+    },
+    GateCol {
+        x: usize,
+        g: usize,
+        k: usize,
+        gcols: usize,
+        cols: usize,
+    },
+    Scan {
+        z: usize,
+        c: usize,
+        seq: usize,
+        cols: usize,
+    },
+}
+
+/// Threads of the scan kernels: one per (sequence, column).
+fn scan_threads(rows: usize, seq: usize, cols: usize) -> usize {
+    rows.div_ceil(seq.max(1)) * cols
 }
 
 struct Node {
@@ -942,6 +976,48 @@ impl<'a> GpuGraph<'a> {
                     self.accum(k, dk, true);
                     self.accum(v, dv, true);
                 }
+                Op::SoftmaxRows { src, cols } => {
+                    let y = self.at(id).0;
+                    let rows = n / cols;
+                    let dx = self.alloc(n);
+                    self.dispatch(
+                        K::SoftmaxRowsBack,
+                        &[Some(up), Some(y), Some(dx)],
+                        None,
+                        &[cols as u32, rows as u32],
+                        groups(rows * 256),
+                    );
+                    self.accum(src, dx, true);
+                }
+                Op::GateCol { x, g, k, gcols, cols } => {
+                    let (xv, gv) = (self.at(x).0, self.at(g).0);
+                    let rows = n / cols;
+                    let dx = self.alloc(n);
+                    let p = [n as u32, cols as u32, gcols as u32, k as u32];
+                    self.dispatch(K::GateCol, &[Some(up), Some(gv), Some(dx)], None, &p, groups(n));
+                    self.accum(x, dx, true);
+                    let glen = self.nodes[g].len;
+                    let dg = self.alloc(glen);
+                    self.fill(dg, 0, glen, 0.);
+                    let p = [rows as u32, cols as u32, gcols as u32, k as u32];
+                    self.dispatch(K::GateColBack, &[Some(up), Some(xv), Some(dg)], None, &p, groups(rows));
+                    self.accum(g, dg, true);
+                }
+                Op::Scan { z, c, seq, cols } => {
+                    let (m, zv, cv) = (self.at(id).0, self.at(z).0, self.at(c).0);
+                    let rows = n / cols;
+                    let threads = scan_threads(rows, seq, cols);
+                    let (dz, dc) = (self.alloc(n), self.alloc(n));
+                    self.dispatch(
+                        K::ScanBack,
+                        &[Some(up), Some(zv), Some(cv), Some(m), Some(dz), Some(dc)],
+                        None,
+                        &[threads as u32, cols as u32, seq as u32, rows as u32],
+                        groups(threads),
+                    );
+                    self.accum(z, dz, true);
+                    self.accum(c, dc, true);
+                }
             }
             self.release(up);
             if let Some(b) = self.nodes[id].buf.take() {
@@ -1110,16 +1186,50 @@ impl Graph for GpuGraph<'_> {
         );
         self.node(out, n, Op::Attention { q, k, v, t, d, heads, stats })
     }
-    // Nova Neuro trains on the CPU until its GPU kernels exist (Stage 5); the Trainer never
-    // sends a Neuro model here.
-    fn softmax_rows(&mut self, _src: usize, _cols: usize) -> usize {
-        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    // Nova Neuro's operations (the same values as the CPU tape's).
+    fn softmax_rows(&mut self, src: usize, cols: usize) -> usize {
+        let n = self.nodes[src].len;
+        assert_eq!(n % cols, 0);
+        let rows = n / cols;
+        let x = self.at(src).0;
+        let out = self.alloc(n);
+        self.dispatch(
+            K::SoftmaxRows,
+            &[Some(x), Some(out)],
+            None,
+            &[cols as u32, rows as u32],
+            groups(rows * 256),
+        );
+        self.node(out, n, Op::SoftmaxRows { src, cols })
     }
-    fn gate_col(&mut self, _x: usize, _g: usize, _k: usize, _gcols: usize, _cols: usize) -> usize {
-        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    fn gate_col(&mut self, x: usize, g: usize, k: usize, gcols: usize, cols: usize) -> usize {
+        let n = self.nodes[x].len;
+        assert_eq!(n % cols, 0);
+        assert_eq!(self.nodes[g].len, n / cols * gcols);
+        assert!(k < gcols);
+        let (xv, gv) = (self.at(x).0, self.at(g).0);
+        let out = self.alloc(n);
+        let p = [n as u32, cols as u32, gcols as u32, k as u32];
+        self.dispatch(K::GateCol, &[Some(xv), Some(gv), Some(out)], None, &p, groups(n));
+        self.node(out, n, Op::GateCol { x, g, k, gcols, cols })
     }
-    fn scan(&mut self, _z: usize, _c: usize, _seq: usize, _cols: usize) -> usize {
-        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize {
+        let n = self.nodes[z].len;
+        assert_eq!(self.nodes[c].len, n);
+        assert_eq!(n % cols, 0);
+        let seq = seq.max(1);
+        let rows = n / cols;
+        let (zv, cv) = (self.at(z).0, self.at(c).0);
+        let out = self.alloc(n);
+        let threads = scan_threads(rows, seq, cols);
+        self.dispatch(
+            K::Scan,
+            &[Some(zv), Some(cv), Some(out)],
+            None,
+            &[threads as u32, cols as u32, seq as u32, rows as u32],
+            groups(threads),
+        );
+        self.node(out, n, Op::Scan { z, c, seq, cols })
     }
 }
 
@@ -1154,9 +1264,6 @@ fn focus_mask(f: Focus) -> u32 {
 impl GpuModel {
     /// Copies a model (weights, AdamW state and step) to the GPU.
     pub fn upload(gpu: &Arc<Gpu>, model: &Bicameral) -> Result<GpuModel, String> {
-        if model.neuro.is_some() {
-            return Err("Nova Neuro has no GPU kernels yet; it trains on the CPU".into());
-        }
         let n = model.weights.len();
         if n > gpu.max_floats() {
             return Err(format!(
@@ -1253,9 +1360,14 @@ impl GpuModel {
         {
             return Err("Invalid training rows".into());
         }
-        let width = c.window_chars * 16;
+        // Character features feed Bicameral's Dense hemisphere; Nova Neuro does not use them.
+        let neuro = model.neuro.is_some();
+        let width = if neuro { 0 } else { c.window_chars * 16 };
         let feats: Vec<Result<Vec<f32>, String>> = std::thread::scope(|s| {
-            let hs: Vec<_> = rows.iter().map(|r| s.spawn(move || model.features(&r.ids))).collect();
+            let hs: Vec<_> = rows
+                .iter()
+                .map(|r| s.spawn(move || if neuro { Ok(Vec::new()) } else { model.features(&r.ids) }))
+                .collect();
             hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("feature thread failed".into()))).collect()
         });
         let total = rows.len() * t;

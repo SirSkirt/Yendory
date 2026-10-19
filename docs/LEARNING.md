@@ -300,7 +300,8 @@ of learned patterns, and an Executive Controller that learns, per token and roun
 to use each module. Everything in this guide (reading, lessons, courses, the Planner, Study Mode,
 practice, reflection, review, rewards) works with it; Foundation candidates train the modules
 ("dense" in the records), the language core ("transformer"), the bus and controller
-("interconnect"), or everything. It trains on the CPU until its GPU kernels exist. Design,
+("interconnect"), or everything. It trains on the GPU (DirectX 12 or Vulkan), the CPU or both, as the device setting
+chooses; replies are generated on the CPU. Design,
 plan and status: docs/NEURO.md.
 
 ## Evaluation (`learn::eval`)

@@ -114,7 +114,7 @@ screenshot from a reading session). Nova Neuro 15M runs the upper transformer bl
 Bicameral does), all four experts while routing is soft, and the relational network once per
 chunk, so expect roughly 0.5-0.7x Bicameral's speed and 1.5-2x its activation memory: an
 estimated 3-4 GB at batch 16 x 256 tokens, inside 8 GB. Real numbers come from the existing
-benchmark page once the GPU kernels exist.
+benchmark page (Neuro-Core's GPU kernels exist; see section 12).
 
 ## 5. How information flows (one forward pass)
 
@@ -255,6 +255,11 @@ Messaging integration (the proposal's Stage 8) is left out as requested.
 - **Studio**: architecture selector and brain builder (presets, every module's settings, the
   Engine's exact parameter count per part, memory estimate, hardware support; later-stage and
   future networks listed), `.nneuro` import/export, Neuro activity on the Brain page.
-- **Not yet**: GPU kernels (Neuro trains on the CPU), the relational network, experts,
+- **GPU training**: working memory's scan, associative memory's softmax over patterns and the
+  controller's gates have GPU kernels (forward and backward), so Neuro-Core trains on the GPU,
+  the CPU or both, like Bicameral. On a software GPU every ablation's loss and gradients match
+  the CPU's to float rounding (largest gradient difference about 1e-7), AdamW steps match for
+  every focus, and a reading run accepts the same checkpoints (`tests/gpu_neuro.rs`).
+- **Not yet**: the relational network, experts,
   consolidation, auxiliary objectives (planned with the relational network, where story labels
   feed entity tracking), adaptive rounds, the full Neuro visualizer.

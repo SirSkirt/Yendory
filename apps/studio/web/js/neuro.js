@@ -62,7 +62,7 @@ function renderNeuroBuilder() {
     el("legend", {}, el("b", {}, title)), el("p", { class: "note" }, role),
     el("div", { class: "nb-fields" }, ...fields.map(f => numberField(d, f, changed))));
   box.replaceChildren(
-    el("p", { class: "note" }, "Nova Neuro is an experimental architecture. Every network below is a trainable neural network; how strongly each one is used is learned by the Executive Controller, never set by rules. It trains on the CPU until its GPU kernels exist. Bicameral models are not affected."),
+    el("p", { class: "note" }, "Nova Neuro is an experimental architecture. Every network below is a trainable neural network; how strongly each one is used is learned by the Executive Controller, never set by rules. It trains on the GPU (DirectX 12 or Vulkan) or the CPU, whichever the device setting chooses; replies are generated on the CPU. Bicameral models are not affected."),
     el("div", { class: "line-form" }, el("label", { for: "neuroPreset" }, "Design"), presetSel),
     el("div", { class: "nb-grid" },
       fixed("Language core (Transformer)", "Language, context and combining what the other networks send into a reply.", NEURO_FIELDS.core),
@@ -89,11 +89,11 @@ async function showNeuroPlan() {
   $("neuroOffers").replaceChildren(
     el("h4", {}, "Networks"),
     el("table", { class: "ledger compact" },
-      el("thead", {}, el("tr", {}, el("th", {}, "Network"), el("th", {}, "Role"), el("th", {}, "Status"), el("th", {}, "GPU (Vulkan) in Nova Neuro"))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Network"), el("th", {}, "Role"), el("th", {}, "Status"), el("th", {}, "GPU training"))),
       el("tbody", {}, ...p.offers.map(o => el("tr", { class: o.status === "available" ? "" : "nb-later" },
         el("td", {}, o.name), el("td", { class: "note" }, o.role),
         el("td", {}, el("span", { class: "tag" + (o.status === "available" ? " ok" : "") }, statusText[o.status] || o.status)),
-        el("td", { class: "note" }, o.gpu ? "yes" : "later stage (CPU for now)"))))));
+        el("td", { class: "note" }, o.gpu ? "yes" : "not yet"))))));
   const bar = share => el("span", { class: "nb-bar" }, el("i", { style: `width:${(100 * share).toFixed(1)}%` }));
   $("neuroPlan").replaceChildren(
     el("h4", {}, "Exact plan (computed by the Engine)"),

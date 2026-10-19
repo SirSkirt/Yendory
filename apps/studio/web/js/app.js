@@ -182,7 +182,20 @@ function showDevice(d) {
   }
   renderSizes();
 }
-const deviceLabel = () => !deviceInfo || deviceInfo.active === "cpu" || deviceInfo.trainingOn === "cpu" ? " · on the CPU" : ` · on ${deviceInfo.activeName || deviceInfo.gpu}`;
+// Set when the Engine reports that the running job could not use the GPU and trains on the CPU.
+let cpuFallback = false;
+const deviceLabel = () => cpuFallback || !deviceInfo || deviceInfo.active === "cpu" || deviceInfo.trainingOn === "cpu" ? " · on the CPU" : ` · on ${deviceInfo.activeName || deviceInfo.gpu}`;
+// The running job's titles name the device it really trains on.
+function onDeviceNotice(text) {
+  log("WARN", text);
+  say(text);
+  if (!String(text).startsWith("Training on the CPU")) return;
+  cpuFallback = true;
+  for (const id of ["readTitle", "progressTitle", "planNow"]) {
+    const t = $(id);
+    if (t && t.textContent.includes(" · on ")) t.textContent = t.textContent.replace(/ · on .*$/, deviceLabel());
+  }
+}
 // The last training benchmark: every device's speed on identical batches, and where the GPU's
 // time goes.
 function showBenchmark(b) {
@@ -422,6 +435,7 @@ $("teach").addEventListener("click", safe(async () => {
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
   $("progressEntry").hidden = false;
+  cpuFallback = false;
   $("progressTitle").textContent = `Teaching ${active.name}${deviceLabel()}`;
   await invoke("teach", { options });
   setTeaching(true);
@@ -752,6 +766,7 @@ $("read").addEventListener("click", safe(async () => {
   readParts = parts;
   $("evalTable").tBodies[0].replaceChildren();
   $("readEntry").hidden = false;
+  cpuFallback = false;
   $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}${deviceLabel()}`;
   await invoke("read_corpus", { options });
   readStart = 0;
@@ -997,7 +1012,7 @@ async function boot() {
   await tauri.event.listen("read-finished", ev => onReadFinished(ev.payload));
   await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));
   await tauri.event.listen("benchmark-progress", ev => { $("benchNote").textContent = `Benchmarking: ${ev.payload}…`; });
-  await tauri.event.listen("device-notice", ev => { log("WARN", ev.payload); say(ev.payload); });
+  await tauri.event.listen("device-notice", ev => onDeviceNotice(ev.payload));
   sourcesList = await invoke("corpus_sources");
   renderSources();
   familiesList = await invoke("practice_families");

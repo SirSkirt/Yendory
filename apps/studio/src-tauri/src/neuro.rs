@@ -123,35 +123,35 @@ fn offers() -> Vec<Offer> {
             "Language core (Transformer)",
             "language, context, combining information into replies",
             "available",
-            false,
+            true,
         ),
         o(
             "memory",
             "Working memory (minGRU)",
             "keeps and updates what matters in the current text",
             "available",
-            false,
+            true,
         ),
         o(
             "associative",
             "Associative memory (modern Hopfield)",
             "learned patterns recalled by similarity",
             "available",
-            false,
+            true,
         ),
         o(
             "controller",
             "Executive Controller",
             "learns how strongly to use each module, per token and round",
             "available",
-            false,
+            true,
         ),
         o(
             "bus",
             "Communication bus",
             "carries information between the networks, both ways",
             "available",
-            false,
+            true,
         ),
         o(
             "relational",
@@ -219,10 +219,7 @@ pub(crate) fn plan(input: &NeuroInput, word_limit: Option<usize>, context: usize
         }
     };
     if parameters > 16_000_000 {
-        errors.push(format!(
-            "{} parameters: above the 16M experimental limit for Nova Neuro (it trains on the CPU until its GPU kernels exist)",
-            parameters
-        ));
+        errors.push(format!("{} parameters: above the 16M experimental limit for Nova Neuro", parameters));
     }
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     let (file_bytes, chat_bytes, reading_bytes, teaching_bytes) = memory(parameters, threads, row);
@@ -234,8 +231,9 @@ pub(crate) fn plan(input: &NeuroInput, word_limit: Option<usize>, context: usize
         reading_bytes,
         teaching_bytes,
         hardware: vec![
-            "CPU: trains and talks (every module)".into(),
-            "GPU (Vulkan): not yet for Nova Neuro; its kernels come in a later stage, so training uses the CPU".into(),
+            "GPU (DirectX 12 or Vulkan): trains every module (the device setting chooses GPU, CPU or both)"
+                .into(),
+            "CPU: trains, and generates replies".into(),
         ],
         errors,
         offers: offers(),
