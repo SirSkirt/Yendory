@@ -190,8 +190,8 @@ Net is ahead again on both seeds: more answers at the end (38 vs 31, 35 vs 32), 
 model had at the start lost, lower held-out loss on every lesson, better course grades. The
 margin is smaller on seed 101 (3 answers), and one lesson (03A) ended one answer behind strict.
 Net still forgets a little more of course 1 during course 2 on both seeds, and still ends
-level with or above strict on it. No default has been changed yet; making net the default is a
-decision for the owner.
+level with or above strict on it. **Net is now the default** (owner's decision after both seeds) for the Classroom and new
+courses; courses saved earlier keep the setting they were saved with.
 
 ### Reward-guided training (Stage 2) against ordinary training
 

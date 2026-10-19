@@ -147,7 +147,7 @@ impl Default for SessionConfig {
             retention_loss_tolerance: 0.02,
             retention_panel: 8,
             protect_correct_answers: true,
-            protect_answers_net: false,
+            protect_answers_net: true,
             retention_relative: None,
             retention_units: default_retention_units(),
             grow_vocabulary: true,

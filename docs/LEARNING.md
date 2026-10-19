@@ -407,7 +407,10 @@ and step). They are the same until an epoch is flat.
    - its held-out loss is at most 0.08 above both the baseline and the accepted model;
    - earlier lessons' held-out loss is at most 0.02 above its baseline;
    - every earlier-lesson panel answer the baseline produced is still produced;
-   - (default on) every held-out answer of this lesson the accepted model produced is still produced.
+   - (default on) it does not lose more of this lesson's held-out answers that the accepted
+     model produced than it gains (the **net** safeguard, `protect_answers_net`, the default
+     since it beat the stricter rule on two seeds; docs/STATUS.md). With net off, no answer
+     may be lost at all. Courses saved before the change keep the setting they were saved with.
 5. An eligible candidate **improves** when it gets more held-out answers exactly right, or the
    same number with a held-out loss at least 0.01 lower than the accepted model's
    (`min_loss_improvement`). The best improving candidate becomes the accepted model and the

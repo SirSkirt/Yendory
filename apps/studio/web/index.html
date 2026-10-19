@@ -228,7 +228,7 @@
         </select></label>
       <label class="check"><input type="checkbox" id="optFoundation" checked> Foundation: try Dense, Transformer, Interconnect and Joint each epoch and keep the best (in a bicameral education stage: each part the stage may train, on its own and together)</label>
       <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
-      <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses a held-out answer the model already gives</label>
+      <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses more held-out answers the model already gives than it gains (net safeguard; it beat the stricter "lose none" rule on two seeds, see docs/STATUS.md)</label>
       <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
       <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
     </div>

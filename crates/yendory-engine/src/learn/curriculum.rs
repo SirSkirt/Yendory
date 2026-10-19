@@ -239,7 +239,7 @@ impl Default for CourseSettings {
             requeue: true,
             time_limit_hours: None,
             flat_epochs: 4,
-            protect_answers_net: false,
+            protect_answers_net: true,
             retention_relative: None,
             retention_units: 16,
         }

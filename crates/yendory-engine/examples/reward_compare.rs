@@ -9,7 +9,7 @@
 //! final exams (protected from the ledger), held-out loss, candidates rejected as unstable, and
 //! the ledger's totals and flags.
 //!
-//! RC_SEED=<n> cargo run --release --example reward_compare -- <standard|rewarded> <start.nnova2>
+//! RC_VARIANT=gentle (optional) RC_SEED=<n> cargo run --release --example reward_compare -- <standard|rewarded> <start.nnova2>
 //!     <out.json> <threads> <course: lesson files separated by ,>...
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,7 +119,25 @@ fn main() {
         })
         .collect();
 
-    let config = RewardConfig { weighted_training: mode == "rewarded", ..RewardConfig::default() };
+    let mut config = RewardConfig { weighted_training: mode == "rewarded", ..RewardConfig::default() };
+    // RC_VARIANT=gentle: the gentler schedule, fixed before any of its results were seen (known
+    // answers keep regular practice, a narrower range, no concept or variation boosts).
+    let variant = std::env::var("RC_VARIANT").unwrap_or_default();
+    if variant == "gentle" {
+        config.min_emphasis = 0.6;
+        config.max_emphasis = 2.0;
+        let w = &mut config.weights;
+        w.gap = 0.75;
+        w.failures = 0.25;
+        w.forgotten = 0.5;
+        w.progress = 0.25;
+        w.concept = 0.;
+        w.variation = 0.;
+        w.difficulty = 0.;
+        w.correct_factor = 0.8;
+        w.retained_factor = 0.85;
+        w.stuck_cap = 1.25;
+    }
     let mut rewards = Some(Rewards::new(config, RewardLedger::default(), "compare"));
     let t = std::time::Instant::now();
     let start_answers = answers(&model, &lessons);
@@ -195,7 +213,7 @@ fn main() {
     }
     let ledger = rewards.as_ref().map(|r| r.ledger.summary());
     let summary = serde_json::json!({
-        "mode": mode, "seed": seed, "seconds": t.elapsed().as_secs(),
+        "mode": mode, "variant": variant, "seed": seed, "seconds": t.elapsed().as_secs(),
         "correct_start": start_answers.iter().map(|v| count(v)).sum::<usize>(),
         "correct_end": end.iter().map(|v| count(v)).sum::<usize>(),
         "questions": start_answers.iter().map(|v| v.len()).sum::<usize>(),
