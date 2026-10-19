@@ -7,12 +7,14 @@ mod checkpoint;
 mod golden;
 mod linalg;
 mod measure;
+pub mod neuro;
 mod tape;
 mod think;
 pub use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
-pub use cache::{CacheStats, GateTrace, KvCache, StageTrace, Trace};
+pub use cache::{CacheStats, GateTrace, KvCache, NeuroRound, NeuroTrace, StageTrace, Trace};
 pub use measure::{AblationEffects, Measurements};
+pub use neuro::NeuroSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -118,6 +120,14 @@ pub struct Ablation {
     pub no_afferent: bool,
     pub no_efferent: bool,
     pub no_right: bool,
+    /// Nova Neuro: the working memory's output is cut.
+    pub no_memory: bool,
+    /// Nova Neuro: the associative memory's output is cut.
+    pub no_associative: bool,
+    /// Nova Neuro: every controller gate fully open (the controller's choices removed).
+    pub no_controller: bool,
+    /// Nova Neuro: one computation round instead of the model's rounds.
+    pub one_round: bool,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Slot {
@@ -136,7 +146,7 @@ pub(crate) enum Init {
     One,
     Constant(f32),
 }
-fn spec(c: &Config) -> Vec<Slot> {
+fn spec(c: &Config, neuro: Option<&NeuroSpec>) -> Vec<Slot> {
     let mut out = Vec::new();
     let mut next = 0;
     let mut put = |name: String, rows: usize, cols: usize, group: Focus, init: Init, decay: bool| {
@@ -162,6 +172,12 @@ fn spec(c: &Config) -> Vec<Slot> {
         put(n("w_down"), c.d, c.ff, Focus::Left, Init::Normal(scale(c.ff) * res), true);
     }
     put("ln_f".into(), 1, c.d, Focus::Left, Init::One, false);
+    if let Some(n) = neuro {
+        let mut add =
+            |name: String, rows, cols, group, init, decay| put(name, rows, cols, group, init, decay);
+        neuro::slots(c, n, &mut add);
+        return out;
+    }
     put(
         "r.w1".into(),
         c.r1,
@@ -197,6 +213,9 @@ pub struct Bicameral {
     /// Config JSON exactly as read from a checkpoint, so an unchanged model saves
     /// byte-identically (the numpy reference and serde format the JSON differently).
     pub(crate) stored_config_json: Option<Vec<u8>>,
+    /// Nova Neuro (experimental): the modules that replace the Dense hemisphere. `None` for
+    /// Nova Bicameral, whose behaviour and checkpoints are unchanged.
+    pub neuro: Option<NeuroSpec>,
 }
 struct Rng(u64);
 impl Rng {
@@ -217,9 +236,13 @@ impl Bicameral {
         Self::with_config(Config::default(), 0x4E_4F_56_41)
     }
     pub fn with_config(config: Config, seed: u64) -> Self {
+        Self::with_design(config, None, seed)
+    }
+    /// A new model: Nova Bicameral (`neuro` None) or Nova Neuro with the given design.
+    pub fn with_design(config: Config, neuro: Option<NeuroSpec>, seed: u64) -> Self {
         assert!(config.d % config.heads == 0 && config.d / config.heads % 2 == 0);
         assert!(config.split < config.blocks && config.loops > 0 && config.window_chars > 0);
-        let slots = spec(&config);
+        let slots = spec(&config, neuro.as_ref());
         let n = slots.last().map(|x| x.range.end).unwrap_or(0);
         let mut weights = vec![0.; n];
         let mut rng = Rng(seed.max(1));
@@ -244,11 +267,25 @@ impl Bicameral {
             slots,
             offsets,
             stored_config_json: None,
+            neuro,
         }
     }
     /// Parameters a configuration would have, without building the model.
     pub fn parameters_for(config: &Config) -> usize {
-        spec(config).last().map(|s| s.range.end).unwrap_or(0)
+        spec(config, None).last().map(|s| s.range.end).unwrap_or(0)
+    }
+    /// Every parameter tensor a design would have, `(name, rows, columns)`, without building it
+    /// (the exact parameter calculator).
+    pub fn tensors_for(config: &Config, neuro: Option<&NeuroSpec>) -> Vec<(String, usize, usize)> {
+        spec(config, neuro).into_iter().map(|s| (s.name, s.rows, s.cols)).collect()
+    }
+    /// The architecture: "bicameral" or "neuro".
+    pub fn architecture(&self) -> &'static str {
+        if self.neuro.is_some() {
+            "neuro"
+        } else {
+            "bicameral"
+        }
     }
     /// Whether a configuration is valid and within the Engine's limits (the same check a
     /// checkpoint passes before it is loaded). Call it before `with_config` for user choices.
@@ -272,6 +309,13 @@ impl Bicameral {
     /// and layers and the exchanges. Multiply by 4 bytes and the tokens in a training row; the
     /// output layer and attention weights are recomputed instead of stored.
     pub fn activation_floats_per_token(config: &Config) -> usize {
+        Self::activation_floats_for(config, None)
+    }
+    /// [`Bicameral::activation_floats_per_token`] for either architecture.
+    pub fn activation_floats_for(config: &Config, neuro: Option<&NeuroSpec>) -> usize {
+        if let Some(n) = neuro {
+            return neuro::activation_floats_per_token(config, n);
+        }
         let c = config;
         let executions = c.split + (c.blocks - c.split) * c.loops;
         c.d + executions * (12 * c.d + 4 * c.ff)
@@ -298,7 +342,7 @@ impl Bicameral {
         }
         let config = Config { vocab: crate::tokenizer::BASE + words, ..self.config.clone() };
         checkpoint::validate_config(&config)?;
-        let mut out = Bicameral::with_config(config, seed);
+        let mut out = Bicameral::with_design(config, self.neuro.clone(), seed);
         out.momentum.fill(0.);
         out.variance.fill(0.);
         for slot in &self.slots {
@@ -415,6 +459,9 @@ impl Bicameral {
     ) -> usize {
         let c = &self.config;
         let tok = ids.iter().map(|&v| v as usize).collect::<Vec<_>>();
+        if self.neuro.is_some() {
+            return self.neuro_hidden(t, &tok, seq, abl);
+        }
         let embed = self.param(t, "embed");
         let mut h = t.embed(&tok, embed, c.d);
         for i in 0..c.split {

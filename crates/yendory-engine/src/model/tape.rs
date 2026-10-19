@@ -56,6 +56,27 @@ enum Op {
         max: Vec<f32>,
         total: Vec<f32>,
     },
+    /// Softmax over each row of `cols` values.
+    SoftmaxRows {
+        src: usize,
+        cols: usize,
+    },
+    /// `x[i, :] * g[i, k]`: each row of `x` scaled by column `k` of a gate matrix.
+    GateCol {
+        x: usize,
+        g: usize,
+        k: usize,
+        gcols: usize,
+        cols: usize,
+    },
+    /// minGRU recurrence per sequence of `seq` rows: `m_t = (1 - z_t) * m_(t-1) + z_t * c_t`,
+    /// `m_(-1) = 0`.
+    Scan {
+        z: usize,
+        c: usize,
+        seq: usize,
+        cols: usize,
+    },
     /// Unfused cross-entropy, kept to test [`Op::HeadXent`] against.
     #[cfg(test)]
     Xent {
@@ -105,6 +126,12 @@ pub(crate) trait Graph {
     fn rope_dim(&mut self, src: usize, heads: usize, d: usize, base: f32) -> usize;
     /// Causal attention over sequences of `t` tokens.
     fn attention(&mut self, q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize) -> usize;
+    /// Softmax over each row of `cols` values (Nova Neuro).
+    fn softmax_rows(&mut self, src: usize, cols: usize) -> usize;
+    /// Each row of `x` (`cols` wide) scaled by column `k` of `g` (`gcols` wide) (Nova Neuro).
+    fn gate_col(&mut self, x: usize, g: usize, k: usize, gcols: usize, cols: usize) -> usize;
+    /// minGRU scan over sequences of `seq` rows (Nova Neuro working memory).
+    fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize;
 }
 
 impl Graph for Tape<'_> {
@@ -144,6 +171,15 @@ impl Graph for Tape<'_> {
     }
     fn attention(&mut self, q: usize, k: usize, v: usize, t: usize, d: usize, heads: usize) -> usize {
         Tape::attention(self, q, k, v, t, d, heads)
+    }
+    fn softmax_rows(&mut self, src: usize, cols: usize) -> usize {
+        Tape::softmax_rows(self, src, cols)
+    }
+    fn gate_col(&mut self, x: usize, g: usize, k: usize, gcols: usize, cols: usize) -> usize {
+        Tape::gate_col(self, x, g, k, gcols, cols)
+    }
+    fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize {
+        Tape::scan(self, z, c, seq, cols)
     }
 }
 
@@ -324,6 +360,46 @@ impl<'a> Tape<'a> {
             }
         }
         self.node(output, Op::Attention { q, k, v, t, d, heads, max: maxs, total: totals })
+    }
+    pub(crate) fn softmax_rows(&mut self, src: usize, cols: usize) -> usize {
+        let mut v = self.nodes[src].values.clone();
+        assert_eq!(v.len() % cols, 0);
+        for row in v.chunks_exact_mut(cols) {
+            Self::softmax_row(row);
+        }
+        self.node(v, Op::SoftmaxRows { src, cols })
+    }
+    pub(crate) fn gate_col(&mut self, x: usize, g: usize, k: usize, gcols: usize, cols: usize) -> usize {
+        let (xv, gv) = (&self.nodes[x].values, &self.nodes[g].values);
+        let rows = xv.len() / cols;
+        assert_eq!(xv.len(), rows * cols);
+        assert_eq!(gv.len(), rows * gcols);
+        assert!(k < gcols);
+        let mut out = xv.clone();
+        for (r, row) in out.chunks_exact_mut(cols).enumerate() {
+            let s = gv[r * gcols + k];
+            for v in row {
+                *v *= s;
+            }
+        }
+        self.node(out, Op::GateCol { x, g, k, gcols, cols })
+    }
+    pub(crate) fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize {
+        let (zv, cv) = (&self.nodes[z].values, &self.nodes[c].values);
+        assert_eq!(zv.len(), cv.len());
+        assert_eq!(zv.len() % cols, 0);
+        let rows = zv.len() / cols;
+        let seq = seq.max(1);
+        let mut out = vec![0f32; zv.len()];
+        for r in 0..rows {
+            let first = r % seq == 0;
+            for j in 0..cols {
+                let i = r * cols + j;
+                let prev = if first { 0. } else { out[i - cols] };
+                out[i] = (1. - zv[i]) * prev + zv[i] * cv[i];
+            }
+        }
+        self.node(out, Op::Scan { z, c, seq, cols })
     }
     #[cfg(test)]
     pub(crate) fn xent(&mut self, logits: usize, targets: &[usize], mask: &[f32], vocab: usize) -> usize {
@@ -588,6 +664,59 @@ impl<'a> Tape<'a> {
                     self.accum(q, &dq);
                     self.accum(k, &dk);
                     self.accum(v, &dv);
+                }
+                Op::SoftmaxRows { src, cols } => {
+                    let y = &self.nodes[id].values;
+                    let mut dx = vec![0f32; y.len()];
+                    for ((dr, yr), gr) in
+                        dx.chunks_exact_mut(cols).zip(y.chunks_exact(cols)).zip(upstream.chunks_exact(cols))
+                    {
+                        let dot: f32 = yr.iter().zip(gr).map(|(a, b)| a * b).sum();
+                        for ((d, &yv), &g) in dr.iter_mut().zip(yr).zip(gr) {
+                            *d = yv * (g - dot);
+                        }
+                    }
+                    self.accum(src, &dx);
+                }
+                Op::GateCol { x, g, k, gcols, cols } => {
+                    let (xv, gv) = (&self.nodes[x].values, &self.nodes[g].values);
+                    let rows = xv.len() / cols;
+                    let mut dx = vec![0f32; xv.len()];
+                    let mut dg = vec![0f32; gv.len()];
+                    for r in 0..rows {
+                        let s = gv[r * gcols + k];
+                        let mut acc = 0f32;
+                        for j in 0..cols {
+                            let i = r * cols + j;
+                            dx[i] = upstream[i] * s;
+                            acc += upstream[i] * xv[i];
+                        }
+                        dg[r * gcols + k] = acc;
+                    }
+                    self.accum(x, &dx);
+                    self.accum(g, &dg);
+                }
+                Op::Scan { z, c, seq, cols } => {
+                    let m = &self.nodes[id].values;
+                    let (zv, cv) = (&self.nodes[z].values, &self.nodes[c].values);
+                    let rows = zv.len() / cols;
+                    let mut dz = vec![0f32; zv.len()];
+                    let mut dc = vec![0f32; zv.len()];
+                    // Reverse scan: the gradient reaching m_t flows to m_(t-1) through (1 - z_t).
+                    let mut carry = vec![0f32; cols];
+                    for r in (0..rows).rev() {
+                        let first = r % seq == 0;
+                        for j in 0..cols {
+                            let i = r * cols + j;
+                            let total = upstream[i] + carry[j];
+                            let prev = if first { 0. } else { m[i - cols] };
+                            dz[i] = total * (cv[i] - prev);
+                            dc[i] = total * zv[i];
+                            carry[j] = if first { 0. } else { total * (1. - zv[i]) };
+                        }
+                    }
+                    self.accum(z, &dz);
+                    self.accum(c, &dc);
                 }
                 Op::HeadXent { h, embed, bias, d, vocab, targets, mask, denom } => {
                     let (ea, eb) = self.nodes[embed].param.expect("output embedding is a parameter");

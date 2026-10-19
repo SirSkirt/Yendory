@@ -4,6 +4,17 @@ use super::{spec, Bicameral, Config};
 use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"NNOVA2\0\0";
+/// Nova Neuro checkpoints: a separate, versioned format (`.nneuro`), never read as `.nnova2`.
+const NEURO_MAGIC: &[u8; 8] = b"NNEURO1\0";
+
+/// The architecture header of a `.nneuro` checkpoint.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct NeuroHeader {
+    architecture: String,
+    format: u32,
+    config: Config,
+    design: super::NeuroSpec,
+}
 const WORDS_MAGIC: &[u8; 8] = b"WORDUNIT";
 const MAX_CONFIG_JSON: usize = 8192;
 
@@ -82,18 +93,34 @@ impl Bicameral {
     /// Serializes the model in `.nnova2` layout. A model loaded from a checkpoint and not
     /// reconfigured reproduces that checkpoint's config JSON byte for byte.
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        if let Some(design) = &self.neuro {
+            let header = NeuroHeader {
+                architecture: "nova-neuro".into(),
+                format: 1,
+                config: self.config.clone(),
+                design: design.clone(),
+            };
+            let json = serde_json::to_vec(&header).map_err(|e| e.to_string())?;
+            return Ok(self.body(NEURO_MAGIC, &json));
+        }
         let config = match &self.stored_config_json {
             Some(raw) if serde_json::from_slice::<Config>(raw).ok().as_ref() == Some(&self.config) => {
                 raw.clone()
             }
             _ => serde_json::to_vec(&self.config).map_err(|e| e.to_string())?,
         };
+        Ok(self.body(MAGIC, &config))
+    }
+
+    /// Magic, header JSON, step, weights and Adam state, learned words: the layout both
+    /// formats share.
+    fn body(&self, magic: &[u8; 8], config: &[u8]) -> Vec<u8> {
         let n = self.weights.len();
         let mut w =
             Vec::with_capacity(8 + 4 + config.len() + 8 + 12 * n + 12 + 28 * self.tokenizer.words().len());
-        w.extend_from_slice(MAGIC);
+        w.extend_from_slice(magic);
         w.extend_from_slice(&(config.len() as u32).to_le_bytes());
-        w.extend_from_slice(&config);
+        w.extend_from_slice(config);
         w.extend_from_slice(&self.step.to_le_bytes());
         for arr in [&self.weights, &self.momentum, &self.variance] {
             for &x in arr {
@@ -106,28 +133,50 @@ impl Bicameral {
             w.extend_from_slice(&(s.len() as u32).to_le_bytes());
             w.extend_from_slice(s.as_bytes());
         }
-        Ok(w)
+        w
     }
 
     /// Reads a `.nnova2` checkpoint (weights, Adam state, step, learned word units).
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
         let mut r = Reader { data, pos: 0 };
-        if r.take(8)? != MAGIC {
-            return Err("Not a Nova-2 checkpoint".into());
+        let magic = r.take(8)?;
+        let neuro = magic == NEURO_MAGIC;
+        if magic != MAGIC && !neuro {
+            return Err("Not a Nova-2 or Nova Neuro checkpoint".into());
         }
         let len = r.u32()? as usize;
         if len > MAX_CONFIG_JSON {
             return Err("Invalid Nova-2 configuration".into());
         }
         let json = r.take(len)?;
-        let config: Config = serde_json::from_slice(json).map_err(|e| e.to_string())?;
+        let (config, design) = if neuro {
+            let h: NeuroHeader = serde_json::from_slice(json).map_err(|e| e.to_string())?;
+            if h.architecture != "nova-neuro" || h.format != 1 {
+                return Err(format!(
+                    "Unsupported Nova Neuro checkpoint ({} format {})",
+                    h.architecture, h.format
+                ));
+            }
+            h.design.validate(&h.config)?;
+            (h.config, Some(h.design))
+        } else {
+            (serde_json::from_slice::<Config>(json).map_err(|e| e.to_string())?, None)
+        };
         validate_config(&config)?;
-        let n = spec(&config).last().map(|s| s.range.end).unwrap_or(0);
+        let n = spec(&config, design.as_ref()).last().map(|s| s.range.end).unwrap_or(0);
+        if n > super::MAX_PARAMETERS {
+            return Err(format!(
+                "This design has {n} parameters; the Engine supports up to {}",
+                super::MAX_PARAMETERS
+            ));
+        }
         if data.len() - r.pos < 8 + 12 * n {
             return Err("Nova-2 checkpoint is truncated".into());
         }
-        let mut model = Self::with_config(config, 1);
-        model.stored_config_json = Some(json.to_vec());
+        let mut model = Self::with_design(config, design, 1);
+        if !neuro {
+            model.stored_config_json = Some(json.to_vec());
+        }
         model.step = r.u64()?;
         r.f32s(&mut model.weights)?;
         r.f32s(&mut model.momentum)?;

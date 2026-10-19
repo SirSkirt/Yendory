@@ -32,6 +32,8 @@ pub struct KvCache {
     abl: Ablation,
     stats: CacheStats,
     trace: Option<Trace>,
+    /// Nova Neuro: the working memory's state per layer (belongs to this context only).
+    memory: Vec<Vec<f32>>,
 }
 
 /// Attention weights of one transformer block execution for the newest token.
@@ -67,6 +69,35 @@ pub struct Trace {
     /// stopped there. The last read-out is the model's actual output.
     #[serde(default)]
     pub readouts: Vec<Vec<f32>>,
+    /// Nova Neuro: the modules' measured activity (None for Nova Bicameral).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neuro: Option<NeuroTrace>,
+}
+
+/// One computation round of Nova Neuro for the newest token, measured.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NeuroRound {
+    /// The Executive Controller's gate for each module (0 closed, 1 open), in module order.
+    pub gates: Vec<f32>,
+    /// Length of each module's output before its gate.
+    pub outputs: Vec<f32>,
+    /// Length of the bus state the modules read, and of the combined write-back.
+    pub bus_norm: f32,
+    pub write_norm: f32,
+    /// Associative memory: the most strongly retrieved patterns (index, weight).
+    pub patterns: Vec<(usize, f32)>,
+}
+/// Nova Neuro's activity for the newest token.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NeuroTrace {
+    /// Module names, in gate order.
+    pub modules: Vec<String>,
+    pub rounds: Vec<NeuroRound>,
+    /// Working memory: how much each layer's state changed with this token, and its length.
+    pub memory_change: Vec<f32>,
+    pub memory_norm: Vec<f32>,
+    /// The memory's update gate: mean opening per layer (0 keep, 1 overwrite).
+    pub memory_update: Vec<f32>,
 }
 impl KvCache {
     pub fn new(model: &Bicameral, abl: Ablation) -> Self {
@@ -84,6 +115,7 @@ impl KvCache {
             abl,
             stats: CacheStats::default(),
             trace: None,
+            memory: fresh_memory(model),
         }
     }
     /// A cache that also records a [`Trace`] of every token's forward pass (the latest one is
@@ -143,6 +175,7 @@ impl KvCache {
         }
         self.chars = self.before.clone();
         self.sequence = 0;
+        self.memory = fresh_memory(model);
         let mut last = Vec::new();
         for t in window {
             last = self.step(model, t);
@@ -150,6 +183,9 @@ impl KvCache {
         Ok(last)
     }
     fn step(&mut self, model: &Bicameral, token: TokenId) -> Vec<f32> {
+        if model.neuro.is_some() {
+            return self.neuro_step(model, token);
+        }
         let c = &model.config;
         let id = token as usize;
         let value = token_text(model, token);
@@ -242,6 +278,185 @@ impl KvCache {
         logits
     }
 }
+fn fresh_memory(model: &Bicameral) -> Vec<Vec<f32>> {
+    match model.neuro.as_ref().and_then(|n| n.memory.as_ref()) {
+        Some(m) => vec![vec![0.; m.width]; m.layers],
+        None => Vec::new(),
+    }
+}
+fn affine(model: &Bicameral, w: &str, b: Option<&str>, x: &[f32]) -> Vec<f32> {
+    let slot = model.slot(w);
+    let mut y = mat(model.val(w), slot.rows, slot.cols, x);
+    if let Some(b) = b {
+        for (v, b) in y.iter_mut().zip(model.val(b)) {
+            *v += *b;
+        }
+    }
+    y
+}
+fn l2(v: &[f32]) -> f32 {
+    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+impl KvCache {
+    /// Nova Neuro, one token: the same computation as `Bicameral::neuro_hidden` for the newest
+    /// position, with the transformer's keys and values and the working memory's state kept.
+    fn neuro_step(&mut self, model: &Bicameral, token: TokenId) -> Vec<f32> {
+        let c = &model.config;
+        let n = model.neuro.as_ref().expect("Nova Neuro");
+        let id = token as usize;
+        let tracing = self.trace.is_some();
+        let mut trace = Trace::default();
+        let mut nt = NeuroTrace {
+            modules: n.modules().iter().map(|m| m.name().to_string()).collect(),
+            ..NeuroTrace::default()
+        };
+        let mut h = model.val("embed")[id * c.d..(id + 1) * c.d].to_vec();
+        let mut stage = 0;
+        for i in 0..c.split {
+            let mut heads = Vec::new();
+            h = block(
+                model,
+                &mut self.stages[stage],
+                &h,
+                i,
+                self.sequence,
+                tracing.then_some(&mut heads),
+                &mut self.stats,
+                c.max_tokens,
+            );
+            if tracing {
+                trace.stages.push(StageTrace { block: i, round: 0, attention: heads });
+            }
+            stage += 1;
+        }
+        if tracing {
+            trace.readouts.push(readout(model, &h));
+        }
+        let memory = n.memory.as_ref().map(|m| {
+            let mut x = h.clone();
+            for l in 0..m.layers {
+                let xn = norm(&x, model.val(&format!("n.wm{l}.norm")));
+                let z = sigmoid(&affine(model, &format!("n.wm{l}.z"), Some(&format!("n.wm{l}.zb")), &xn));
+                let cand = affine(model, &format!("n.wm{l}.c"), Some(&format!("n.wm{l}.cb")), &xn);
+                let old = self.memory[l].clone();
+                for j in 0..m.width {
+                    self.memory[l][j] = (1. - z[j]) * old[j] + z[j] * cand[j];
+                }
+                let change: Vec<f32> = self.memory[l].iter().zip(&old).map(|(a, b)| a - b).collect();
+                nt.memory_change.push(l2(&change));
+                nt.memory_norm.push(l2(&self.memory[l]));
+                nt.memory_update.push(z.iter().sum::<f32>() / z.len().max(1) as f32);
+                x = self.memory[l].clone();
+            }
+            let mut out = affine(model, "n.wm_out", None, &x);
+            if self.abl.no_memory || self.abl.no_right {
+                out.fill(0.);
+            }
+            out
+        });
+        let modules = n.modules();
+        let rounds = if self.abl.one_round { 1 } else { c.loops };
+        for round in 0..rounds {
+            let hn = norm(&h, model.val("n.read_norm"));
+            let mut bus = affine(model, "n.read", None, &hn);
+            if self.abl.no_efferent {
+                bus.fill(0.);
+            }
+            if let Some(m) = &memory {
+                bus = add(&bus, m);
+            }
+            let bn = norm(&bus, model.val("n.bus_norm"));
+            let mut r = NeuroRound { bus_norm: l2(&bus), ..NeuroRound::default() };
+            let gates = if modules.is_empty() {
+                Vec::new()
+            } else if self.abl.no_controller {
+                vec![1.; modules.len()]
+            } else {
+                let hid = silu(&affine(model, "n.ctl1", Some("n.ctl1b"), &bn));
+                sigmoid(&affine(model, "n.ctl2", Some("n.ctl2b"), &hid))
+            };
+            let mut write: Option<Vec<f32>> = None;
+            for (gi, module) in modules.iter().enumerate() {
+                let out = match module {
+                    super::neuro::Module::Memory => memory.clone().expect("memory"),
+                    super::neuro::Module::Associative => {
+                        let an = norm(&bn, model.val("n.as_norm"));
+                        let q = affine(model, "n.as_q", None, &an);
+                        let mut p = affine(model, "n.as_keys", None, &q);
+                        let max = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                        let mut total = 0.;
+                        for v in p.iter_mut() {
+                            *v = (*v - max).exp();
+                            total += *v;
+                        }
+                        for v in p.iter_mut() {
+                            *v /= total;
+                        }
+                        if tracing {
+                            let mut top: Vec<(usize, f32)> = p.iter().copied().enumerate().collect();
+                            top.sort_by(|a, b| b.1.total_cmp(&a.1));
+                            r.patterns = top.into_iter().take(5).collect();
+                        }
+                        let mut out = affine(model, "n.as_vals", None, &p);
+                        if self.abl.no_associative || self.abl.no_right {
+                            out.fill(0.);
+                        }
+                        out
+                    }
+                };
+                r.outputs.push(l2(&out));
+                let gated: Vec<f32> = out.iter().map(|v| v * gates[gi]).collect();
+                write = Some(match write {
+                    Some(w) => add(&w, &gated),
+                    None => gated,
+                });
+            }
+            r.gates = gates;
+            if let (Some(w), false) = (write, self.abl.no_afferent) {
+                r.write_norm = l2(&w);
+                let gate = sigmoid(&affine(model, "n.gate_w", Some("n.gate_b"), &hn));
+                let z = affine(model, "n.write", None, &w);
+                let delta: Vec<f32> = gate.iter().zip(&z).map(|(g, x)| g * x).collect();
+                trace.gates.push(GateTrace { injection_norm: l2(&delta), state_norm: l2(&h), gate });
+                h = add(&h, &delta);
+            }
+            nt.rounds.push(r);
+            for i in c.split..c.blocks {
+                let mut heads = Vec::new();
+                h = block(
+                    model,
+                    &mut self.stages[stage],
+                    &h,
+                    i,
+                    self.sequence,
+                    tracing.then_some(&mut heads),
+                    &mut self.stats,
+                    c.max_tokens,
+                );
+                if tracing {
+                    trace.stages.push(StageTrace { block: i, round: round + 1, attention: heads });
+                }
+                stage += 1;
+            }
+            if tracing && round + 1 < rounds {
+                trace.readouts.push(readout(model, &h));
+            }
+        }
+        let logits = readout(model, &h);
+        if tracing {
+            trace.readouts.push(logits.clone());
+            trace.neuro = Some(nt);
+        }
+        self.tokens.push(token);
+        self.sequence += 1;
+        self.stats.cached_tokens = self.tokens.len();
+        if tracing {
+            self.trace = Some(trace);
+        }
+        logits
+    }
+}
+
 /// The output layer applied to a left state: final norm, tied embedding, output bias.
 fn readout(model: &Bicameral, h: &[f32]) -> Vec<f32> {
     let c = &model.config;

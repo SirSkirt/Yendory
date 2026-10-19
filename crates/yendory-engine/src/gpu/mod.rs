@@ -1110,6 +1110,17 @@ impl Graph for GpuGraph<'_> {
         );
         self.node(out, n, Op::Attention { q, k, v, t, d, heads, stats })
     }
+    // Nova Neuro trains on the CPU until its GPU kernels exist (Stage 5); the Trainer never
+    // sends a Neuro model here.
+    fn softmax_rows(&mut self, _src: usize, _cols: usize) -> usize {
+        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    }
+    fn gate_col(&mut self, _x: usize, _g: usize, _k: usize, _gcols: usize, _cols: usize) -> usize {
+        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    }
+    fn scan(&mut self, _z: usize, _c: usize, _seq: usize, _cols: usize) -> usize {
+        unimplemented!("Nova Neuro is not supported on the GPU yet")
+    }
 }
 
 // ---- the model on the GPU ----------------------------------------------------------------
@@ -1143,6 +1154,9 @@ fn focus_mask(f: Focus) -> u32 {
 impl GpuModel {
     /// Copies a model (weights, AdamW state and step) to the GPU.
     pub fn upload(gpu: &Arc<Gpu>, model: &Bicameral) -> Result<GpuModel, String> {
+        if model.neuro.is_some() {
+            return Err("Nova Neuro has no GPU kernels yet; it trains on the CPU".into());
+        }
         let n = model.weights.len();
         if n > gpu.max_floats() {
             return Err(format!(

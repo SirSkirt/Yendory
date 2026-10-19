@@ -41,6 +41,7 @@ fn check(name: &str) {
         no_afferent: kv(a, "no_afferent") == 1,
         no_efferent: kv(a, "no_efferent") == 1,
         no_right: kv(a, "no_right") == 1,
+        ..Ablation::default()
     };
     let ids: Vec<TokenId> = nums(field(&text, "ids"));
     let targets: Vec<TokenId> = nums(field(&text, "targets"));
