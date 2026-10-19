@@ -19,7 +19,7 @@ use yendory_engine::learn::eval::evaluate;
 use yendory_engine::learn::lessons::Item;
 use yendory_engine::learn::program::{run_course, CourseHost, CourseRun, ProgramEvent, RunOptions, Snapshot};
 use yendory_engine::learn::reward::{RewardConfig, RewardLedger, Rewards};
-use yendory_engine::learn::session::{Event, Rejection};
+use yendory_engine::learn::session::{CandidateTally, Event, Rejection};
 use yendory_engine::learn::{batch_loss_and_gradients, encode_item, Rng};
 use yendory_engine::{Ablation, Bicameral};
 
@@ -144,7 +144,9 @@ fn main() {
     let mut timeline = vec![("start".to_string(), start_answers.clone())];
     let mut taught_at: Vec<Option<usize>> = vec![None; lessons.len()];
     let (mut lesson_reports, mut course_reports) = (Vec::new(), Vec::new());
-    let (mut candidates, mut unstable, mut accepted) = (0usize, 0usize, 0usize);
+    // Every candidate's final record (selected, continued, every rejection reason).
+    let mut tally = CandidateTally::default();
+    let mut accepted = 0usize;
     let mut emphasis_epochs = 0usize;
     let mut archive: Vec<Item> = Vec::new();
     let mut offset = 0;
@@ -161,11 +163,10 @@ fn main() {
         for e in events.borrow().iter() {
             match e {
                 ProgramEvent::Lesson { event: CourseEvent::Session { event, .. }, .. } => match event {
-                    Event::Candidate(c) => {
-                        candidates += 1;
-                        unstable += usize::from(c.rejections.contains(&Rejection::HeldoutLossRose));
+                    Event::Epoch(e) => {
+                        accepted += usize::from(e.selected.is_some());
+                        tally.add(std::slice::from_ref(e));
                     }
-                    Event::Epoch(e) => accepted += usize::from(e.selected.is_some()),
                     Event::Emphasis { .. } => emphasis_epochs += 1,
                     _ => {}
                 },
@@ -218,7 +219,8 @@ fn main() {
         "correct_end": end.iter().map(|v| count(v)).sum::<usize>(),
         "questions": start_answers.iter().map(|v| v.len()).sum::<usize>(),
         "lesson_passes": lesson_reports.iter().filter(|l| l["outcome"] == "passed").count(),
-        "candidates": candidates, "unstable_candidates": unstable, "accepted_epochs": accepted,
+        "candidates": tally.candidates, "unstable_candidates": tally.count(Rejection::HeldoutLossRose),
+        "accepted_epochs": accepted, "candidate_tally": tally,
         "emphasis_epochs": emphasis_epochs,
         "per_lesson": per_lesson, "lesson_runs": lesson_reports, "courses": course_reports,
         "timeline": timeline.iter().map(|(n, a)| (n.clone(), a.iter().map(|v| count(v)).collect::<Vec<_>>())).collect::<Vec<_>>(),

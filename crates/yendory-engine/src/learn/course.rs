@@ -9,7 +9,9 @@
 use super::eval::{evaluate, sample_per_kind};
 use super::lessons::{parse_lesson, Item, Kind};
 use super::reward::{Origin, Rewards};
-use super::session::{teach_rewarded, Event, Rejection, Score, SessionConfig, SessionResult, Strategy};
+use super::session::{
+    teach_rewarded, CandidateTally, Event, Rejection, Score, SessionConfig, SessionResult, Strategy,
+};
 use crate::fingerprint::sha256_hex;
 use crate::model::{Ablation, Bicameral};
 use serde::{Deserialize, Serialize};
@@ -97,6 +99,9 @@ pub struct AttemptRecord {
     pub passed: bool,
     pub epochs_run: usize,
     pub final_score: Score,
+    /// Every candidate of this attempt, by outcome and rejection reason.
+    #[serde(default)]
+    pub candidates: CandidateTally,
     /// The diagnosis this attempt responded to (None for the initial attempt).
     #[serde(default)]
     pub because: Option<Diagnosis>,
@@ -263,9 +268,15 @@ fn diagnose(
     generalising_tried: bool,
     rewards: Option<&mut Rewards>,
 ) -> Result<(Diagnosis, Option<Plan>), String> {
-    // Rejected candidates across the attempt: what stopped them?
-    let candidates: Vec<_> =
-        result.epochs.iter().flat_map(|e| e.candidates.iter()).filter(|c| !c.selected).collect();
+    // Rejected candidates across the attempt: what stopped them? Candidates that improved but
+    // were outranked by a better candidate of the same epoch failed nothing, so they are not
+    // counted.
+    let candidates: Vec<_> = result
+        .epochs
+        .iter()
+        .flat_map(|e| e.candidates.iter())
+        .filter(|c| !c.selected && !c.rejections.contains(&Rejection::Outranked))
+        .collect();
     let share = |r: Rejection| {
         if candidates.is_empty() {
             0.
@@ -674,6 +685,7 @@ pub(super) fn teach_lesson(
             passed,
             epochs_run: r.epochs.len(),
             final_score: r.final_score.clone(),
+            candidates: CandidateTally::of(&r.epochs),
             because: because.take(),
         });
         if r.stopped {

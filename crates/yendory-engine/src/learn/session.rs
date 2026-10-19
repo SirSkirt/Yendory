@@ -268,6 +268,107 @@ pub enum Rejection {
     NoImprovement,
     /// Bicameral education: the model stopped using Dense (its contribution collapsed).
     DenseUnused,
+    /// Eligible and better than the accepted model, but another candidate of the same epoch was
+    /// better (one candidate is selected per epoch).
+    Outranked,
+}
+impl Rejection {
+    pub const ALL: [Rejection; 7] = [
+        Rejection::HeldoutLossRose,
+        Rejection::EarlierLessonsLoss,
+        Rejection::EarlierAnswersLost,
+        Rejection::AnswersLost,
+        Rejection::NoImprovement,
+        Rejection::DenseUnused,
+        Rejection::Outranked,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Rejection::HeldoutLossRose => "heldout_loss_rose",
+            Rejection::EarlierLessonsLoss => "earlier_lessons_loss",
+            Rejection::EarlierAnswersLost => "earlier_answers_lost",
+            Rejection::AnswersLost => "answers_lost",
+            Rejection::NoImprovement => "no_improvement",
+            Rejection::DenseUnused => "dense_unused",
+            Rejection::Outranked => "outranked",
+        }
+    }
+}
+
+/// Candidates of one or more sessions counted by outcome and by every rejection reason, in
+/// total and per focus. Every candidate is either selected or has at least one reason; a
+/// candidate rejected for several reasons counts once under each of them, and once under
+/// `sole` when that reason was its only one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CandidateTally {
+    pub candidates: usize,
+    pub selected: usize,
+    /// Not selected, but training continued from it (the best safe candidate of a flat epoch).
+    pub continued: usize,
+    /// Candidates with this reason (among others).
+    pub reasons: std::collections::BTreeMap<String, usize>,
+    /// Candidates with this reason only.
+    pub sole: std::collections::BTreeMap<String, usize>,
+    pub by_focus: std::collections::BTreeMap<String, FocusTally>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FocusTally {
+    pub candidates: usize,
+    pub selected: usize,
+    pub continued: usize,
+    pub reasons: std::collections::BTreeMap<String, usize>,
+}
+
+impl CandidateTally {
+    pub fn of(epochs: &[EpochRecord]) -> Self {
+        let mut t = CandidateTally::default();
+        t.add(epochs);
+        t
+    }
+    /// Adds the final candidate records of these epochs.
+    pub fn add(&mut self, epochs: &[EpochRecord]) {
+        for c in epochs.iter().flat_map(|e| &e.candidates) {
+            let f = self.by_focus.entry(c.focus.clone()).or_default();
+            self.candidates += 1;
+            f.candidates += 1;
+            self.selected += usize::from(c.selected);
+            f.selected += usize::from(c.selected);
+            self.continued += usize::from(c.continued);
+            f.continued += usize::from(c.continued);
+            for r in &c.rejections {
+                *self.reasons.entry(r.name().into()).or_default() += 1;
+                *f.reasons.entry(r.name().into()).or_default() += 1;
+            }
+            if let [only] = c.rejections[..] {
+                *self.sole.entry(only.name().into()).or_default() += 1;
+            }
+        }
+    }
+    pub fn merge(&mut self, other: &CandidateTally) {
+        self.candidates += other.candidates;
+        self.selected += other.selected;
+        self.continued += other.continued;
+        for (k, v) in &other.reasons {
+            *self.reasons.entry(k.clone()).or_default() += v;
+        }
+        for (k, v) in &other.sole {
+            *self.sole.entry(k.clone()).or_default() += v;
+        }
+        for (focus, o) in &other.by_focus {
+            let f = self.by_focus.entry(focus.clone()).or_default();
+            f.candidates += o.candidates;
+            f.selected += o.selected;
+            f.continued += o.continued;
+            for (k, v) in &o.reasons {
+                *f.reasons.entry(k.clone()).or_default() += v;
+            }
+        }
+    }
+    /// Candidates with this reason.
+    pub fn count(&self, r: Rejection) -> usize {
+        self.reasons.get(r.name()).copied().unwrap_or(0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -957,6 +1058,14 @@ pub fn teach_rewarded(
         }
         let selected = best.map(|(ci, cand, s, correct, report)| {
             records[ci].selected = true;
+            // Candidates that improved on the accepted model but lost to this one.
+            for (i, r) in records.iter_mut().enumerate() {
+                if i != ci && r.rejections.is_empty() {
+                    r.rejections.push(Rejection::Outranked);
+                    r.reasons
+                        .push(format!("improved, but the {} candidate was better", focus_name(foci[ci])));
+                }
+            }
             working = cand.clone();
             accepted = cand;
             accepted_score = s;

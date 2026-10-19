@@ -1,7 +1,7 @@
 //! Teaching-session behaviour: Foundation candidates, selection, rollback, stop, records.
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use yendory_engine::learn::session::{teach, Event, Rejection, SessionConfig};
+use yendory_engine::learn::session::{teach, CandidateTally, Event, Rejection, SessionConfig};
 use yendory_engine::learn::{parse_lesson, Item, Kind};
 use yendory_engine::Bicameral;
 
@@ -51,11 +51,35 @@ fn foundation_candidates_start_equal_and_records_are_complete() {
         assert!(e.candidates.iter().filter(|c| c.selected).count() <= 1);
         assert_eq!(e.selected.is_some(), e.candidates.iter().any(|c| c.selected));
         for c in &e.candidates {
-            assert_eq!(c.eligible, c.rejections.iter().all(|x| *x == Rejection::NoImprovement));
+            assert_eq!(
+                c.eligible,
+                c.rejections.iter().all(|x| matches!(x, Rejection::NoImprovement | Rejection::Outranked))
+            );
             assert!(!c.selected || (c.eligible && c.reasons.is_empty()));
+            // Every candidate is either selected or has at least one recorded reason.
+            assert_ne!(c.selected, !c.rejections.is_empty(), "{c:?}");
+            assert_eq!(c.rejections.is_empty(), c.reasons.is_empty());
+            if c.rejections.contains(&Rejection::Outranked) {
+                assert_eq!(c.rejections, [Rejection::Outranked]);
+                assert!(e.selected.is_some());
+            }
         }
         previous_step = e.accepted_step;
     }
+    // The tally counts every candidate and every reason exactly.
+    let tally = CandidateTally::of(&r.epochs);
+    let all: Vec<_> = r.epochs.iter().flat_map(|e| &e.candidates).collect();
+    assert_eq!(tally.candidates, all.len());
+    assert_eq!(tally.selected, all.iter().filter(|c| c.selected).count());
+    assert_eq!(tally.continued, all.iter().filter(|c| c.continued).count());
+    for reason in Rejection::ALL {
+        let n = all.iter().filter(|c| c.rejections.contains(&reason)).count();
+        assert_eq!(tally.count(reason), n, "{reason:?}");
+        let sole = all.iter().filter(|c| c.rejections == [reason]).count();
+        assert_eq!(tally.sole.get(reason.name()).copied().unwrap_or(0), sole);
+    }
+    assert_eq!(tally.by_focus.values().map(|f| f.candidates).sum::<usize>(), all.len());
+    eprintln!("{}", serde_json::to_string(&tally).unwrap());
     let base = &r.baseline;
     let fin = &r.final_score;
     if r.learned {
