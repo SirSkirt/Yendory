@@ -84,7 +84,27 @@ struct Score {
 }
 
 /// The score of a set, and each question's own score (one reply and one loss per question).
-fn evaluate(model: &Bicameral, qs: &[Question], abl: Ablation) -> (Score, Vec<Score>) {
+/// Questions are scored in parallel (each thread its own questions, one Engine thread each);
+/// every question's score is the same as when scored alone.
+fn evaluate(model: &Bicameral, qs: &[Question], abl: Ablation, threads: usize) -> (Score, Vec<Score>) {
+    let chunk = qs.len().div_ceil(threads.max(1)).max(1);
+    let per: Vec<Score> = std::thread::scope(|sc| {
+        let jobs: Vec<_> = qs.chunks(chunk).map(|part| sc.spawn(move || score_each(model, part, abl))).collect();
+        jobs.into_iter().flat_map(|j| j.join().unwrap()).collect()
+    });
+    let mut total = Score::default();
+    for s in &per {
+        total.questions += 1;
+        total.exact += s.exact;
+        total.place_right += s.place_right;
+        total.place_questions += s.place_questions;
+        total.answer_loss += s.answer_loss;
+    }
+    total.answer_loss /= total.questions.max(1) as f32;
+    (total, per)
+}
+
+fn score_each(model: &Bicameral, qs: &[Question], abl: Ablation) -> Vec<Score> {
     let all_places: Vec<&str> = SEEN_PLACES.iter().chain(NEW_PLACES.iter()).copied().collect();
     let mut per = Vec::new();
     for q in qs {
@@ -116,23 +136,15 @@ fn evaluate(model: &Bicameral, qs: &[Question], abl: Ablation) -> (Score, Vec<Sc
         s.answer_loss = model.loss(x, y, m, abl).unwrap();
         per.push(s);
     }
-    let mut total = Score::default();
-    for s in &per {
-        total.questions += 1;
-        total.exact += s.exact;
-        total.place_right += s.place_right;
-        total.place_questions += s.place_questions;
-        total.answer_loss += s.answer_loss;
-    }
-    total.answer_loss /= total.questions.max(1) as f32;
-    (total, per)
+    per
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let arch = args[1].as_str();
     let out = &args[2];
-    yendory_engine::learn::set_cpu_threads(args[3].parse().unwrap());
+    let threads: usize = args[3].parse().unwrap();
+    yendory_engine::learn::set_cpu_threads(threads);
     let tokens: u64 = args[4].parse().unwrap();
     let seed: u64 = std::env::var("NC_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(7);
     let start = match arch {
@@ -161,7 +173,10 @@ fn main() {
         );
     }
     let seconds = t.elapsed().as_secs_f64();
+    eprintln!("read {} tokens in {seconds:.0}s", r.tokens);
     let model = r.model;
+    // Scoring: questions in parallel, one Engine thread each.
+    yendory_engine::learn::set_cpu_threads(1);
 
     // Evaluation sets (never trained on).
     let mut rng = Rng::new(EVAL_SEED);
@@ -198,7 +213,9 @@ fn main() {
     let score_all = |abl: Ablation| -> serde_json::Value {
         let mut o = serde_json::Map::new();
         for (name, qs) in &sets {
-            let (total, per) = evaluate(&model, qs, abl);
+            let t = std::time::Instant::now();
+            let (total, per) = evaluate(&model, qs, abl, threads);
+            eprintln!("  {name}: {} questions in {:.0}s", qs.len(), t.elapsed().as_secs_f64());
             o.insert(name.to_string(), serde_json::to_value(total).unwrap());
             if *name == "in_distribution" {
                 // Per family, from the same replies.
@@ -222,6 +239,7 @@ fn main() {
         }
         serde_json::Value::Object(o)
     };
+    eprintln!("full model");
     let full = score_all(Ablation::default());
     let mut ablations = serde_json::Map::new();
     if arch == "neuro" {
@@ -232,6 +250,7 @@ fn main() {
             ("one_round", Ablation { one_round: true, ..Ablation::default() }),
             ("no_modules_into_transformer", Ablation { no_afferent: true, ..Ablation::default() }),
         ] {
+            eprintln!("ablation {name}");
             ablations.insert(name.into(), score_all(abl));
         }
     } else {
