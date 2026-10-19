@@ -1,7 +1,8 @@
 # Nova Neuro: feasibility review and implementation plan
 
-Status: **proposal under review, nothing implemented.** Nova Bicameral stays the default and
-is not changed by any of this. Nova Messaging integration is out of scope (handled elsewhere).
+Status: **Neuro-Core implemented (Stages 1-3, review point 1).** Nova Bicameral stays the default
+and is not changed by any of this. Nova Messaging integration is out of scope (handled elsewhere).
+What exists now is listed in section 12; the rest of this document is the approved plan.
 
 ## 1. What the engine already gives us
 
@@ -226,3 +227,34 @@ totals are reported, never used as evidence on their own. Expect an honest outco
 | 7 | Comparisons and ablations as in section 10, written up | **review point 2**: results and what to do next |
 
 Messaging integration (the proposal's Stage 8) is left out as requested.
+
+## 12. Implemented so far (Neuro-Core)
+
+- **Engine** (`model/neuro.rs`): `NeuroSpec` (design, versioned) stored on the model; the
+  transformer core, embeddings (tied with the output layer), optimizer and parameter groups are
+  shared with Bicameral. Modules: minGRU working memory (layers x width), associative memory
+  (patterns x key width, softmax retrieval of learned patterns), Executive Controller (one sigmoid
+  gate per module, per token and round), communication bus (transformer -> bus -> modules ->
+  gated write-back into the residual stream; working memory joins the bus). Groups: language core
+  = `Left`, modules = `Right`, bus and controller = `Interconnect`, so Foundation candidates and
+  the education stages work unchanged.
+- **New operations** (`model/tape.rs`): row softmax, per-row gating by a gate column, the minGRU
+  scan. CPU forward and backward; finite-difference gradient tests through every module.
+- **Generation cache** with the working memory's state per context; equal to the full pass under
+  every ablation and across a full-window rebuild. A test checks no later token changes an earlier
+  position's output (no leakage from the future).
+- **Ablations** (evaluation only, checkpoints untouched): `no_memory`, `no_associative`,
+  `no_controller` (all gates open), `one_round`, `no_afferent` (no write-back into the
+  transformer), `no_efferent` (no transformer state on the bus).
+- **Checkpoints**: `.nneuro` (magic `NNEURO1`, JSON header with architecture, format, config and
+  design, then the same body as `.nnova2`). `.nnova2` is byte-identical for Bicameral.
+- **Presets** at the Bicameral sizes (1.2M, 4M, 8M, 15M), each within 0.1% of its twin's
+  parameter count; the exact calculator is `Bicameral::tensors_for`.
+- **Trace**: controller gates, module output sizes, recalled patterns, bus and write-back sizes,
+  working-memory change and update gate, for measurements and the thinking tree.
+- **Studio**: architecture selector and brain builder (presets, every module's settings, the
+  Engine's exact parameter count per part, memory estimate, hardware support; later-stage and
+  future networks listed), `.nneuro` import/export, Neuro activity on the Brain page.
+- **Not yet**: GPU kernels (Neuro trains on the CPU), the relational network, experts,
+  consolidation, auxiliary objectives (planned with the relational network, where story labels
+  feed entity tracking), adaptive rounds, the full Neuro visualizer.

@@ -291,6 +291,18 @@ never-trained questions never influence emphasis, so they stay an independent ju
 right practice answer is never trained as written. `examples/reward_compare.rs` compares
 Stage 2 with ordinary training (results in docs/STATUS.md).
 
+## Nova Neuro (experimental, `model::neuro`)
+
+A second architecture, chosen when a model is created; Nova Bicameral is the default and is
+unchanged. Nova Neuro keeps the transformer core and replaces the Dense hemisphere with modules
+that talk through a learned communication bus: a minGRU working memory, an associative memory
+of learned patterns, and an Executive Controller that learns, per token and round, how strongly
+to use each module. Everything in this guide (reading, lessons, courses, the Planner, Study Mode,
+practice, reflection, review, rewards) works with it; Foundation candidates train the modules
+("dense" in the records), the language core ("transformer"), the bus and controller
+("interconnect"), or everything. It trains on the CPU until its GPU kernels exist. Design,
+plan and status: docs/NEURO.md.
+
 ## Evaluation (`learn::eval`)
 
 - **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.
