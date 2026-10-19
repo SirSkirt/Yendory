@@ -89,7 +89,8 @@ struct Score {
 fn evaluate(model: &Bicameral, qs: &[Question], abl: Ablation, threads: usize) -> (Score, Vec<Score>) {
     let chunk = qs.len().div_ceil(threads.max(1)).max(1);
     let per: Vec<Score> = std::thread::scope(|sc| {
-        let jobs: Vec<_> = qs.chunks(chunk).map(|part| sc.spawn(move || score_each(model, part, abl))).collect();
+        let jobs: Vec<_> =
+            qs.chunks(chunk).map(|part| sc.spawn(move || score_each(model, part, abl))).collect();
         jobs.into_iter().flat_map(|j| j.join().unwrap()).collect()
     });
     let mut total = Score::default();
