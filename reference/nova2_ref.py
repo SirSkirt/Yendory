@@ -462,11 +462,13 @@ class Nova2:
 
     # ---- optimizer (AdamW + global-norm clip + selective "training focus") ---------
     def adam_step(self, G, lr, beta1=0.9, beta2=0.95, eps=1e-8, wd=0.01, clip=1.0, focus="joint"):
+        # Clipped by the norm of the gradients the step applies (the focused groups): a frozen
+        # group's gradient does not shrink the update. For "joint" this is the whole gradient.
+        active = np.ones(self.n, self.dtype) if focus == "joint" else self.group_mask[focus]
+        G = G * active
         gn = float(np.sqrt((G.astype(np.float64) ** 2).sum()))
         if clip and gn > clip:
             G = G * (clip / gn)
-        active = np.ones(self.n, self.dtype) if focus == "joint" else self.group_mask[focus]
-        G = G * active
         self.step += 1
         self.M = np.where(active > 0, beta1 * self.M + (1 - beta1) * G, self.M)
         self.V = np.where(active > 0, beta2 * self.V + (1 - beta2) * G * G, self.V)

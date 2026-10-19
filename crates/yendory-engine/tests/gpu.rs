@@ -259,3 +259,30 @@ fn hybrid_steps_match_the_cpu() {
         }
     }
 }
+
+/// Gradient clipping on the GPU uses the norm of the gradients the step applies (the focused
+/// groups), as on the CPU: with clipping active and a frozen group whose gradient is part of the
+/// whole-gradient norm, GPU steps still match the CPU for every focus.
+#[test]
+fn gpu_clipping_uses_only_the_trained_groups() {
+    let Some(gpu) = gpu() else { return };
+    // An untrained model: large gradients, so clipping is active.
+    let model = Bicameral::with_config(Config::default(), 21);
+    let rows = rows(&model);
+    let (_, grads) = batch_loss_and_gradients(&model, &rows, Ablation::default()).unwrap();
+    let whole = grads.iter().map(|&g| (g as f64) * (g as f64)).sum::<f64>().sqrt();
+    println!("whole-gradient norm {whole:.3}");
+    assert!(whole > 1., "clipping is active");
+    for focus in [Focus::Left, Focus::Right, Focus::Interconnect, Focus::DenseAndInterconnect] {
+        let mut cpu = model.clone();
+        let applied = cpu.adam_step(&grads, 2e-3, focus).unwrap();
+        println!("{focus:?}: applied-gradient norm {applied:.3}");
+        assert!((applied as f64) < whole, "{focus:?}: the frozen groups' gradient is left out");
+        let mut on_gpu = GpuModel::upload(&gpu, &model).unwrap();
+        on_gpu.train_step(&model, &rows, Ablation::default(), 2e-3, focus).unwrap();
+        let mut back = model.clone();
+        on_gpu.download(&mut back).unwrap();
+        close(&format!("weights after a clipped step ({focus:?})"), &back.weights, &cpu.weights);
+        close("momentum", &back.momentum, &cpu.momentum);
+    }
+}

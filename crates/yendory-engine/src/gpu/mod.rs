@@ -1614,7 +1614,14 @@ impl GpuModel {
             let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None, true)?;
             let (gx, gy, _) = groups(self.n);
             let parts = (gx * gy) as usize;
-            g.dispatch(K::Sumsq, &[Some(B::Grads), Some(B::Partial)], None, &[self.n as u32], (gx, gy, 1));
+            // Clipped by the norm of the gradients this step applies (the focused groups).
+            g.dispatch(
+                K::Sumsq,
+                &[Some(B::Grads), Some(B::Partial)],
+                Some(B::Flags),
+                &[self.n as u32, focus_mask(focus)],
+                (gx, gy, 1),
+            );
             g.dispatch(K::NormFinish, &[None, Some(B::Partial)], None, &[parts as u32], (1, 1, 1));
             let (beta1, beta2) = (0.9f32, 0.95f32);
             let p = [

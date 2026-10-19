@@ -1091,12 +1091,13 @@ fn scan_back(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
 
 var<workgroup> part: array<f32, 256>;
 
-// Partial sums of squares of f0[0..n) per workgroup into f1[group].   p: n
+// Partial sums of squares of f0[0..n) per workgroup into f1[group], counting only the elements
+// whose flags (u0) are in the focus mask: the gradients the step applies.   p: n, focus mask
 @compute @workgroup_size(256)
 fn sumsq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let i = id(wg, nwg, li);
     var x = 0.0;
-    if (i < p.a.x) { x = f0[i] * f0[i]; }
+    if (i < p.a.x && (u0[i] & p.a.y) != 0u) { x = f0[i] * f0[i]; }
     part[li] = x;
     workgroupBarrier();
     for (var s = 128u; s > 0u; s = s >> 1u) {

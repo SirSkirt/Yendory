@@ -677,11 +677,24 @@ impl Bicameral {
         t.backward(loss, scale);
         value
     }
+    /// One AdamW step on the parameters `focus` selects. Returns the norm of the gradients it
+    /// applied (the focused groups'), by which they were clipped to at most 1.
     pub fn adam_step(&mut self, gradients: &[f32], lr: f32, focus: Focus) -> Result<f32, String> {
         if gradients.len() != self.weights.len() || !lr.is_finite() || lr <= 0. {
             return Err("Invalid Nova-2 optimizer inputs".into());
         }
-        let norm = gradients.iter().map(|&g| (g as f64) * (g as f64)).sum::<f64>().sqrt() as f32;
+        // Clipped by the norm of the gradients this step applies: the focused groups only, so
+        // a frozen group's gradient cannot shrink the update. With every group (Joint) this is
+        // the whole gradient, summed in the same order as always.
+        let mut squares = 0f64;
+        for slot in &self.slots {
+            if focus.matches(slot.group) {
+                for &g in &gradients[slot.range.clone()] {
+                    squares += (g as f64) * (g as f64);
+                }
+            }
+        }
+        let norm = squares.sqrt() as f32;
         let clip = 1. / norm.max(1.);
         self.step += 1;
         let beta1 = 0.9f32;
@@ -729,6 +742,66 @@ impl Bicameral {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gradient clipping uses the norm of the gradients a step applies. A frozen group's
+    /// gradient, however large, does not change a focused step; a whole-brain (Joint) step is
+    /// exactly the original whole-gradient clipping.
+    #[test]
+    fn clipping_uses_only_the_trained_groups() {
+        let neuro = super::neuro::presets().into_iter().next().unwrap();
+        let models = [
+            Bicameral::with_config(Config::default(), 3),
+            Bicameral::with_design(neuro.config, Some(neuro.design), 3),
+        ];
+        for base in models {
+            let n = base.parameter_count();
+            let mut rng = crate::learn::Rng::new(11);
+            // Large enough that clipping is active for every focus.
+            let grads: Vec<f32> = (0..n).map(|_| (rng.unit() as f32 - 0.5) * 0.2).collect();
+            for focus in [Focus::Left, Focus::Right, Focus::Interconnect, Focus::DenseAndInterconnect] {
+                let trained =
+                    |i: usize| base.slots.iter().any(|s| s.range.contains(&i) && focus.matches(s.group));
+                let applied: Vec<f32> = (0..n).map(|i| if trained(i) { grads[i] } else { 0. }).collect();
+                let inflated: Vec<f32> =
+                    (0..n).map(|i| if trained(i) { grads[i] } else { grads[i] * 1e3 }).collect();
+                let (mut a, mut b) = (base.clone(), base.clone());
+                let norm = a.adam_step(&applied, 1e-3, focus).unwrap();
+                assert!(norm > 1., "{focus:?}: clipping is active ({norm})");
+                assert_eq!(b.adam_step(&inflated, 1e-3, focus).unwrap(), norm);
+                assert_eq!(a.weights, b.weights, "{focus:?}: frozen gradients changed the step");
+                assert_eq!(a.momentum, b.momentum);
+                assert_eq!(a.variance, b.variance);
+                for (i, (w, w0)) in a.weights.iter().zip(&base.weights).enumerate() {
+                    if !trained(i) {
+                        assert_eq!(w, w0, "{focus:?}: a frozen weight changed");
+                    }
+                }
+            }
+            // Joint: the original rule (norm of the whole gradient), bit for bit.
+            let mut joint = base.clone();
+            joint.adam_step(&grads, 1e-3, Focus::Joint).unwrap();
+            let mut reference = base.clone();
+            let norm = grads.iter().map(|&g| (g as f64) * (g as f64)).sum::<f64>().sqrt() as f32;
+            assert!(norm > 1.);
+            let clip = 1. / norm.max(1.);
+            reference.step += 1;
+            let (bias1, bias2) =
+                (1. - 0.9f32.powf(reference.step as f32), 1. - 0.95f32.powf(reference.step as f32));
+            for slot in &base.slots {
+                for i in slot.range.clone() {
+                    let g = grads[i] * clip;
+                    reference.momentum[i] = 0.9 * reference.momentum[i] + (1. - 0.9) * g;
+                    reference.variance[i] = 0.95 * reference.variance[i] + (1. - 0.95) * g * g;
+                    let (m, v) = (reference.momentum[i] / bias1, reference.variance[i] / bias2);
+                    let wd = if slot.decay { 0.01 * reference.weights[i] } else { 0. };
+                    reference.weights[i] -= 1e-3 * (m / (v.sqrt() + 1e-8) + wd);
+                }
+            }
+            assert_eq!(joint.weights, reference.weights, "Joint steps are unchanged");
+            assert_eq!(joint.momentum, reference.momentum);
+            assert_eq!(joint.variance, reference.variance);
+        }
+    }
     #[test]
     fn fused_output_layer_equals_linear_then_cross_entropy() {
         let mut m = Bicameral::new();
