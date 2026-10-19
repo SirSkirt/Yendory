@@ -193,6 +193,43 @@ Net still forgets a little more of course 1 during course 2 on both seeds, and s
 level with or above strict on it. No default has been changed yet; making net the default is a
 decision for the owner.
 
+### Reward-guided training (Stage 2) against ordinary training
+
+`examples/reward_compare.rs`: the same start checkpoint, courses, settings (strict safeguard) and
+seeds as the safeguard comparison. Both arms keep the reward ledger; only `rewarded` schedules
+units by emphasis. The ordinary arm reproduced the strict runs above exactly on both seeds,
+so recording rewards does not change training.
+
+| | Seed 7: ordinary | Seed 7: reward-guided | Seed 101: ordinary | Seed 101: reward-guided |
+|---|---|---|---|---|
+| Held-out answers right at the end (of 108; 3 at start) | **31** | 29 | **32** | 30 |
+| Answers right at the start that were lost | 1 | 1 | 0 | 0 |
+| Answers lost after their own course (forgetting) | **3** | 4 | **3** | 5 |
+| Held-out loss at the end, 02A / 02B / 03A / 03B | **1.17 / 0.94 / 0.89 / 0.87** | 1.39 / 1.15 / 0.94 / 0.93 | **1.05 / 0.80** / 0.97 / **0.83** | 1.55 / 1.34 / 0.97 / 0.95 |
+| Course grade, course 1 / course 2 | **0.55 / 0.15** | 0.53 / 0.13 | **0.52 / 0.14** | 0.51 / 0.14 |
+| Final exam (protected), course 1 / course 2 | **0.61 / 0.14** | 0.59 / 0.10 | 0.53 / **0.14** | **0.59** / 0.10 |
+| Candidates rejected as unstable | 52 of 664 | **12 of 600** | 30 of 600 | **11 of 560** |
+| Ledger: questions recorded as forgotten | **42** | 52 | **20** | 75 |
+| Ledger credit: progress / retention / generalization | 504 / 460 / 32 | 481 / 416 / 33 | 445 / 403 / 35 | 487 / 419 / 32 |
+
+Findings:
+
+- Reward-guided training ended **behind** ordinary training on both seeds: two fewer held-out
+  answers, higher held-out loss on three or four of the four lessons, more forgetting. The one
+  exception is course 1's final exam on seed 101 (0.59 against 0.53).
+- It was more stable (about a quarter of the unstable candidates) but learned less. The likely
+  cause is the schedule itself: units Nova answers are trained in only about one epoch in four
+  at the minimum emphasis, so they are forgotten (52 / 75 forgotten against 42 / 20), and
+  emphasis piles onto questions she cannot yet answer.
+- On seed 101 the ledger's progress and retention credit was *higher* for the reward-guided arm
+  while its real results were lower: exactly the case where reward totals must not be read as
+  improvement. The independent evaluations decide, and they say no.
+- Two seeds, 108 questions: a two-answer gap is small, but every loss measure points the same way.
+
+Reward-guided training stays **off** (not the default). Stage 3 is not proposed on this evidence.
+Any adjusted schedule would have to be judged on new seeds (and ideally other lessons), not
+tuned on these two runs.
+
 ## Decisions still open
 
 | # | Decision | Status |
