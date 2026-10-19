@@ -188,7 +188,9 @@ impl ReadingRows {
     fn new(model: &Bicameral, texts: &[String]) -> Result<Self, String> {
         let mut docs = Vec::new();
         for t in texts {
-            let ids = model.tokenizer.encode(t.trim())?;
+            // Normalised as corpus reading is (typographic quotes and dashes to ASCII).
+            let (text, _) = super::corpus::normalize_ascii(t.trim());
+            let ids = model.tokenizer.encode(&text)?;
             if ids.len() >= 8 {
                 docs.push(ids);
             }

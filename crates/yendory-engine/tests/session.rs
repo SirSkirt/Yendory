@@ -258,7 +258,7 @@ fn training_continues_through_flat_epochs() {
 fn stories() -> std::sync::Arc<Vec<String>> {
     std::sync::Arc::new(
         (0..60)
-            .map(|i| format!("Once upon a time, a little dog named Rex {i} found a red ball in the park. He was happy and played all day."))
+            .map(|i| format!("Once upon a time, a little dog named Rex {i} found a red ball in the park. He said, \u{201c}I am happy!\u{201d} and played all day."))
             .collect(),
     )
 }
