@@ -54,7 +54,8 @@ impl NeuroInput {
             r2: 1,
             ..Config::default()
         };
-        if config.heads == 0 || config.d % config.heads != 0 || (config.d / config.heads) % 2 != 0 {
+        let per_head = config.d.checked_div(config.heads).unwrap_or(0);
+        if per_head == 0 || per_head * config.heads != config.d || per_head & 1 == 1 {
             return Err(
                 "The language core's width must divide into the heads, with an even width per head".into()
             );
