@@ -263,3 +263,50 @@ Messaging integration (the proposal's Stage 8) is left out as requested.
 - **Not yet**: the relational network, experts,
   consolidation, auxiliary objectives (planned with the relational network, where story labels
   feed entity tracking), adaptive rounds, the full Neuro visualizer.
+
+## 13. Review Point 1: Bicameral vs Neuro-Core (measured)
+
+`examples/neuro_compare.rs`. Both at Nova-2 size (Bicameral 1,182,144 parameters, Neuro-Core
+1,181,090), the same generated practice text (all families, difficulty 2, 4 MB, data seed 1234),
+1.5M tokens of ordinary reading each, seeds 7 and 101, CPU (one thread per run, four runs
+side by side). Questions are never trained on; any whose text appears in the training text is
+removed. The if-then logic family has no unseen questions at difficulty 2 (its whole question
+space is in the training text), so it is left out. Greedy replies are graded exactly; "where"
+answers also by naming the right place and no other.
+
+| | Bicameral 7 | Bicameral 101 | Neuro 7 | Neuro 101 |
+|---|---|---|---|---|
+| Held-out loss (start ≈ 5.9-6.1) | 0.4394 | 0.4496 | 0.4389 | 0.4321 |
+| In-distribution exact (of 200) | 23 | 16 | 17 | 20 |
+| In-distribution answer loss | 0.264 | 0.342 | 0.339 | 0.335 |
+| Where, seen names, new stories: exact (of 80) | 4 | 10 | 2 | 4 |
+| Where, unseen names: exact / right place (of 80) | 0 / 8 | 0 / 8 | 0 / 11 | 0 / 13 |
+| Where, unseen names: answer loss | 2.202 | 2.232 | 2.191 | 2.402 |
+| Where, unseen names and places: exact / right place | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Where, unseen names and places: answer loss | 4.427 | 4.703 | 4.268 | 4.600 |
+| Reading speed (tokens/s, CPU, 1 thread, shared machine) | 853 | 966 | 889 | 892 |
+| Activation floats per token (training memory) | 22,016 | 22,016 | 26,632 | 26,632 |
+
+Ablations (in-distribution exact of 200 / answer loss):
+
+| Cut | Neuro 7 | Neuro 101 |
+|---|---|---|
+| none | 17 / 0.339 | 20 / 0.335 |
+| working memory | 0 / 1.847 | 0 / 1.076 |
+| associative memory | 17 / 0.339 | 22 / 0.335 |
+| controller (every gate open) | 13 / 0.363 | 18 / 0.389 |
+| one round instead of two | 14 / 0.373 | 19 / 0.371 |
+| modules' write-back into the transformer | 0 / 1.823 | 0 / 1.071 |
+
+Bicameral with Dense's input to the transformer cut: 1 / 1.097 and 0 / 1.131.
+
+Findings:
+- At equal size, data and budget the two are level: Neuro's held-out loss is about 1% lower on
+  average, Bicameral answers slightly more in-distribution questions and "where" stories with
+  seen names; the differences are within the spread between seeds.
+- Neuro relies on working memory (cut, it answers nothing) and makes some use of the controller
+  and the second round; **associative memory contributes nothing measurable** at this size.
+- Neither architecture answers a "where" question about **unseen names** exactly (0 of 320);
+  Neuro names the right place a little more often (24 vs 16 of 160). Following new entities
+  through a story is the open problem, the one the relational network is meant to address.
+- Neuro costs about 21% more training memory per token; speed on the CPU was about equal.
