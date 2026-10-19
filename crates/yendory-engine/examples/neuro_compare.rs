@@ -9,6 +9,7 @@
 //!   whose question appears in the training text removed;
 //! * "who is where" stories with **unseen names** (none of the generator's names), and with
 //!   **unseen names and unseen places** (nothing in the story was ever read).
+//!
 //! Greedy replies are graded exactly, and "where" answers also by content (the right place,
 //! no other place). Neuro is also evaluated with each module cut (ablations).
 //!
