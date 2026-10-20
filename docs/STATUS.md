@@ -256,6 +256,39 @@ behind on three). Gentle forgot more after each course on both seeds (3 and 5 an
 lower. The spread between seeds (29 to 36 answers) is as large as any difference between the
 arms. Reward-guided training stays off.
 
+### Ordinary training: dropout and general-reading rehearsal (seeds 7, 101, 211)
+
+`examples/reward_compare.rs` (ordinary training only), after the clipping fix and the
+candidate-tally correction: the step-15000 checkpoint, courses 02A+02B then 03A+03B, the
+default settings (net safeguard), seeds 7, 101 and 211 for every arm. Settings fixed before
+any result: dropout 0.1; reading share 0.1 of each epoch's rows (same rows per epoch). The
+reading text was 4,000 simple synthetic stories (TinyStories could not be downloaded here);
+none of the 329 graded texts appears in it.
+
+| | Ordinary | Dropout 0.1 | Reading 0.1 |
+|---|---|---|---|
+| Held-out answers right at the end (of 108), seeds 7 / 101 / 211 | 40 / 37 / 37 | **41** / 37 / **39** | 27 / 34 / 38 |
+| Total over the three seeds | 114 | **117** | 99 |
+| Answers lost after their own course (sum) | **5** | 7 | 6 |
+| Final exam course 1 (mean of seeds) | **0.660** | 0.647 | 0.608 |
+| Final exam course 2 (mean of seeds) | **0.163** | 0.122 | 0.143 |
+| Lessons' held-out loss at the end (mean) | 0.833 | **0.817** | 0.982 |
+
+Candidate tally (all seeds, every reason counted): of about 1,750 candidates per arm, 7-9% were
+selected; the commonest reason was losing more of the lesson's held-out answers than gained
+(about 55% of candidates), then harming earlier lessons (loss 20-27%, answers 17-21%).
+
+Findings:
+- Dropout: +1, 0 and +2 answers and slightly lower held-out loss, but lower course-2 exam scores
+  and slightly more forgetting. The differences are within the spread between seeds: no clear
+  gain. It stays available and off.
+- General-reading rehearsal: behind on seed 7 (27 against 40) and on average; it stays off. With
+  real reading text (TinyStories) the result could differ; the synthetic stories are a weak
+  stand-in.
+- Ordinary training after the fixes, seed 211 (the one seed with an identical earlier run):
+  37 answers against 34, held-out loss 0.91 against 0.96, course-1 exam 0.65 against 0.63. One
+  seed: suggestive, not proven.
+
 ## Decisions still open
 
 | # | Decision | Status |
