@@ -392,6 +392,7 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         dropout: s.dropout,
         reading_share: s.reading_share,
         reading: opts.reading.clone(),
+        blend: s.blend,
         ..SessionConfig::default()
     }
 }

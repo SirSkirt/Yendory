@@ -749,6 +749,35 @@ impl Bicameral {
         t.backward(loss, scale);
         value
     }
+    /// A model `alpha` of the way from `self` to `other` (0 = `self`, 1 = `other`): weights and
+    /// the AdamW moments interpolated alike (both moments stay valid: the second is an average
+    /// of non-negative values), the later step count, and `other`'s tokenizer and design. The
+    /// two must be the same network: configuration, design, vocabulary and parameter layout.
+    pub fn blend_toward(&self, other: &Bicameral, alpha: f32) -> Result<Bicameral, String> {
+        if !(0. ..=1.).contains(&alpha) {
+            return Err("The blend share must be between 0 and 1".into());
+        }
+        let same_layout = self.slots.len() == other.slots.len()
+            && self.slots.iter().zip(&other.slots).all(|(a, b)| a.name == b.name && a.range == b.range);
+        if self.config != other.config
+            || self.neuro != other.neuro
+            || self.tokenizer.words() != other.tokenizer.words()
+            || !same_layout
+            || self.weights.len() != other.weights.len()
+        {
+            return Err("Only two versions of the same network can be blended".into());
+        }
+        let mix = |a: &[f32], b: &[f32]| -> Vec<f32> {
+            a.iter().zip(b).map(|(x, y)| (1. - alpha) * x + alpha * y).collect()
+        };
+        let mut out = other.clone();
+        out.weights = mix(&self.weights, &other.weights);
+        out.momentum = mix(&self.momentum, &other.momentum);
+        out.variance = mix(&self.variance, &other.variance);
+        out.step = self.step.max(other.step);
+        out.stored_config_json = None;
+        Ok(out)
+    }
     /// One AdamW step on the parameters `focus` selects. Returns the norm of the gradients it
     /// applied (the focused groups'), by which they were clipped to at most 1.
     pub fn adam_step(&mut self, gradients: &[f32], lr: f32, focus: Focus) -> Result<f32, String> {
@@ -814,6 +843,51 @@ impl Bicameral {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Blending checks it is given two versions of one network, interpolates weights and AdamW
+    /// state, keeps the later step, and the result trains and survives a checkpoint round trip.
+    #[test]
+    fn blending_keeps_checkpoint_and_optimizer_state_valid() {
+        let neuro = super::neuro::presets().into_iter().next().unwrap();
+        for start in [
+            Bicameral::with_config(Config::default(), 3),
+            Bicameral::with_design(neuro.config, Some(neuro.design), 3),
+        ] {
+            let mut trained = start.clone();
+            for _ in 0..3 {
+                trained.train_text("U: Where is the key?\nN: In the box.\n", 3e-3, Focus::Joint).unwrap();
+            }
+            assert_eq!(start.blend_toward(&trained, 0.).unwrap().weights, start.weights);
+            let one = start.blend_toward(&trained, 1.).unwrap();
+            assert_eq!(one.weights, trained.weights);
+            assert_eq!(one.momentum, trained.momentum);
+            assert_eq!(one.variance, trained.variance);
+            let half = start.blend_toward(&trained, 0.5).unwrap();
+            assert_eq!(half.step, trained.step);
+            for i in [0, start.weights.len() / 2, start.weights.len() - 1] {
+                assert!((half.weights[i] - (start.weights[i] + trained.weights[i]) / 2.).abs() < 1e-6);
+            }
+            assert!(half.variance.iter().all(|v| v.is_finite() && *v >= 0.));
+            assert!(half.momentum.iter().all(|m| m.is_finite()));
+            // A checkpoint round trip keeps everything; training continues from it.
+            let back = Bicameral::from_bytes(&half.to_bytes().unwrap()).unwrap();
+            assert_eq!(back.weights, half.weights);
+            assert_eq!(back.momentum, half.momentum);
+            assert_eq!(back.variance, half.variance);
+            assert_eq!(back.step, half.step);
+            assert_eq!(back.neuro, half.neuro);
+            let mut next = back.clone();
+            let loss = next.train_text("U: Where is the key?\nN: In the box.\n", 3e-3, Focus::Joint).unwrap();
+            assert!(loss.is_finite() && next.step == half.step + 1);
+            // Different networks are refused.
+            assert!(start
+                .blend_toward(&start.with_word_capacity(start.word_capacity() + 8, 1).unwrap(), 0.5)
+                .is_err());
+            assert!(start.blend_toward(&trained, 1.5).is_err());
+        }
+        let other = Bicameral::with_config(Config { blocks: 3, split: 1, ..Config::default() }, 3);
+        assert!(Bicameral::with_config(Config::default(), 3).blend_toward(&other, 0.5).is_err());
+    }
 
     fn dropout(rate: f32, seed: u64) -> Ablation {
         Ablation { dropout: Some(Dropout { rate, seed, row: 0 }), ..Ablation::default() }

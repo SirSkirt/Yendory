@@ -230,6 +230,8 @@ pub struct CourseSettings {
     /// Share of each epoch's rows taken from general reading text (0 = off; the text comes from
     /// `RunOptions::reading`; see `SessionConfig::reading_share`).
     pub reading_share: f32,
+    /// Weight blending: one more candidate per epoch (0 = off; see `SessionConfig::blend`).
+    pub blend: f32,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -249,6 +251,7 @@ impl Default for CourseSettings {
             retention_units: 16,
             dropout: 0.,
             reading_share: 0.,
+            blend: 0.,
         }
     }
 }

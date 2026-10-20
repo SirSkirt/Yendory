@@ -273,7 +273,13 @@ fn training_switches_off_change_nothing() {
         teach(&start, &lesson, &archive, cfg, &mut |_| {}, &AtomicBool::new(false)).unwrap()
     };
     let base = run(&quick());
-    let off = run(&SessionConfig { dropout: 0., reading_share: 0., reading: Some(stories()), ..quick() });
+    let off = run(&SessionConfig {
+        dropout: 0.,
+        reading_share: 0.,
+        reading: Some(stories()),
+        blend: 0.,
+        ..quick()
+    });
     assert_eq!(base.model.weights, off.model.weights);
     assert_eq!(base.epochs, off.epochs);
 }
@@ -329,4 +335,40 @@ fn dropout_and_reading_rehearsal_train() {
             }
         }
     }
+}
+
+/// Weight blending adds one candidate per epoch, half way from the epoch's starting model to its
+/// most promising candidate; it trains no steps, is judged like the others, and when selected the
+/// accepted model is exactly that blend.
+#[test]
+fn blended_candidate_is_judged_each_epoch() {
+    let (lesson, archive) = course();
+    let start = model();
+    let cfg = SessionConfig { blend: 0.5, epochs: 3, ..quick() };
+    let r = teach(&start, &lesson, &archive, &cfg, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+    for e in &r.epochs {
+        assert_eq!(e.candidates.len(), 5, "four trained candidates and a blend");
+        let blend = e.candidates.last().unwrap();
+        assert!(blend.focus.starts_with("blend:"), "{}", blend.focus);
+        assert_eq!(blend.train_loss, 0.);
+        let source = &blend.focus["blend:".len()..];
+        let src = e.candidates[..4].iter().find(|c| c.focus == source).unwrap();
+        assert_eq!(blend.step, src.step, "the blend keeps its source's step count");
+        // The source is the most promising trained candidate.
+        for c in &e.candidates[..4] {
+            assert!(
+                (c.score.exact_correct, std::cmp::Reverse(ordered(c.score.heldout_loss)))
+                    <= (src.score.exact_correct, std::cmp::Reverse(ordered(src.score.heldout_loss)))
+            );
+        }
+        for c in &e.candidates {
+            assert_ne!(c.selected, !c.rejections.is_empty());
+        }
+    }
+    let tally = CandidateTally::of(&r.epochs);
+    eprintln!("{}", serde_json::to_string(&tally).unwrap());
+}
+
+fn ordered(x: f32) -> i64 {
+    (x as f64 * 1e6) as i64
 }

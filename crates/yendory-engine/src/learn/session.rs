@@ -104,6 +104,11 @@ pub struct SessionConfig {
     /// Not saved with settings.
     #[serde(skip)]
     pub reading: Option<std::sync::Arc<Vec<String>>>,
+    /// Weight blending (0 = off): each epoch also judges, as one more candidate, the model this
+    /// share of the way from the epoch's starting model to its most promising candidate (the
+    /// most held-out answers, then the lowest held-out loss). No extra training steps.
+    #[serde(default)]
+    pub blend: f32,
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -175,6 +180,7 @@ impl Default for SessionConfig {
             dropout: 0.,
             reading_share: 0.,
             reading: None,
+            blend: 0.,
         }
     }
 }
@@ -417,7 +423,10 @@ impl CandidateTally {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CandidateRecord {
     pub epoch: u32,
+    /// The part trained ("dense", "transformer", "interconnect", "joint"), or "blend:<part>"
+    /// for a weight-blended candidate.
     pub focus: String,
+    /// Mean training loss of the candidate's epoch (0 for a blend: it trains no steps).
     pub train_loss: f32,
     pub score: Score,
     pub eligible: bool,
@@ -620,7 +629,7 @@ impl Judge<'_> {
     fn judge(
         &self,
         ci: usize,
-        focus: Focus,
+        label: &str,
         train_loss: f32,
         cand: Bicameral,
         (s, report, panel): Scored,
@@ -630,7 +639,20 @@ impl Judge<'_> {
         plateau: &mut Option<Best>,
         records: &mut Vec<CandidateRecord>,
         observer: &mut dyn FnMut(&Event),
+        promising: Option<&mut Option<(usize, Bicameral, Score)>>,
     ) {
+        // Weight blending: remember the most promising candidate (most held-out answers, then
+        // lowest held-out loss).
+        if let Some(p) = promising {
+            let better = s.heldout_loss.is_finite()
+                && p.as_ref().map_or(true, |(_, _, b)| {
+                    s.exact_correct > b.exact_correct
+                        || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
+                });
+            if better {
+                *p = Some((ci, cand.clone(), s.clone()));
+            }
+        }
         let (cfg, epoch, baseline, base_panel_correct) =
             (self.cfg, self.epoch, self.baseline, self.base_panel_correct);
         let mut reasons = Vec::new();
@@ -727,7 +749,7 @@ impl Judge<'_> {
         let safe = rejections == [Rejection::NoImprovement];
         let record = CandidateRecord {
             epoch,
-            focus: focus_name(focus).into(),
+            focus: label.into(),
             train_loss,
             score: s.clone(),
             eligible,
@@ -831,6 +853,9 @@ pub fn teach_rewarded(
         start.tokenizer.set_words(words);
     }
 
+    if !(0. ..=1.).contains(&cfg.blend) {
+        return Err("The blend share must be between 0 and 1".into());
+    }
     if !(0. ..1.).contains(&cfg.dropout) {
         return Err("Dropout must be at least 0 and below 1".into());
     }
@@ -1020,6 +1045,8 @@ pub fn teach_rewarded(
         let mut records = Vec::new();
         let mut best: Option<Best> = None;
         let mut plateau: Option<Best> = None;
+        let blending = cfg.blend > 0.;
+        let mut promising: Option<(usize, Bicameral, Score)> = None;
         // With GPU training the CPU scores each candidate while the GPU trains the next one
         // (every candidate of an epoch starts from the same working model). Candidates are
         // still judged one by one in order, so the result is the same as scoring inline.
@@ -1068,7 +1095,7 @@ pub fn teach_rewarded(
                         Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
                     j.judge(
                         p.ci,
-                        p.focus,
+                        focus_name(p.focus),
                         p.train_loss,
                         cand,
                         scored?,
@@ -1078,6 +1105,7 @@ pub fn teach_rewarded(
                         &mut plateau,
                         &mut records,
                         observer,
+                        blending.then_some(&mut promising),
                     );
                 }
                 let probes = &probes;
@@ -1093,7 +1121,7 @@ pub fn teach_rewarded(
                         Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
                     j.judge(
                         ci,
-                        focus,
+                        focus_name(focus),
                         train_loss,
                         cand,
                         scored,
@@ -1103,6 +1131,7 @@ pub fn teach_rewarded(
                         &mut plateau,
                         &mut records,
                         observer,
+                        blending.then_some(&mut promising),
                     );
                 }
             }
@@ -1111,7 +1140,7 @@ pub fn teach_rewarded(
                 let j = Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
                 j.judge(
                     p.ci,
-                    p.focus,
+                    focus_name(p.focus),
                     p.train_loss,
                     cand,
                     scored?,
@@ -1121,6 +1150,7 @@ pub fn teach_rewarded(
                     &mut plateau,
                     &mut records,
                     observer,
+                    blending.then_some(&mut promising),
                 );
             }
             Ok(false)
@@ -1129,13 +1159,35 @@ pub fn teach_rewarded(
             stopped = true;
             break 'epochs;
         }
+        // Weight blending: one more candidate, part of the way from the epoch's starting model
+        // to its most promising candidate, judged like the others (it trains no steps).
+        if let Some((pci, cand, _)) = promising.take() {
+            let blended = working.blend_toward(&cand, cfg.blend)?;
+            let scored = score(&blended, &probes, dense)?;
+            let label = format!("blend:{}", records[pci].focus);
+            let j = Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+            j.judge(
+                records.len(),
+                &label,
+                0.,
+                blended,
+                scored,
+                &accepted_score,
+                &accepted_correct,
+                &mut best,
+                &mut plateau,
+                &mut records,
+                observer,
+                None,
+            );
+        }
 
         let (mut continued, mut restored) = (None, false);
         if best.is_none() {
             match plateau.take() {
                 Some((ci, cand, _, _, _)) => {
                     records[ci].continued = true;
-                    continued = Some(focus_name(foci[ci]).to_string());
+                    continued = Some(records[ci].focus.clone());
                     working = cand;
                 }
                 None => {
@@ -1146,12 +1198,12 @@ pub fn teach_rewarded(
         }
         let selected = best.map(|(ci, cand, s, correct, report)| {
             records[ci].selected = true;
+            let winner = records[ci].focus.clone();
             // Candidates that improved on the accepted model but lost to this one.
             for (i, r) in records.iter_mut().enumerate() {
                 if i != ci && r.rejections.is_empty() {
                     r.rejections.push(Rejection::Outranked);
-                    r.reasons
-                        .push(format!("improved, but the {} candidate was better", focus_name(foci[ci])));
+                    r.reasons.push(format!("improved, but the {winner} candidate was better"));
                 }
             }
             working = cand.clone();
@@ -1160,7 +1212,7 @@ pub fn teach_rewarded(
             accepted_correct = correct;
             accepted_report = report.clone();
             learned = true;
-            (focus_name(foci[ci]).to_string(), report)
+            (records[ci].focus.clone(), report)
         });
         let sample_replies = selected
             .as_ref()
