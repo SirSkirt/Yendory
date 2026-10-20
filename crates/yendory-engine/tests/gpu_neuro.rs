@@ -174,3 +174,35 @@ fn neuro_reads_on_the_gpu() {
     }
     close("weights after reading", &gpu.model.weights, &cpu.model.weights);
 }
+
+/// Nova Neuro's GPU memory stays bounded over batches of many lengths (course lessons pad
+/// each batch to its longest row).
+#[test]
+fn neuro_gpu_memory_stays_bounded_over_varied_lengths() {
+    use yendory_engine::Focus;
+    let Some(gpu) = gpu() else { return };
+    let model = neuro(12);
+    let mut g = GpuModel::upload(&gpu, &model).unwrap();
+    let text = "Tom went to the garden. Then Tom moved to the office. Where is Tom? Tom is in the office. "
+        .repeat(4);
+    let ids = model.tokenizer.encode(&text).unwrap();
+    let longest = (ids.len() - 1).min(model.config.max_tokens);
+    let batch = |len: usize| -> Vec<Row> {
+        (0..4)
+            .map(|i| {
+                let n = (len - i * 3).max(4);
+                Row { ids: ids[..n].to_vec(), targets: ids[1..n + 1].to_vec(), mask: vec![1.; n] }
+            })
+            .collect()
+    };
+    g.train_step(&model, &batch(longest), Ablation::default(), 1e-4, Focus::Joint).unwrap();
+    let one = g.memory_bytes();
+    let mut peak = one;
+    for step in 0..40 {
+        let len = 12 + (step * 37) % (longest - 12);
+        g.train_step(&model, &batch(len), Ablation::default(), 1e-4, Focus::Joint).unwrap();
+        peak = peak.max(g.memory_bytes());
+    }
+    println!("Neuro GPU memory: one longest step {one} bytes, peak over 40 varied steps {peak} bytes");
+    assert!(peak <= 3 * one, "memory grew with the number of batch lengths: {peak} vs {one}");
+}
