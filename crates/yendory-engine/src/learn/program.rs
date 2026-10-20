@@ -451,7 +451,7 @@ fn plan_remediation(
         target_names: targets.iter().map(|&i| prep.lessons[i].name.clone()).collect(),
         targets,
         done: 0,
-        description: format!("{}; learning rate {learning_rate:.1e}", strategy.describe()),
+        description: format!("{}; learning rate {}", strategy.describe(), super::rate_text(learning_rate)),
         grade_after: None,
         reverted: false,
     })

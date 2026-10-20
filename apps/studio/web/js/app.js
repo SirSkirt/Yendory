@@ -406,6 +406,21 @@ function setTeaching(on) {
 }
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
+
+// A learning rate the way it is entered: 0.0001, 0.00025, 0.001 (never 1.0e-4).
+function rateText(x) {
+  if (!x || !Number.isFinite(x)) return String(x);
+  const r = Number(x.toPrecision(3));
+  const decimals = Math.min(20, Math.max(0, 2 - Math.floor(Math.log10(Math.abs(r)))));
+  return r.toFixed(decimals).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+// The rate in use, and the rate you set when it differs: training starts below it (warm-up)
+// and ends below it (the rate eases off towards the end of a run).
+function rateLine(now, set, warming) {
+  if (!set || Math.abs(now - set) <= set * 0.005) return `learning rate ${rateText(now)}`;
+  return `learning rate ${rateText(now)} (${warming ? "warming up to" : "easing off from"} the ${rateText(set)} you set)`;
+}
+let readRateSet = 0;
 const FOCI = ["dense", "transformer", "interconnect", "joint"];
 // Candidates of each bicameral education stage, in the Engine's order (with Foundation, each
 // part the stage may train is also tried on its own).
@@ -430,7 +445,7 @@ $("teach").addEventListener("click", safe(async () => {
     requeue: $("optRequeue").checked,
     education: $("optEducation").value,
   };
-  progress = { files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
+  progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
   $("courseTable").tBodies[0].replaceChildren();
@@ -485,7 +500,8 @@ function onTeachEvent(e) {
   } else if (e.type === "attempt_started") {
     progress.epochs = e.epochs;
     const what = e.attempt === 0 ? "first attempt" : `retry ${e.attempt} of ${e.attempts - 1}${e.remedy ? ": " + e.remedy : ""}`;
-    progress.attempt = `${what} · rate ${e.learning_rate.toExponential(1)} · ${e.strategy} study · ${e.epochs} epochs`;
+    progress.rateSet = e.learning_rate;
+    progress.attempt = `${what} · learning rate ${rateText(e.learning_rate)} · ${e.strategy} study · ${e.epochs} epochs`;
     $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note" }, progress.attempt)));
   } else if (e.type === "diagnosed") {
     const d = e.diagnosis;
@@ -502,7 +518,7 @@ function onTeachEvent(e) {
       if (progress.candidates === 1) progress.candidate = 0;
       const inFile = (((s.epoch - 1) * progress.candidates + progress.candidate) * s.batches + s.batch) / (progress.epochs * progress.candidates * s.batches);
       $("progressBar").style.width = (100 * Math.min(1, (progress.done + Math.min(1, inFile)) / progress.files)).toFixed(1) + "%";
-      $("progressLine").textContent = `${progress.attempt} — epoch ${s.epoch}/${progress.epochs} · ${s.focus} candidate · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)} · learning rate ${s.learning_rate.toExponential(2)}`;
+      $("progressLine").textContent = `${progress.attempt} — epoch ${s.epoch}/${progress.epochs} · ${s.focus} candidate · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)} · ${rateLine(s.learning_rate, progress.rateSet, s.epoch === 1 && s.learning_rate < progress.rateSet)}`;
     } else if (s.type === "candidate") {
       const decision = s.eligible
         ? (s.reasons.length ? el("span", { class: "warn" }, s.reasons.join("; ")) : el("span", { class: "ok" }, "eligible"))
@@ -770,6 +786,7 @@ $("read").addEventListener("click", safe(async () => {
   $("readTitle").textContent = `${active.name} is reading ${parts.map(c => c.name).join(" + ")}${options.mode === "bicameral" ? " (bicameral)" : ""}${deviceLabel()}`;
   await invoke("read_corpus", { options });
   readStart = 0;
+  readRateSet = options.learningRate;
   setTeaching(true);
   say("Reading started.");
 }, "Read"));

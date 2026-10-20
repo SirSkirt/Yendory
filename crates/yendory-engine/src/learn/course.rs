@@ -333,8 +333,9 @@ fn diagnose(
         Cause::Unstable => {
             next.cfg.learning_rate = (previous.cfg.learning_rate * 0.5).max(base.retry.min_learning_rate);
             format!(
-                "gentler steps: learning rate {:.1e} -> {:.1e}",
-                previous.cfg.learning_rate, next.cfg.learning_rate
+                "gentler steps: learning rate {} -> {}",
+                super::rate_text(previous.cfg.learning_rate),
+                super::rate_text(next.cfg.learning_rate)
             )
         }
         Cause::Forgetting => {
@@ -358,8 +359,9 @@ fn diagnose(
             next.cfg.epochs = base.epochs.max(8);
             format!(
                 "balanced practice: the {wrong} question(s) it gets wrong twice and every question it knows once, \
-                 learning rate {:.1e}, {} epochs",
-                next.cfg.learning_rate, next.cfg.epochs
+                 learning rate {}, {} epochs",
+                super::rate_text(next.cfg.learning_rate),
+                next.cfg.epochs
             )
         }
         Cause::NotLearned => {

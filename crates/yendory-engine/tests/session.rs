@@ -372,3 +372,21 @@ fn blended_candidate_is_judged_each_epoch() {
 fn ordered(x: f32) -> i64 {
     (x as f64 * 1e6) as i64
 }
+
+/// Learning rates are shown the way they are entered.
+#[test]
+fn rates_read_as_entered() {
+    use yendory_engine::learn::rate_text;
+    for (r, t) in [
+        (0.0001, "0.0001"),
+        (0.001, "0.001"),
+        (0.00025, "0.00025"),
+        (2.5e-7, "0.00000025"),
+        (1e-5, "0.00001"),
+        (0.0012345, "0.00123"),
+        (0.1, "0.1"),
+        (1.0, "1"),
+    ] {
+        assert_eq!(rate_text(r), t, "{r}");
+    }
+}

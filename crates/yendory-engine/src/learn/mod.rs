@@ -51,6 +51,23 @@ impl Rng {
 
 /// Warmup then cosine decay to `floor * peak` (reference `lr_schedule`). `step` counts from the
 /// start of the session.
+/// A learning rate as a plain decimal with three significant digits, the way it is entered:
+/// 0.0001, 0.00025, 0.001 (never "1.0e-4").
+pub fn rate_text(rate: f32) -> String {
+    if rate == 0. || !rate.is_finite() {
+        return format!("{rate}");
+    }
+    let r = rate as f64;
+    let rounded: f64 = format!("{r:.2e}").parse().unwrap_or(r);
+    let decimals = (2 - rounded.abs().log10().floor() as i32).clamp(0, 20) as usize;
+    let s = format!("{rounded:.decimals$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
+}
+
 pub fn lr_schedule(step: u64, peak: f32, warmup: u64, total: u64, floor: f32) -> f32 {
     if step < warmup {
         return peak * (step + 1) as f32 / warmup as f32;
