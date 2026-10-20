@@ -289,6 +289,31 @@ Findings:
   37 answers against 34, held-out loss 0.91 against 0.96, course-1 exam 0.65 against 0.63. One
   seed: suggestive, not proven.
 
+### Weight blending (seeds 7, 101, 211)
+
+The same harness and settings; blend share 0.5 (fixed in advance). With blending off training
+is unchanged, so the ordinary runs above are the baseline.
+
+| | Ordinary | Blend 0.5 |
+|---|---|---|
+| Held-out answers right at the end (of 108), seeds 7 / 101 / 211 | 40 / 37 / 37 | **41 / 41 / 42** |
+| Answers lost after their own course (sum) | 5 | **-2** (net regained) |
+| Lessons' held-out loss at the end (mean) | 0.833 | **0.809** |
+| Final exam course 1 (protected; mean of seeds) | **0.660** | 0.654 |
+| Final exam course 2 (protected; mean of seeds) | **0.163** | 0.122 |
+| Blends selected / epochs with a selection | - | 76 / 160 |
+
+Findings:
+- Blending gained answers on every seed (+1, +4, +5) with less forgetting and lower held-out
+  loss, and blends were chosen in about half the epochs that accepted a change.
+- **The protected exams do not confirm it**: course 1 is level and course 2 is lower. The
+  lessons' held-out questions are also what each session selects candidates on, and blending
+  adds a fifth candidate per epoch, so part of its gain on those questions can be selection on
+  the same questions rather than learning. The exams are independent of selection.
+- Blending stays available and off. Before more selection-based experiments, the held-out
+  questions should be split into a selection part and a separate verdict part (planned
+  improvement 5), so gains can be measured on questions no choice was made on.
+
 ## Decisions still open
 
 | # | Decision | Status |
