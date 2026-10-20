@@ -454,13 +454,43 @@ struct Dispatch {
 
 /// Buffers are reused between steps (and within a step once nothing needs them any more):
 /// the dispatches run in the order they are recorded, so a buffer released in the backward
-/// pass can hold a later result.
+/// pass can hold a later result. Sizes are rounded up to size classes, so batches of different
+/// lengths (lessons pad each batch to its longest row) share buffers, and a size class not
+/// used for [`KEEP_STEPS`] steps is released: GPU memory follows the recent batches instead of
+/// growing with every length ever seen.
 #[derive(Default)]
 struct Pool {
     free: HashMap<u64, Vec<wgpu::Buffer>>,
     /// Buffers for input data (written before a step runs), kept apart from the working
     /// buffers so an input never shares memory with anything the step computes.
     inputs: HashMap<u64, Vec<wgpu::Buffer>>,
+    /// Steps finished, and the last step each size class was asked for.
+    steps: u64,
+    last_use: HashMap<u64, u64>,
+}
+
+/// Steps a size class is kept after its last use.
+const KEEP_STEPS: u64 = 2;
+
+/// Bytes of the size class holding `bytes`: eight classes per power of two (at most 12.5%
+/// larger than asked), at least 256 bytes.
+fn size_class(bytes: u64) -> u64 {
+    let b = bytes.max(256);
+    let step = 1u64 << (63 - b.leading_zeros()).saturating_sub(3);
+    b.div_ceil(step) * step
+}
+
+impl Pool {
+    /// The end of a step: size classes unused for `KEEP_STEPS` steps are released.
+    fn end_step(&mut self) {
+        self.steps += 1;
+        let (now, last) = (self.steps, &self.last_use);
+        let keep = |size: &u64| last.get(size).is_some_and(|&s| s + KEEP_STEPS >= now);
+        self.free.retain(|size, _| keep(size));
+        self.inputs.retain(|size, _| keep(size));
+        let (free, inputs) = (&self.free, &self.inputs);
+        self.last_use.retain(|size, _| free.contains_key(size) || inputs.contains_key(size));
+    }
 }
 
 fn groups(threads: usize) -> (u32, u32, u32) {
@@ -603,10 +633,11 @@ impl<'a> GpuGraph<'a> {
     }
 
     fn alloc(&mut self, floats: usize) -> B {
-        let bytes = (floats.max(4) * 4) as u64;
+        let bytes = size_class((floats.max(4) * 4) as u64);
+        self.pool.last_use.insert(bytes, self.pool.steps);
         let buf = match self.pool.free.get_mut(&bytes).and_then(Vec::pop) {
             Some(b) => b,
-            None => self.gpu.storage(floats, "activation"),
+            None => self.gpu.storage((bytes / 4) as usize, "activation"),
         };
         self.bufs.push(buf);
         self.released.push(false);
@@ -633,16 +664,18 @@ impl<'a> GpuGraph<'a> {
             let buf = self.bufs[i].clone();
             self.pool.inputs.entry(buf.size()).or_default().push(buf);
         }
+        self.pool.end_step();
     }
 
     /// Input data (features, token ids, targets, loss weights) in a buffer of its own: it is
     /// written before the step runs, so it must not share memory with anything the step reuses.
-    /// Input buffers come from their own pool (sizes rounded up to a power of two, so batches
+    /// Input buffers come from their own pool (sizes rounded up to a size class, so batches
     /// of similar size reuse them) and return to it when the step finishes.
     fn upload(&mut self, mut bytes: Vec<u8>, _floats: usize) -> B {
         bytes.resize(bytes.len().max(16), 0);
         self.upload_bytes += bytes.len() as u64;
-        let size = (bytes.len() as u64).next_power_of_two().max(256);
+        let size = size_class(bytes.len() as u64);
+        self.pool.last_use.insert(size, self.pool.steps);
         let buf = match self.pool.inputs.get_mut(&size).and_then(Vec::pop) {
             Some(b) => b,
             None => self.gpu.device.create_buffer(&wgpu::BufferDescriptor {

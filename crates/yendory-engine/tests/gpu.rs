@@ -323,3 +323,35 @@ fn dropout_matches_on_every_device() {
     assert!(share.is_some(), "hybrid training was used");
     close("hybrid weights with dropout", &hybrid.weights, &cpu.weights);
 }
+
+/// GPU memory stays bounded when batches have many different lengths (lessons: every batch is
+/// padded to its longest row). Working buffers are reused across lengths and ones not needed for
+/// a while are released, so memory does not grow with the number of distinct lengths seen.
+#[test]
+fn gpu_memory_stays_bounded_over_varied_lengths() {
+    let Some(gpu) = gpu() else { return };
+    let model = Bicameral::with_config(Config::default(), 12);
+    let mut g = GpuModel::upload(&gpu, &model).unwrap();
+    let text =
+        "Once upon a time, a small cat found a red hat under the old tree and was very happy. ".repeat(4);
+    let ids = model.tokenizer.encode(&text).unwrap();
+    let batch = |len: usize| -> Vec<Row> {
+        (0..4)
+            .map(|i| {
+                let n = (len - i * 3).max(4);
+                Row { ids: ids[..n].to_vec(), targets: ids[1..n + 1].to_vec(), mask: vec![1.; n] }
+            })
+            .collect()
+    };
+    let longest = (ids.len() - 1).min(model.config.max_tokens);
+    g.train_step(&model, &batch(longest), Ablation::default(), 1e-4, Focus::Joint).unwrap();
+    let one = g.memory_bytes();
+    let mut peak = one;
+    for step in 0..60 {
+        let len = 12 + (step * 37) % (longest - 12);
+        g.train_step(&model, &batch(len), Ablation::default(), 1e-4, Focus::Joint).unwrap();
+        peak = peak.max(g.memory_bytes());
+    }
+    println!("GPU memory: one longest step {one} bytes, peak over 60 varied steps {peak} bytes");
+    assert!(peak <= 3 * one, "memory grew with the number of batch lengths: {peak} vs {one}");
+}
