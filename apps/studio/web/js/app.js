@@ -421,6 +421,8 @@ function rateLine(now, set, warming) {
   return `learning rate ${rateText(now)} (${warming ? "warming up to" : "easing off from"} the ${rateText(set)} you set)`;
 }
 let readRateSet = 0;
+// A reading sample as shown: no line breaks before the text, later ones marked ⏎.
+const sampleText = s => (s || "").replace(/^\n+/, "").replace(/\n/g, " ⏎ ");
 const FOCI = ["dense", "transformer", "interconnect", "joint"];
 // Candidates of each bicameral education stage, in the Engine's order (with Foundation, each
 // part the stage may train is also tried on its own).
@@ -815,7 +817,7 @@ function onReadEvent(e) {
       el("td", {}, e.accepted ? el("b", { class: "ok" }, "kept (new best)") : el("span", { class: "warn" }, e.reason || `not better than ${e.best_loss.toFixed(4)}`)),
       el("td", { class: "sample" }, ...(e.parts?.length ? e.parts : [{ name: "", held_out_loss: e.held_out_loss, sample_prompt: e.sample_prompt, sample: e.sample }]).map(p =>
         el("div", { class: "part-line" }, p.name ? el("b", {}, `${CATEGORY[p.category] || ""}${p.name ? " · " + p.name : ""}: ${p.held_out_loss.toFixed(4)} `) : "",
-          el("span", { class: "note" }, p.sample_prompt.replace(/\n/g, " ⏎ ")), " ", p.sample)))));
+          el("span", { class: "note" }, p.sample_prompt.replace(/\n/g, " ⏎ ")), " ", sampleText(p.sample))))));
   } else if (e.type === "finished" && e.early_stop) {
     log("INFO", "Reading stopped early: the held-out loss stopped improving.");
   }
@@ -996,7 +998,7 @@ async function loadHistory() {
     if (r.type === "reading_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),
       `Reading started${r.mode === "bicameral" ? " (bicameral)" : ""}: ${(r.corpora || [r.corpus]).map(c => `${c.name} (sha256 ${c.sha256.slice(0, 12)}; ${c.license})`).join(" + ")}, up to ${fmt(r.options.tokens)} tokens.`);
     if (r.type === "reading_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Reading ended with an error: " + r.error) : `Reading ${r.stopped ? "stopped" : "finished"} after ${fmt(r.tokens)} tokens; ${r.accepted ? "best checkpoint kept" : "model unchanged"}.`);
-    if (r.reading?.type === "evaluated") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Read ${fmt(r.reading.tokens)} tokens: held-out loss ${r.reading.held_out_loss.toFixed(4)} — ${r.reading.accepted ? "kept" : "not better"}.`, el("div", { class: "note mono" }, `${r.reading.sample_prompt} → ${r.reading.sample}`));
+    if (r.reading?.type === "evaluated") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Read ${fmt(r.reading.tokens)} tokens: held-out loss ${r.reading.held_out_loss.toFixed(4)} — ${r.reading.accepted ? "kept" : "not better"}.`, el("div", { class: "note mono" }, `${r.reading.sample_prompt} → ${sampleText(r.reading.sample)}`));
     if (r.type === "course_started") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), `Course started: ${r.files} file(s), ${r.options.epochs} epoch(s), ${r.options.foundation ? "Foundation" : "Joint only"}.`);
     if (r.type === "course_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)), r.error ? el("span", { class: "bad" }, "Course ended with an error: " + r.error) : `Course ${r.stopped ? "stopped" : "finished"}.`);
     if (e?.type === "file_finished") return el("div", { class: "record" }, el("span", { class: "when" }, when(r.time)),

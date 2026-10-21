@@ -381,8 +381,44 @@ fn sample_prompt(corpus: &Corpus) -> String {
     words.join(" ")
 }
 
+/// Tokens the model writes for a reading sample, at most.
+const SAMPLE_TOKENS: usize = 120;
+
+/// The model's own continuation of a sample prompt (greedy, nothing filtered), up to
+/// `SAMPLE_TOKENS` tokens. Line breaks before any text are skipped rather than ending the
+/// sample. A conversation reply (prompt ending in `N: `) ends at its line break; other text ends
+/// at a blank line or at the end of a document.
 fn sample(model: &Bicameral, prompt: &str) -> String {
-    super::eval::reply(model, prompt, 40, Ablation::default()).unwrap_or_default()
+    let run = || -> Result<String, String> {
+        let ids = model.tokenizer.encode(prompt)?;
+        let mut cache = crate::KvCache::new(model, Ablation::default());
+        let mut probs = Vec::new();
+        for &id in &ids {
+            probs = model.predict_cached(&mut cache, id)?;
+        }
+        let conversation = prompt.ends_with("N: ");
+        let mut out = Vec::new();
+        let mut text = String::new();
+        for _ in 0..SAMPLE_TOKENS {
+            let Some(next) = probs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0) else {
+                break;
+            };
+            out.push(next as crate::TokenId);
+            text = model.tokenizer.decode(&out)?.trim_start_matches('\n').to_string();
+            let end = if conversation { text.find('\n') } else { text.find("\n\n") };
+            let end = match (end, text.find("<|endoftext|>")) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            if let Some(i) = end {
+                text.truncate(i);
+                break;
+            }
+            probs = model.predict_cached(&mut cache, next as crate::TokenId)?;
+        }
+        Ok(text.trim_end().to_string())
+    };
+    run().unwrap_or_default()
 }
 
 /// Reads one corpus: trains on random windows of the training documents (the whole model, or
@@ -738,6 +774,38 @@ pub fn pretrain_mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reading samples: up to `SAMPLE_TOKENS` tokens of the model's own text, never starting
+    /// with a line break; a conversation reply stops at its line break; longer than the old
+    /// one-line, 40-token sample when the model keeps writing.
+    #[test]
+    fn samples_skip_leading_line_breaks_and_run_longer() {
+        let model = Bicameral::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/compat/fixtures/nova2-step15000.nnova2"
+        ))
+        .unwrap();
+        let old = |p: &str| super::super::eval::reply(&model, p, 40, Ablation::default()).unwrap();
+        for prompt in [
+            "Once upon a time, there was",
+            "Genesis 14",
+            "The cat",
+            "U: hello\nN: ",
+            "U: What is your name?\nN: ",
+        ] {
+            let s = sample(&model, prompt);
+            assert!(!s.starts_with('\n') && !s.contains("<|endoftext|>"), "{prompt:?} -> {s:?}");
+            assert!(model.tokenizer.encode(&s).unwrap().len() <= SAMPLE_TOKENS + 1);
+            if prompt.ends_with("N: ") {
+                assert!(!s.contains('\n'), "{prompt:?} -> {s:?}");
+                assert_eq!(s, old(prompt).trim_end(), "a reply is unchanged");
+            } else {
+                // Never shorter than the old sample once a leading line break is skipped.
+                assert!(s.len() + 1 >= old(prompt).trim().len(), "{prompt:?}: {s:?} vs {:?}", old(prompt));
+            }
+            eprintln!("{prompt:?} -> {s:?}");
+        }
+    }
 
     #[test]
     fn normalises_to_ascii() {
