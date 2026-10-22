@@ -10,6 +10,7 @@ pub mod eval;
 pub mod generate;
 pub mod grading;
 pub mod lessons;
+pub mod memory;
 pub mod practice;
 pub mod program;
 pub mod reflect;
@@ -345,6 +346,11 @@ pub struct Trainer {
     #[cfg(feature = "gpu")]
     hybrid: Option<Hybrid>,
     dirty: bool,
+    /// GPU training: each step's memory plan, adapted when a step does not fit.
+    #[cfg(feature = "gpu")]
+    fitter: memory::Fitter,
+    #[cfg(feature = "gpu")]
+    report: memory::MemoryReport,
 }
 
 impl Trainer {
@@ -358,17 +364,47 @@ impl Trainer {
             #[cfg(feature = "gpu")]
             hybrid: None,
             dirty: false,
+            #[cfg(feature = "gpu")]
+            fitter: memory::Fitter::default(),
+            #[cfg(feature = "gpu")]
+            report: memory::MemoryReport::default(),
         };
         #[cfg(feature = "gpu")]
         match device() {
             Device::Cpu => {}
             Device::Gpu(api) | Device::Hybrid(api) => {
-                let opened =
-                    crate::gpu::shared_with(api).and_then(|g| crate::gpu::GpuModel::upload(&g, model));
-                match (opened, device()) {
-                    (Ok(m), Device::Gpu(_)) => t.gpu = Some(m),
-                    (Ok(m), _) => t.hybrid = Some(Hybrid { gpu: m, gpu_share: 0.5 }),
-                    (Err(e), _) => notice(format!("Training on the CPU: the GPU cannot be used ({e})")),
+                let s = memory::memory_settings();
+                let hybrid = matches!(device(), Device::Hybrid(_));
+                let n = model.parameter_count();
+                let ram_ok = s.ram_allowance() >= 3 * n as u64 * 4;
+                // The optimizer state starts in system RAM in hybrid training (the CPU applies
+                // AdamW there anyway), when chosen (Manual), or when the model's own state
+                // would take most of the GPU budget (Automatic).
+                let in_ram = hybrid
+                    || (s.mode == memory::MemoryMode::Manual && s.optimizer_in_ram)
+                    || (s.mode == memory::MemoryMode::Automatic
+                        && ram_ok
+                        && s.gpu_budget()
+                            .is_some_and(|b| crate::gpu::GpuModel::fixed_bytes_for(n, false) > b / 10 * 8));
+                let opened = crate::gpu::shared_with(api)
+                    .and_then(|g| crate::gpu::GpuModel::upload_with(&g, model, in_ram));
+                match opened {
+                    Ok(mut m) => {
+                        m.set_budget(s.gpu_budget());
+                        t.report = memory::MemoryReport {
+                            device: m.gpu().name(),
+                            optimizer_in_ram: m.optimizer_in_ram(),
+                            gpu_bytes: m.memory_bytes(),
+                            gpu_budget_bytes: m.budget(),
+                            ..Default::default()
+                        };
+                        if hybrid {
+                            t.hybrid = Some(Hybrid { gpu: m, gpu_share: 0.5 });
+                        } else {
+                            t.gpu = Some(m);
+                        }
+                    }
+                    Err(e) => notice(format!("Training on the CPU: the GPU cannot be used ({e})")),
                 }
             }
         }
@@ -403,19 +439,114 @@ impl Trainer {
     ) -> Result<f32, String> {
         #[cfg(feature = "gpu")]
         if let Some(g) = self.gpu.as_mut() {
-            let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                g.train_step(model, rows, abl, lr, focus)
-            }))
-            .unwrap_or_else(|p| Err(format!("GPU step failed: {}", panic_text(p))));
-            match step {
-                Ok(loss) => {
-                    model.step = g.step;
-                    self.dirty = true;
-                    return Ok(loss);
+            let s = memory::memory_settings();
+            let shape = memory::StepShape {
+                parameters: model.parameter_count(),
+                activation_floats_per_token: Bicameral::activation_floats_for(
+                    &model.config,
+                    model.neuro.as_ref(),
+                ),
+                rows: rows.len(),
+                tokens: rows.iter().map(|r| r.ids.len()).max().unwrap_or(1),
+                vocab: model.config.vocab,
+            };
+            let ram_ok = g.optimizer_in_ram() || s.ram_allowance() >= shape.ram_offload_bytes();
+            let fixed = |ram| crate::gpu::GpuModel::fixed_bytes_for(shape.parameters, ram);
+            let started = std::time::Instant::now();
+            let mut failure = None;
+            // Each retry uses less GPU memory than the last, and there are few ways to do so.
+            for _ in 0..40 {
+                let plan = match self.fitter.plan(
+                    &s,
+                    &shape,
+                    fixed(false),
+                    fixed(true),
+                    ram_ok,
+                    g.optimizer_in_ram(),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                };
+                if plan.optimizer_in_ram && !g.optimizer_in_ram() {
+                    if let Err(e) = g.move_optimizer_to_ram(model) {
+                        failure = Some(e);
+                        break;
+                    }
+                    self.dirty = false;
                 }
-                Err(e) => {
-                    let g = self.gpu.take().unwrap();
-                    let before = model.step;
+                let before = (g.step, model.step);
+                let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    g.fit_step(model, rows, abl, lr, focus, plan.micro_rows)
+                }))
+                .unwrap_or_else(|p| Err(format!("GPU step failed: {}", panic_text(p))));
+                match step {
+                    Ok(st) => {
+                        model.step = g.step;
+                        self.dirty = !g.optimizer_in_ram();
+                        let r = &mut self.report;
+                        r.strategy = plan.describe(rows.len());
+                        r.micro_rows = (plan.micro_rows < rows.len()).then_some(plan.micro_rows);
+                        r.optimizer_in_ram = g.optimizer_in_ram();
+                        r.gpu_bytes = g.memory_bytes();
+                        r.gpu_budget_bytes = g.budget();
+                        if r.steps % 10 == 0 {
+                            r.gpu_allocated_bytes = g.gpu().allocated_bytes();
+                        }
+                        r.ram_offload_bytes = if r.optimizer_in_ram { shape.ram_offload_bytes() } else { 0 };
+                        r.transfer_bytes += st.transfer_bytes;
+                        r.transfer_seconds += st.transfer_seconds;
+                        r.steps += 1;
+                        r.tokens += rows.iter().map(|r| r.ids.len() as u64).sum::<u64>();
+                        r.step_seconds += started.elapsed().as_secs_f64();
+                        memory::publish_report(r);
+                        return Ok(st.loss);
+                    }
+                    Err(e) if memory::is_out_of_memory(&e) && (g.step, model.step) == before => {
+                        match self.fitter.after_out_of_memory(&s, &plan, &shape, ram_ok) {
+                            Some(change) => {
+                                self.report.refits += 1;
+                                self.report.note = Some(format!(
+                                    "A step did not fit in GPU memory ({}); training goes on with {change}",
+                                    plan.describe(rows.len())
+                                ));
+                            }
+                            None => {
+                                failure = Some(format!(
+                                    "{e}. It does not fit in GPU memory even as planned ({}){}",
+                                    plan.describe(rows.len()),
+                                    match s.mode {
+                                        memory::MemoryMode::Manual => "; choose fewer rows per micro-batch, the optimizer state in RAM, or Automatic memory",
+                                        memory::MemoryMode::GpuOnly => "; Automatic memory could move the optimizer state to system RAM",
+                                        memory::MemoryMode::Automatic if !ram_ok => "; the system RAM limits do not allow moving more to RAM",
+                                        _ => "",
+                                    }
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) if g.optimizer_in_ram() && model.step != before.1 => {
+                        // The CPU applied the step (the model is up to date); the GPU stops.
+                        self.gpu = None;
+                        self.dirty = false;
+                        notice(format!(
+                            "The GPU failed ({e}) after the step was applied; training continues on the CPU"
+                        ));
+                        return Err(format!("The GPU failed ({e}) while the step was being applied"));
+                    }
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            if let Some(e) = failure {
+                let g = self.gpu.take().unwrap();
+                // With the optimizer state in system RAM the model is already up to date.
+                if self.dirty {
                     let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.download(model)))
                         .unwrap_or_else(|p| Err(panic_text(p)));
                     if let Err(read) = read {
@@ -424,10 +555,15 @@ impl Trainer {
                              the steps since the last check are lost, saved checkpoints are unchanged"
                         ));
                     }
-                    self.dirty = false;
-                    let _ = before;
-                    notice(format!("The GPU failed ({e}); training continued on the CPU"));
                 }
+                self.dirty = false;
+                self.report.note = Some(format!("Training moved to the CPU: {e}"));
+                memory::publish_report(&self.report);
+                notice(if memory::is_out_of_memory(&e) {
+                    format!("Training continued on the CPU: {e}")
+                } else {
+                    format!("The GPU failed ({e}); training continued on the CPU")
+                });
             }
         }
         #[cfg(feature = "gpu")]
@@ -499,6 +635,18 @@ impl Trainer {
         #[cfg(feature = "gpu")]
         {
             self.gpu.as_ref().or(self.hybrid.as_ref().map(|h| &h.gpu)).map(|g| g.memory_bytes())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            None
+        }
+    }
+
+    /// GPU training: how memory is used (strategy, GPU and RAM bytes, transfers), measured.
+    pub fn memory_report(&self) -> Option<memory::MemoryReport> {
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu.is_some().then(|| self.report.clone())
         }
         #[cfg(not(feature = "gpu"))]
         {

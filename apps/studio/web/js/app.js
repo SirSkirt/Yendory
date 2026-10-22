@@ -191,7 +191,7 @@ const deviceLabel = () => cpuFallback || !deviceInfo || deviceInfo.active === "c
 function onDeviceNotice(text) {
   log("WARN", text);
   say(text);
-  if (!String(text).startsWith("Training on the CPU")) return;
+  if (!String(text).includes("on the CPU")) return;
   cpuFallback = true;
   for (const id of ["readTitle", "progressTitle", "planNow"]) {
     const t = $(id);

@@ -30,13 +30,13 @@ jobs:
         if: runner.os == 'Linux'
         env:
           YENDORY_GPU_SOFTWARE: "1"
-        run: cargo test --release --features gpu --test gpu --test gpu_neuro -- --nocapture --test-threads 1
+        run: cargo test --release --features gpu --test gpu --test gpu_neuro --test gpu_memory -- --nocapture --test-threads 1
       - name: GPU training matches the CPU through DirectX 12 with DXC (Windows software GPU, WARP)
         if: runner.os == 'Windows'
         env:
           YENDORY_GPU_SOFTWARE: "1"
           WGPU_BACKEND: dx12
-        run: cargo test --release --features dxc --test gpu --test gpu_neuro -- --nocapture --test-threads 1
+        run: cargo test --release --features dxc --test gpu --test gpu_neuro --test gpu_memory -- --nocapture --test-threads 1
       - name: Fixture integrity
         shell: bash
         working-directory: tests/compat/fixtures

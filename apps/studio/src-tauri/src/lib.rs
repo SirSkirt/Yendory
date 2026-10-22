@@ -23,6 +23,7 @@ use yendory_engine::{
 mod courses;
 mod designer;
 mod growth;
+mod memory;
 mod neuro;
 mod practice;
 mod reading;
@@ -1500,6 +1501,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Studio::default())
+        .setup(|app| {
+            // Before anything opens the GPU: the safety margin is set when it is opened.
+            memory::apply_stored(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             status,
             growth::growth_view,
@@ -1542,6 +1548,8 @@ pub fn run() {
             training_device,
             set_training_device,
             set_cpu_threads,
+            memory::training_memory_view,
+            memory::set_training_memory,
             benchmark_training,
             page_settings,
             save_page_settings,

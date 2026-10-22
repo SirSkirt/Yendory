@@ -1,6 +1,6 @@
 [package]
 name = "yendory-engine"
-version = "0.4.2"
+version = "0.4.3"
 description = "Yendory Engine: the Bicameral neural architecture (Transformer + Dense + interconnect), no ML frameworks"
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,11 @@ serde_json = "1"
 wgpu = { version = "30", optional = true }
 pollster = { version = "1", optional = true }
 bytemuck = { version = "1", optional = true, features = ["derive"] }
+# System RAM available for offloading training state (GPU builds).
+sysinfo = { version = "0.37", optional = true, default-features = false, features = ["system"] }
 
 [features]
-gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:sysinfo"]
 # DirectX 12 with Microsoft's current shader compiler (DXC) built in, instead of falling back to
 # the old FXC compiler when dxcompiler.dll is not installed. Only affects Windows (MSVC) builds.
 dxc = ["gpu", "wgpu/static-dxc"]

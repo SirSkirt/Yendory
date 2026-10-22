@@ -70,6 +70,7 @@
       <span class="note" id="benchNote">Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest.</span>
     </div>
     <div id="benchResult" hidden></div>
+    <div id="memoryPanel"></div>
     <div class="line-form">
       <label for="archChoice">Architecture</label>
       <select id="archChoice">
@@ -209,6 +210,7 @@
     <div class="entry" id="readEntry" hidden>
       <h3 id="readTitle">Reading</h3>
       <div id="readCard" hidden></div>
+      <p class="note memory-live" data-memory-live hidden></p>
       <table class="ledger compact" id="evalTable">
         <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Each corpus: held-out loss and a sample written by the model</th></tr></thead>
         <tbody></tbody>
@@ -261,6 +263,7 @@
     <div class="entry" id="progressEntry" hidden>
       <h3 id="progressTitle">Teaching</h3>
       <div id="teachCard" hidden></div>
+      <p class="note memory-live" data-memory-live hidden></p>
       <div class="meter"><div id="progressBar"></div></div>
       <p class="mono" id="progressLine">—</p>
       <table class="ledger compact" id="candidateTable">
@@ -430,6 +433,7 @@
       </div>
       <div class="entry" id="planProgress" hidden>
         <div id="planCard" hidden></div>
+        <p class="note memory-live" data-memory-live hidden></p>
         <h4 id="planNow">—</h4>
         <div class="meter"><div id="planBar"></div></div>
         <p class="mono" id="planLine">—</p>
@@ -753,5 +757,6 @@
 <script src="js/rewards.js"></script>
 <script src="js/neuro.js"></script>
 <script src="js/growth.js"></script>
+<script src="js/memory.js"></script>
 </body>
 </html>

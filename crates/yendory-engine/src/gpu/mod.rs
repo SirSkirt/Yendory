@@ -118,6 +118,8 @@ pub struct StepProfile {
 }
 
 const F32_SLOTS: usize = 7;
+/// Floats read back per part by [`Gpu::read_chunked`] (16 MB of staging memory).
+const READ_CHUNK: usize = 1 << 22;
 /// Bytes of kernel parameters per dispatch (16 u32).
 const PARAM_BYTES: u64 = 64;
 /// The largest head dimension the attention kernels hold in registers.
@@ -202,6 +204,12 @@ impl Gpu {
         if std::env::var_os("WGPU_BACKEND").is_none() || api != Api::Auto {
             desc.backends = api.backends();
         }
+        // The GPU safety margin: creating a buffer fails (out of memory) once this share of the
+        // GPU memory budget the operating system reports is used (DirectX 12; Vulkan with the
+        // memory-budget extension), instead of spilling into shared system memory or losing the
+        // device. Training then retries the step with less memory (`learn::memory`).
+        let margin = crate::learn::memory::memory_settings().gpu_margin_percent.clamp(1, 50);
+        desc.memory_budget_thresholds.for_resource_creation = Some(100 - margin);
         let instance = wgpu::Instance::new(desc);
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         adapters.retain(|a| allow_software || a.get_info().device_type != wgpu::DeviceType::Cpu);
@@ -363,6 +371,25 @@ impl Gpu {
         Ok(bytemuck::cast_slice::<u8, f32>(&bytes)[..floats].to_vec())
     }
 
+    /// Reads a large buffer in parts of [`READ_CHUNK`] floats, so the staging memory on the
+    /// GPU stays small (reading gradients when the optimizer state is in system RAM).
+    fn read_chunked(&self, buffer: &wgpu::Buffer, floats: usize) -> Result<Vec<f32>, String> {
+        let mut out = Vec::with_capacity(floats);
+        let mut at = 0;
+        while at < floats {
+            let n = READ_CHUNK.min(floats - at);
+            let bytes = self.read_range(buffer, (at * 4) as u64, (n * 4) as u64)?;
+            out.extend_from_slice(bytemuck::cast_slice::<u8, f32>(&bytes));
+            at += n;
+        }
+        Ok(out)
+    }
+
+    /// Bytes the GPU's memory allocator has handed out (DirectX 12 and Vulkan), if it says.
+    pub fn allocated_bytes(&self) -> Option<u64> {
+        self.device.generate_allocator_report().map(|r| r.total_allocated_bytes)
+    }
+
     /// The GPU error reported since the last check, if any.
     fn check(&self) -> Result<(), String> {
         match self.error.lock().unwrap_or_else(|p| p.into_inner()).take() {
@@ -373,6 +400,11 @@ impl Gpu {
 
     /// Copies the first `bytes` bytes of a buffer back to the CPU (waits for the GPU).
     fn read_bytes(&self, buffer: &wgpu::Buffer, bytes: u64) -> Result<Vec<u8>, String> {
+        self.read_range(buffer, 0, bytes)
+    }
+
+    /// Copies `bytes` bytes of a buffer from `offset` back to the CPU (waits for the GPU).
+    fn read_range(&self, buffer: &wgpu::Buffer, offset: u64, bytes: u64) -> Result<Vec<u8>, String> {
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: bytes,
@@ -380,7 +412,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let mut enc = self.device.create_command_encoder(&Default::default());
-        enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, bytes);
+        enc.copy_buffer_to_buffer(buffer, offset, &staging, 0, bytes);
         self.queue.submit([enc.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         staging.map_async(wgpu::MapMode::Read, .., move |r| {
@@ -467,7 +499,17 @@ struct Pool {
     /// Steps finished, and the last step each size class was asked for.
     steps: u64,
     last_use: HashMap<u64, u64>,
+    /// Bytes of every buffer the pool has created and still holds (free or in use).
+    owned: u64,
+    /// At most this many bytes of working buffers (the GPU memory budget less the model's own
+    /// buffers); `None`: no limit beyond the GPU's.
+    budget: Option<u64>,
+    /// A buffer was refused during this step because of the budget: the step must not run.
+    over_budget: bool,
 }
+
+/// Buffers smaller than this are placeholders for refused allocations (never pooled).
+const SMALLEST_CLASS: u64 = 256;
 
 /// Steps a size class is kept after its last use.
 const KEEP_STEPS: u64 = 2;
@@ -475,23 +517,65 @@ const KEEP_STEPS: u64 = 2;
 /// Bytes of the size class holding `bytes`: eight classes per power of two (at most 12.5%
 /// larger than asked), at least 256 bytes.
 fn size_class(bytes: u64) -> u64 {
-    let b = bytes.max(256);
+    let b = bytes.max(SMALLEST_CLASS);
     let step = 1u64 << (63 - b.leading_zeros()).saturating_sub(3);
     b.div_ceil(step) * step
 }
 
 impl Pool {
+    fn with_budget(budget: Option<u64>) -> Pool {
+        Pool { budget, ..Pool::default() }
+    }
+
     /// The end of a step: size classes unused for `KEEP_STEPS` steps are released.
     fn end_step(&mut self) {
         self.steps += 1;
-        let (now, last) = (self.steps, &self.last_use);
-        let keep = |size: &u64| last.get(size).is_some_and(|&s| s + KEEP_STEPS >= now);
-        self.free.retain(|size, _| keep(size));
-        self.inputs.retain(|size, _| keep(size));
+        self.release_unused(KEEP_STEPS);
         let (free, inputs) = (&self.free, &self.inputs);
         self.last_use.retain(|size, _| free.contains_key(size) || inputs.contains_key(size));
     }
+
+    /// Releases the free buffers of size classes not asked for in the last `keep` steps (with
+    /// `keep` 0: not in the current step, so none of them is used by the step being recorded).
+    fn release_unused(&mut self, keep: u64) {
+        let (now, last) = (self.steps, &self.last_use);
+        let mut freed = 0;
+        for m in [&mut self.free, &mut self.inputs] {
+            m.retain(|size, v| {
+                let kept = last.get(size).is_some_and(|&s| s + keep >= now);
+                if !kept {
+                    freed += size * v.len() as u64;
+                }
+                kept
+            });
+        }
+        self.owned = self.owned.saturating_sub(freed);
+    }
+
+    /// Accounts for a new buffer of `bytes`; `false` (and the step marked over budget) when it
+    /// would exceed the budget even after releasing the free buffers this step does not use.
+    fn reserve(&mut self, bytes: u64) -> bool {
+        if let Some(budget) = self.budget {
+            if self.owned + bytes > budget {
+                self.release_unused(0);
+            }
+            if self.owned + bytes > budget {
+                self.over_budget = true;
+                return false;
+            }
+        }
+        self.owned += bytes;
+        true
+    }
+
+    /// Bytes of the buffers held between steps.
+    fn held_bytes(&self) -> u64 {
+        self.free.iter().chain(&self.inputs).map(|(size, v)| size * v.len() as u64).sum()
+    }
 }
+
+/// The error of a step that would exceed the GPU memory budget (nothing was run).
+pub const OVER_BUDGET: &str = "over the GPU memory budget";
 
 fn groups(threads: usize) -> (u32, u32, u32) {
     let g = threads.div_ceil(256).max(1);
@@ -637,7 +721,9 @@ impl<'a> GpuGraph<'a> {
         self.pool.last_use.insert(bytes, self.pool.steps);
         let buf = match self.pool.free.get_mut(&bytes).and_then(Vec::pop) {
             Some(b) => b,
-            None => self.gpu.storage((bytes / 4) as usize, "activation"),
+            None if self.pool.reserve(bytes) => self.gpu.storage((bytes / 4) as usize, "activation"),
+            // Over the budget: a placeholder; the step is refused before it runs.
+            None => self.gpu.dummies[0].clone(),
         };
         self.bufs.push(buf);
         self.released.push(false);
@@ -650,7 +736,9 @@ impl<'a> GpuGraph<'a> {
             if !self.released[i] {
                 self.released[i] = true;
                 let buf = self.bufs[i].clone();
-                self.pool.free.entry(buf.size()).or_default().push(buf);
+                if buf.size() >= SMALLEST_CLASS {
+                    self.pool.free.entry(buf.size()).or_default().push(buf);
+                }
             }
         }
     }
@@ -662,8 +750,11 @@ impl<'a> GpuGraph<'a> {
         }
         for i in std::mem::take(&mut self.inputs) {
             let buf = self.bufs[i].clone();
-            self.pool.inputs.entry(buf.size()).or_default().push(buf);
+            if buf.size() >= SMALLEST_CLASS {
+                self.pool.inputs.entry(buf.size()).or_default().push(buf);
+            }
         }
+        self.pool.over_budget = false;
         self.pool.end_step();
     }
 
@@ -678,7 +769,7 @@ impl<'a> GpuGraph<'a> {
         self.pool.last_use.insert(size, self.pool.steps);
         let buf = match self.pool.inputs.get_mut(&size).and_then(Vec::pop) {
             Some(b) => b,
-            None => self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            None if self.pool.reserve(size) => self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("input"),
                 size,
                 usage: wgpu::BufferUsages::STORAGE
@@ -686,6 +777,7 @@ impl<'a> GpuGraph<'a> {
                     | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            None => self.gpu.dummies[0].clone(),
         };
         self.bufs.push(buf);
         self.released.push(true); // returned to the input pool by `finish`
@@ -1268,7 +1360,10 @@ impl Graph for GpuGraph<'_> {
 
 // ---- the model on the GPU ----------------------------------------------------------------
 
-/// A model's weights, gradients and AdamW state on the GPU.
+/// A model's weights, gradients and AdamW state on the GPU. With the optimizer state in system
+/// RAM ([`GpuModel::upload_with`]) the GPU holds only the weights and gradients: the GPU
+/// computes each gradient, the CPU applies AdamW to the model's own moments, and the new
+/// weights go back to the GPU.
 pub struct GpuModel {
     gpu: Arc<Gpu>,
     n: usize,
@@ -1282,6 +1377,19 @@ pub struct GpuModel {
     pub step: u64,
     pool: Mutex<Pool>,
     last_upload_bytes: std::sync::atomic::AtomicU64,
+    /// The AdamW moments are the CPU model's (`moments`/`variance` are placeholders).
+    optimizer_in_ram: bool,
+    /// The GPU memory training may use in all (model buffers and working buffers).
+    budget: Option<u64>,
+}
+
+/// What a step fitted to memory did ([`GpuModel::fit_step`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FitStats {
+    pub loss: f32,
+    /// Bytes moved between the GPU and system RAM for offloading (gradient down, weights up).
+    pub transfer_bytes: u64,
+    pub transfer_seconds: f64,
 }
 
 fn focus_mask(f: Focus) -> u32 {
@@ -1297,6 +1405,16 @@ fn focus_mask(f: Focus) -> u32 {
 impl GpuModel {
     /// Copies a model (weights, AdamW state and step) to the GPU.
     pub fn upload(gpu: &Arc<Gpu>, model: &Bicameral) -> Result<GpuModel, String> {
+        GpuModel::upload_with(gpu, model, false)
+    }
+
+    /// Copies a model to the GPU; with `optimizer_in_ram` its AdamW state stays in system RAM
+    /// (in `model`) and only the weights and gradients take GPU memory.
+    pub fn upload_with(
+        gpu: &Arc<Gpu>,
+        model: &Bicameral,
+        optimizer_in_ram: bool,
+    ) -> Result<GpuModel, String> {
         let n = model.weights.len();
         if n > gpu.max_floats() {
             return Err(format!(
@@ -1326,19 +1444,97 @@ impl GpuModel {
             usage: wgpu::BufferUsages::STORAGE,
         });
         let (gx, gy, _) = groups(n);
-        Ok(GpuModel {
+        let (moments, variance) = if optimizer_in_ram {
+            (gpu.storage(4, "momentum (in system RAM)"), gpu.storage(4, "variance (in system RAM)"))
+        } else {
+            (gpu.upload_f32(&model.momentum, "momentum"), gpu.upload_f32(&model.variance, "variance"))
+        };
+        let m = GpuModel {
             n,
             weights: gpu.upload_f32(&model.weights, "weights"),
             grads: gpu.storage(n, "gradients"),
-            moments: gpu.upload_f32(&model.momentum, "momentum"),
-            variance: gpu.upload_f32(&model.variance, "variance"),
+            moments,
+            variance,
             flags,
             partial: gpu.storage((gx * gy) as usize + 1, "gradient norm"),
             step: model.step,
             gpu: gpu.clone(),
             pool: Mutex::new(Pool::default()),
             last_upload_bytes: Default::default(),
-        })
+            optimizer_in_ram,
+            budget: None,
+        };
+        // Creating the model's buffers may have failed (out of GPU memory).
+        gpu.check()?;
+        Ok(m)
+    }
+
+    /// The AdamW state is in system RAM (the CPU applies each step).
+    pub fn optimizer_in_ram(&self) -> bool {
+        self.optimizer_in_ram
+    }
+
+    /// GPU memory of the model's own buffers: weights, gradients, parameter flags and, unless
+    /// it is in system RAM, the AdamW state; with it in RAM, the staging buffer for reading
+    /// gradients back.
+    pub fn fixed_bytes(&self) -> u64 {
+        GpuModel::fixed_bytes_for(self.n, self.optimizer_in_ram)
+    }
+
+    /// [`GpuModel::fixed_bytes`] for a model of `n` parameters.
+    pub fn fixed_bytes_for(n: usize, optimizer_in_ram: bool) -> u64 {
+        let n = n as u64 * 4;
+        let partial = (n / 4).div_ceil(256) * 4 + 4;
+        if optimizer_in_ram {
+            3 * n + partial + (READ_CHUNK as u64 * 4).min(n)
+        } else {
+            5 * n + partial
+        }
+    }
+
+    /// Limits the GPU memory this model's training uses in all (`None`: no limit beyond the
+    /// GPU's own). A step that would need more fails with [`OVER_BUDGET`] before anything runs.
+    pub fn set_budget(&mut self, total: Option<u64>) {
+        self.budget = total;
+        let working = total.map(|t| t.saturating_sub(self.fixed_bytes()));
+        self.pool.lock().unwrap().budget = working;
+    }
+
+    pub fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
+    /// Releases every working buffer kept for reuse.
+    pub fn clear_pool(&self) {
+        let mut p = self.pool.lock().unwrap();
+        *p = Pool::with_budget(p.budget);
+    }
+
+    /// Moves the AdamW state to system RAM: the model (weights, moments, step) is brought up to
+    /// date from the GPU, and the GPU's copies of the moments are released.
+    pub fn move_optimizer_to_ram(&mut self, model: &mut Bicameral) -> Result<(), String> {
+        if self.optimizer_in_ram {
+            return Ok(());
+        }
+        self.download(model)?;
+        self.moments = self.gpu.storage(4, "momentum (in system RAM)");
+        self.variance = self.gpu.storage(4, "variance (in system RAM)");
+        self.optimizer_in_ram = true;
+        self.clear_pool();
+        self.set_budget(self.budget);
+        Ok(())
+    }
+
+    /// Runs `f` with the working-buffer pool; after an error the pool is emptied (a failed
+    /// step may leave buffers that are not returned, or invalid after an out-of-memory error).
+    fn with_pool<T>(&self, f: impl FnOnce(&mut Pool) -> Result<T, String>) -> Result<T, String> {
+        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
+        let result = f(&mut pool);
+        if result.is_err() {
+            pool = Pool::with_budget(pool.budget);
+        }
+        *self.pool.lock().unwrap() = pool;
+        result
     }
 
     pub fn gpu(&self) -> &Arc<Gpu> {
@@ -1351,8 +1547,10 @@ impl GpuModel {
             return Err("The model's shape changed since it was copied to the GPU".into());
         }
         model.weights = self.gpu.read(&self.weights, self.n)?;
-        model.momentum = self.gpu.read(&self.moments, self.n)?;
-        model.variance = self.gpu.read(&self.variance, self.n)?;
+        if !self.optimizer_in_ram {
+            model.momentum = self.gpu.read(&self.moments, self.n)?;
+            model.variance = self.gpu.read(&self.variance, self.n)?;
+        }
         model.step = self.step;
         Ok(())
     }
@@ -1379,6 +1577,7 @@ impl GpuModel {
         abl: Ablation,
         denom: Option<f32>,
         gradients: bool,
+        zero_grads: bool,
     ) -> Result<(GpuGraph<'a>, B, usize), String> {
         if rows.is_empty() {
             return Err("Empty training batch".into());
@@ -1419,7 +1618,7 @@ impl GpuModel {
         }
         let denom = denom.unwrap_or_else(|| mask.iter().map(|&m| m as f64).sum::<f64>().max(1.) as f32);
         let mut g = GpuGraph::new(&self.gpu, pool, t);
-        if gradients {
+        if gradients && zero_grads {
             g.fill(B::Grads, 0, self.n, 0.);
         }
         let h = model.forward_hidden(&mut g, &ids, features, t, abl);
@@ -1431,6 +1630,13 @@ impl GpuModel {
         let losses = g.head_xent(h, embed, bias, c.d, c.vocab, tb, mb, denom);
         if gradients {
             g.backward();
+        }
+        if g.pool.over_budget {
+            g.finish();
+            return Err(format!(
+                "This batch ({} rows of up to {t} tokens) is {OVER_BUDGET}; nothing was run",
+                rows.len()
+            ));
         }
         Ok((g, losses, total))
     }
@@ -1583,16 +1789,14 @@ impl GpuModel {
         rows: &[Row],
         abl: Ablation,
     ) -> Result<(f32, Vec<f32>), String> {
-        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
-        let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None, true)?;
+        let result = self.with_pool(|pool| {
+            let (mut g, losses, total) = self.record(pool, model, rows, abl, None, true, true)?;
             self.run(&mut g);
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             let grads = self.gpu.read(&self.grads, self.n)?;
             g.finish();
             Ok((loss as f32, grads))
-        })();
-        *self.pool.lock().unwrap() = pool;
+        });
         result
     }
 
@@ -1640,41 +1844,14 @@ impl GpuModel {
         if !lr.is_finite() || lr <= 0. {
             return Err("Invalid learning rate".into());
         }
+        if self.optimizer_in_ram {
+            return Err("The optimizer state is in system RAM: use GpuModel::fit_step".into());
+        }
         let step = self.step + 1;
-        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
-        let result = (|| {
+        let result = self.with_pool(|pool| {
             let started = std::time::Instant::now();
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, None, true)?;
-            let (gx, gy, _) = groups(self.n);
-            let parts = (gx * gy) as usize;
-            // Clipped by the norm of the gradients this step applies (the focused groups).
-            g.dispatch(
-                K::Sumsq,
-                &[Some(B::Grads), Some(B::Partial)],
-                Some(B::Flags),
-                &[self.n as u32, focus_mask(focus)],
-                (gx, gy, 1),
-            );
-            g.dispatch(K::NormFinish, &[None, Some(B::Partial)], None, &[parts as u32], (1, 1, 1));
-            let (beta1, beta2) = (0.9f32, 0.95f32);
-            let p = [
-                self.n as u32,
-                focus_mask(focus),
-                parts as u32,
-                0,
-                bits(lr),
-                bits(1. - beta1.powf(step as f32)),
-                bits(1. - beta2.powf(step as f32)),
-                bits(beta1),
-                bits(beta2),
-            ];
-            g.dispatch(
-                K::Adam,
-                &[Some(B::Weights), Some(B::Grads), Some(B::Moments), Some(B::Variance), Some(B::Partial)],
-                Some(B::Flags),
-                &p,
-                (gx, gy, 1),
-            );
+            let (mut g, losses, total) = self.record(pool, model, rows, abl, None, true, true)?;
+            self.record_adam(&mut g, lr, focus, step);
             let recorded = started.elapsed();
             let upload_bytes: u64 = g.upload_bytes;
             self.last_upload_bytes.store(upload_bytes, std::sync::atomic::Ordering::Relaxed);
@@ -1711,13 +1888,132 @@ impl GpuModel {
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             g.finish();
             Ok(loss as f32)
-        })();
-        *self.pool.lock().unwrap() = pool;
+        });
         let result = result.map(|l| (l, ()));
         if result.is_ok() {
             self.step = step;
         }
         result
+    }
+
+    /// Records AdamW (with clipping by the norm of the focused groups' gradient) as step `step`.
+    fn record_adam(&self, g: &mut GpuGraph, lr: f32, focus: Focus, step: u64) {
+        let (gx, gy, _) = groups(self.n);
+        let parts = (gx * gy) as usize;
+        // Clipped by the norm of the gradients this step applies (the focused groups).
+        g.dispatch(
+            K::Sumsq,
+            &[Some(B::Grads), Some(B::Partial)],
+            Some(B::Flags),
+            &[self.n as u32, focus_mask(focus)],
+            (gx, gy, 1),
+        );
+        g.dispatch(K::NormFinish, &[None, Some(B::Partial)], None, &[parts as u32], (1, 1, 1));
+        let (beta1, beta2) = (0.9f32, 0.95f32);
+        let p = [
+            self.n as u32,
+            focus_mask(focus),
+            parts as u32,
+            0,
+            bits(lr),
+            bits(1. - beta1.powf(step as f32)),
+            bits(1. - beta2.powf(step as f32)),
+            bits(beta1),
+            bits(beta2),
+        ];
+        g.dispatch(
+            K::Adam,
+            &[Some(B::Weights), Some(B::Grads), Some(B::Moments), Some(B::Variance), Some(B::Partial)],
+            Some(B::Flags),
+            &p,
+            (gx, gy, 1),
+        );
+    }
+
+    /// The batch's gradient into the GPU's gradient buffer, `micro` rows at a time (each part
+    /// divided by the whole batch's weight, so the parts add up to the batch's mean, as
+    /// `learn::batch_loss_and_gradients`). Returns the batch's loss. Nothing is applied: if
+    /// any part fails (out of memory, over the budget), the weights are unchanged.
+    fn accumulate(
+        &self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        micro: usize,
+    ) -> Result<f32, String> {
+        let denom = crate::learn::batch_weight(rows) as f32;
+        let micro = micro.max(1);
+        self.with_pool(|pool| {
+            let mut loss = 0f64;
+            let mut uploaded = 0;
+            for (i, part) in rows.chunks(micro).enumerate() {
+                // Dropout masks follow the row's place in the whole batch.
+                let (mut g, losses, total) =
+                    self.record(pool, model, part, abl.at_row(i * micro), Some(denom), true, i == 0)?;
+                uploaded += g.upload_bytes;
+                self.run(&mut g);
+                loss += self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
+                g.finish();
+            }
+            self.last_upload_bytes.store(uploaded, std::sync::atomic::Ordering::Relaxed);
+            Ok(loss as f32)
+        })
+    }
+
+    /// One training step fitted to memory: the gradient in parts of `micro_rows` rows
+    /// (gradient accumulation: the same step as the whole batch at once), then AdamW on the
+    /// GPU, or, with the optimizer state in system RAM, on the CPU (the gradient comes down,
+    /// the new weights go up; `model` is then up to date). An error before the update leaves
+    /// everything unchanged (`self.step` and `model.step` tell whether a step was applied).
+    pub fn fit_step(
+        &mut self,
+        model: &mut Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        lr: f32,
+        focus: Focus,
+        micro_rows: usize,
+    ) -> Result<FitStats, String> {
+        if !lr.is_finite() || lr <= 0. {
+            return Err("Invalid learning rate".into());
+        }
+        if rows.is_empty() {
+            return Err("Empty training batch".into());
+        }
+        let micro = micro_rows.clamp(1, rows.len());
+        if !self.optimizer_in_ram && micro == rows.len() {
+            // All at once: one submission with AdamW included (the fastest).
+            let loss = self.train_step(model, rows, abl, lr, focus)?;
+            return Ok(FitStats { loss, ..FitStats::default() });
+        }
+        let loss = self.accumulate(model, rows, abl, micro)?;
+        if !self.optimizer_in_ram {
+            let step = self.step + 1;
+            self.with_pool(|pool| {
+                let mut g = GpuGraph::new(&self.gpu, pool, 1);
+                self.record_adam(&mut g, lr, focus, step);
+                self.run(&mut g);
+                g.finish();
+                self.gpu.check()
+            })?;
+            self.step = step;
+            return Ok(FitStats { loss, ..FitStats::default() });
+        }
+        let t = std::time::Instant::now();
+        let grads = self.gpu.read_chunked(&self.grads, self.n)?;
+        let down = t.elapsed().as_secs_f64();
+        model.adam_step(&grads, lr, focus)?;
+        let t = std::time::Instant::now();
+        self.set_weights(model)?;
+        // Wait for the upload, so its time is measured and an error is seen now.
+        self.gpu.queue.submit([]);
+        self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU: {e}"))?;
+        self.gpu.check()?;
+        Ok(FitStats {
+            loss,
+            transfer_bytes: 2 * self.n as u64 * 4,
+            transfer_seconds: down + t.elapsed().as_secs_f64(),
+        })
     }
 
     /// The loss and gradient of part of a batch, divided by `denom` (the whole batch's total
@@ -1730,16 +2026,14 @@ impl GpuModel {
         abl: Ablation,
         denom: f32,
     ) -> Result<(f32, Vec<f32>), String> {
-        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
-        let result = (|| {
-            let (mut g, losses, total) = self.record(&mut pool, model, rows, abl, Some(denom), true)?;
+        let result = self.with_pool(|pool| {
+            let (mut g, losses, total) = self.record(pool, model, rows, abl, Some(denom), true, true)?;
             self.run(&mut g);
             let loss = self.gpu.read(self.buffer(&g, losses), total)?.iter().map(|&x| x as f64).sum::<f64>();
             let grads = self.gpu.read(&self.grads, self.n)?;
             g.finish();
             Ok((loss as f32, grads))
-        })();
-        *self.pool.lock().unwrap() = pool;
+        });
         result
     }
 
@@ -1758,19 +2052,17 @@ impl GpuModel {
         }
         // Each row's loss enters with its weight, divided by the total weight of all rows.
         let denom = rows.iter().map(|r| r.mask.iter().map(|&m| m as f64).sum::<f64>()).sum::<f64>().max(1.);
-        let mut pool = std::mem::take(&mut *self.pool.lock().unwrap());
-        let result = (|| {
+        let result = self.with_pool(|pool| {
             let mut total = 0f64;
             for part in rows.chunks(chunk.max(1)) {
                 let (mut g, losses, n) =
-                    self.record(&mut pool, model, part, abl, Some(denom as f32), false)?;
+                    self.record(pool, model, part, abl, Some(denom as f32), false, false)?;
                 self.run(&mut g);
                 total += self.gpu.read(self.buffer(&g, losses), n)?.iter().map(|&x| x as f64).sum::<f64>();
                 g.finish();
             }
             Ok(total as f32)
-        })();
-        *self.pool.lock().unwrap() = pool;
+        });
         result
     }
 
@@ -1788,9 +2080,11 @@ impl GpuModel {
     /// GPU memory this model's training uses: weights, gradients, AdamW state, and the step's
     /// working buffers (kept between steps for reuse), plus the last step's input data.
     pub fn memory_bytes(&self) -> u64 {
-        let model = 5 * self.n as u64 * 4;
-        let p = self.pool.lock().unwrap();
-        let pool: u64 = p.free.iter().chain(&p.inputs).map(|(size, v)| size * v.len() as u64).sum();
-        model + pool
+        self.fixed_bytes() + self.pool.lock().unwrap().held_bytes()
+    }
+
+    /// The working buffers the pool accounts for (equal to those it holds between steps).
+    pub fn working_bytes(&self) -> u64 {
+        self.pool.lock().unwrap().owned
     }
 }

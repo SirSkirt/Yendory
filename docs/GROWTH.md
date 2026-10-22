@@ -1,7 +1,7 @@
 # Growing networks and using system RAM: design
 
-Status: Stage 1 (inspection) and Stage 2 (manual growth) complete; later stages are recorded
-in the sections below as they land.
+Status: Stage 1 (inspection), Stage 2 (manual growth) and Stage 3 (the training memory
+manager) complete; later stages are recorded in the sections below as they land.
 
 ## 1. What exists today
 
@@ -148,12 +148,57 @@ What is avoided: relying on the driver silently placing buffers in "shared GPU m
 does this when VRAM runs out). It works but is slow and uncontrolled; the budget threshold stops
 allocation before that point so the manager can choose a plan instead.
 
+### Stage 3 as built
+
+- **Settings** (`learn::memory::MemorySettings`, Studio "Training memory", saved with the other
+  settings): memory mode (GPU only, Automatic offloading, Manual), the GPU's memory (wgpu cannot
+  read it; empty means unknown), the GPU safety margin (default 10%), reduce memory
+  automatically (micro-batches), the most system RAM offloading may use (default half the RAM),
+  RAM always kept free (default 4 GB), warnings about slow offloading, and for Manual the rows
+  per micro-batch and the optimizer state in RAM.
+- **Budget**: training may use the GPU's memory less the margin. The working-buffer pool counts
+  every buffer it creates; a buffer that would pass the budget is refused (after releasing free
+  buffers the step does not use), the step is marked and refused *before anything is
+  submitted*, and nothing changes. Independently, the margin is given to wgpu as the memory
+  budget threshold when the GPU is opened (DirectX 12; Vulkan with the budget extension), so the
+  driver refuses allocations past it even when the GPU's size was not given.
+- **Micro-batches** (`GpuModel::fit_step`): the batch's gradient is computed in parts, each
+  divided by the whole batch's weight and added into the gradient buffer (the first part
+  clears it; dropout masks follow each row's place in the batch); AdamW runs once, in its own
+  submission, only after every part succeeded.
+- **Optimizer state in system RAM** (`GpuModel::upload_with`, `move_optimizer_to_ram`): the GPU
+  holds weights, gradients and parameter flags; the gradient is read back in 16 MB parts, the
+  CPU applies AdamW to the model's own moments (the same code as CPU training) and the new
+  weights are written back. GPU model state falls from 5 to 3 model-sized buffers; each step
+  moves 2 x parameters x 4 bytes.
+- **Planning** (`learn::memory::Fitter`): each step's plan comes from the model's activation
+  count per token, the batch's rows, its longest row and the vocabulary (the estimate is
+  1.3x the measured use). In order: whole batches on the GPU; the largest micro-batch that fits;
+  the optimizer state in RAM (Automatic only, and only within the RAM limit and reserve). When
+  a step does not fit anyway (a GPU out-of-memory error or the budget), nothing was applied:
+  the micro-batch is halved (remembered as rows x tokens, so longer batches get fewer rows), then
+  the optimizer state moves to RAM, then training continues on the CPU with a notice that says
+  why. Manual settings are used as set and never changed behind your back.
+- **Report** (`MemoryReport`, every step): the strategy in words, GPU memory counted by Yendory
+  and by the driver's allocator, the budget, RAM used for offloading, bytes and time of the
+  GPU <-> RAM transfers, steps, tokens and time (tokens per second), steps that had to be
+  refitted and why. Studio shows it under the Reading, Classroom and Planner progress cards while
+  training runs and in the Training memory panel, with warnings when offloading takes more than
+  a fifth of the time, when micro-batches are down to one or two rows, or when free RAM is below
+  the reserve.
+- Hybrid training keeps the optimizer state in RAM from the start (the CPU applies AdamW
+  there anyway), freeing the GPU's copy.
+- Not done (section 3, items 4-5): weights and gradients streamed per layer, and activation
+  recomputation. Models whose weights and gradients alone exceed the GPU are reported as not
+  fitting.
+
 ## 4. Stages
 
 1. Inspection and this design (done).
 2. Manual expansion with verification, recovery checkpoint and rollback, for new and existing
    models of both architectures (done).
-3. The memory manager: budgets, micro-batching, optimizer state in RAM, settings and statistics.
+3. The memory manager: budgets, micro-batching, optimizer state in RAM, settings and statistics
+   (done).
 4. Growth and memory together: expansion estimates and refuses plans beyond the limits; expanded
    models train under the memory plan.
 5. Automatic growth from training evidence (plateaus, held-out results), within the limits, at
