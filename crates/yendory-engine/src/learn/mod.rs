@@ -387,8 +387,13 @@ impl Trainer {
                         && ram_ok
                         && s.gpu_budget()
                             .is_some_and(|b| crate::gpu::GpuModel::fixed_bytes_for(n, false) > b / 10 * 8));
-                let opened = crate::gpu::shared_with(api)
-                    .and_then(|g| crate::gpu::GpuModel::upload_with(&g, model, in_ram));
+                // A GPU failure while copying the model there (e.g. out of GPU memory) means
+                // training on the CPU, with a notice, never a stop.
+                let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::gpu::shared_with(api)
+                        .and_then(|g| crate::gpu::GpuModel::upload_with(&g, model, in_ram))
+                }))
+                .unwrap_or_else(|p| Err(panic_text(p)));
                 match opened {
                     Ok(mut m) => {
                         m.set_budget(s.gpu_budget());

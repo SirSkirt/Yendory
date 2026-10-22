@@ -15,7 +15,6 @@ use crate::learn::Row;
 use crate::model::{Ablation, Bicameral, Focus, Graph};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum K {
@@ -204,12 +203,10 @@ impl Gpu {
         if std::env::var_os("WGPU_BACKEND").is_none() || api != Api::Auto {
             desc.backends = api.backends();
         }
-        // The GPU safety margin: creating a buffer fails (out of memory) once this share of the
-        // GPU memory budget the operating system reports is used (DirectX 12; Vulkan with the
-        // memory-budget extension), instead of spilling into shared system memory or losing the
-        // device. Training then retries the step with less memory (`learn::memory`).
-        let margin = crate::learn::memory::memory_settings().gpu_margin_percent.clamp(1, 50);
-        desc.memory_budget_thresholds.for_resource_creation = Some(100 - margin);
+        // No wgpu memory budget threshold: wgpu 30 counts every new buffer, however small, as a
+        // whole memory block against the operating system's budget, so once usage is within a
+        // block of the threshold even tiny buffers fail. Training's own budget (`learn::memory`,
+        // from the GPU memory given in the settings) limits what training allocates instead.
         let instance = wgpu::Instance::new(desc);
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         adapters.retain(|a| allow_software || a.get_info().device_type != wgpu::DeviceType::Cpu);
@@ -357,13 +354,31 @@ impl Gpu {
     }
 
     fn upload_f32(&self, data: &[f32], label: &str) -> wgpu::Buffer {
-        let mut bytes: Vec<u8> = bytemuck::cast_slice(data).to_vec();
-        bytes.resize(bytes.len().max(16), 0);
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        self.upload_with_usage(
+            bytemuck::cast_slice(data),
+            label,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        )
+    }
+
+    /// A buffer holding `bytes`, created empty and then written through the queue. (Buffers
+    /// filled at creation are mapped by wgpu, which panics instead of reporting an error when
+    /// the buffer could not be created, e.g. out of GPU memory; this way a failure is reported
+    /// by the next [`Gpu::check`].)
+    fn upload_with_usage(&self, bytes: &[u8], label: &str, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        let size = (bytes.len().max(16) as u64).next_multiple_of(4);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            contents: &bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        })
+            size,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !bytes.is_empty() {
+            let mut padded = bytes.to_vec();
+            padded.resize(padded.len().next_multiple_of(4), 0);
+            self.queue.write_buffer(&buffer, 0, &padded);
+        }
+        buffer
     }
 
     fn read(&self, buffer: &wgpu::Buffer, floats: usize) -> Result<Vec<f32>, String> {
@@ -1438,11 +1453,7 @@ impl GpuModel {
             let f = group | if s.decay { 8 } else { 0 };
             flags[s.range.clone()].iter_mut().for_each(|x| *x = f);
         }
-        let flags = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flags"),
-            contents: bytemuck::cast_slice(&flags),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let flags = gpu.upload_with_usage(bytemuck::cast_slice(&flags), "flags", wgpu::BufferUsages::STORAGE);
         let (gx, gy, _) = groups(n);
         let (moments, variance) = if optimizer_in_ram {
             (gpu.storage(4, "momentum (in system RAM)"), gpu.storage(4, "variance (in system RAM)"))
@@ -1660,11 +1671,7 @@ impl GpuModel {
             let at = i * stride as usize;
             params[at..at + PARAM_BYTES as usize].copy_from_slice(bytemuck::cast_slice(&d.params));
         }
-        let uniform = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("kernel parameters"),
-            contents: &params,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = gpu.upload_with_usage(&params, "kernel parameters", wgpu::BufferUsages::UNIFORM);
         let groups: Vec<wgpu::BindGroup> = g
             .ops
             .iter()

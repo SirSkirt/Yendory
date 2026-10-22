@@ -136,17 +136,19 @@ What the memory manager can measure:
 
 - Its own allocations exactly (model buffers and the working-buffer pool).
 - wgpu's allocator report on DirectX 12 and Vulkan: bytes allocated and reserved on the device.
-- wgpu's **memory budget threshold**: buffer creation fails with an out-of-memory error at a
-  chosen percentage of the budget the operating system reports for the GPU (DirectX 12; Vulkan
-  with the memory-budget extension). That is the GPU safety margin: a step that would not fit
-  fails cleanly instead of paging into shared memory or losing the device.
-- The GPU's total memory is not exposed by wgpu; Studio asks for it (with the card's name shown)
-  or uses the budget threshold alone.
+- wgpu's **memory budget threshold** (buffer creation fails at a percentage of the operating
+  system's GPU budget) was tried in 0.4.3 and removed in 0.4.5: wgpu 30 counts every new
+  buffer, however small, as a whole memory block against that budget, so near the threshold
+  even tiny buffers fail. On a user's 8 GB card it refused a model's first buffer, and wgpu
+  then panicked while filling that buffer.
+- The GPU's total memory is not exposed by wgpu; Studio asks for it (with the card's name
+  shown). Without it, only out-of-memory errors the driver reports can be answered.
 - System RAM (total and available) from the operating system, to honour the RAM limits.
 
 What is avoided: relying on the driver silently placing buffers in "shared GPU memory" (Windows
-does this when VRAM runs out). It works but is slow and uncontrolled; the budget threshold stops
-allocation before that point so the manager can choose a plan instead.
+does this when VRAM runs out). It works but is slow and uncontrolled; the budget from the GPU
+memory given in the settings stops allocation before that point so the manager can choose a
+plan instead.
 
 ### Stage 3 as built
 
@@ -159,9 +161,9 @@ allocation before that point so the manager can choose a plan instead.
 - **Budget**: training may use the GPU's memory less the margin. The working-buffer pool counts
   every buffer it creates; a buffer that would pass the budget is refused (after releasing free
   buffers the step does not use), the step is marked and refused *before anything is
-  submitted*, and nothing changes. Independently, the margin is given to wgpu as the memory
-  budget threshold when the GPU is opened (DirectX 12; Vulkan with the budget extension), so the
-  driver refuses allocations past it even when the GPU's size was not given.
+  submitted*, and nothing changes. Buffers are created empty and filled through the queue, so
+  a buffer the driver cannot create is reported as an error (training then retries with less
+  memory or continues on the CPU with a notice), never a stop.
 - **Micro-batches** (`GpuModel::fit_step`): the batch's gradient is computed in parts, each
   divided by the whole batch's weight and added into the gradient buffer (the first part
   clears it; dropout masks follow each row's place in the batch); AdamW runs once, in its own

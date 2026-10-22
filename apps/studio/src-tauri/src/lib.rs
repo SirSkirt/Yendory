@@ -1502,7 +1502,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(Studio::default())
         .setup(|app| {
-            // Before anything opens the GPU: the safety margin is set when it is opened.
+            // The saved training memory settings, before any training starts.
             memory::apply_stored(app.handle());
             Ok(())
         })

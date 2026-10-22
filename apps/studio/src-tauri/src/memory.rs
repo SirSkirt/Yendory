@@ -2,21 +2,15 @@
 //! RAM (saved with the other settings, given to the Engine at startup and when changed), and
 //! what the running training uses, for the memory panel and the progress cards.
 use super::*;
-use std::sync::atomic::AtomicU8;
 use yendory_engine::learn::memory::{self, MemoryReport, MemorySettings};
-
-/// The GPU safety margin in force: the GPU is opened once, with the margin of that moment.
-static MARGIN_IN_FORCE: AtomicU8 = AtomicU8::new(0);
 
 pub(crate) fn stored(app: &AppHandle) -> MemorySettings {
     read_settings(app).get("memory").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
 }
 
-/// Gives the saved settings to the Engine (before the GPU is first opened).
+/// Gives the saved settings to the Engine (at startup).
 pub(crate) fn apply_stored(app: &AppHandle) {
-    let s = stored(app);
-    let _ = MARGIN_IN_FORCE.compare_exchange(0, s.gpu_margin_percent, Ordering::AcqRel, Ordering::Acquire);
-    memory::set_memory_settings(s);
+    memory::set_memory_settings(stored(app));
 }
 
 #[derive(Serialize)]
@@ -29,8 +23,6 @@ pub struct MemoryView {
     ram_allowance: u64,
     /// The GPU budget training plans with (the GPU's memory less the margin), if known.
     gpu_budget: Option<u64>,
-    /// The margin changed since the GPU was opened: it applies after Studio restarts.
-    margin_after_restart: bool,
     /// The latest training's memory use, if training ran on the GPU since Studio started.
     report: Option<MemoryReport>,
     /// What deserves attention now (slow offloading, little RAM left).
@@ -62,11 +54,9 @@ fn view(s: MemorySettings) -> MemoryView {
             memory::gib(s.ram_reserve_bytes)
         ));
     }
-    let in_force = MARGIN_IN_FORCE.load(Ordering::Acquire);
     MemoryView {
         ram_allowance: s.ram_allowance(),
         gpu_budget: s.gpu_budget(),
-        margin_after_restart: in_force != 0 && in_force != s.gpu_margin_percent,
         settings: s,
         ram_total,
         ram_available,
