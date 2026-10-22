@@ -22,6 +22,7 @@ use yendory_engine::{
 
 mod courses;
 mod designer;
+mod growth;
 mod neuro;
 mod practice;
 mod reading;
@@ -93,6 +94,9 @@ pub struct Meta {
     /// Nova Neuro: the modules and their sizes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     design: Option<yendory_engine::model::NeuroSpec>,
+    /// Network growth: the setting, the original size and every growth (docs/GROWTH.md).
+    #[serde(default)]
+    growth: growth::GrowthInfo,
 }
 fn bicameral() -> String {
     "bicameral".into()
@@ -154,8 +158,12 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
 }
 
 fn save_all(app: &AppHandle, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
-    let dir = model_dir(app, &meta.id)?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    save_in(&model_dir(app, &meta.id)?, meta, model, archive)
+}
+
+/// Saves a model, its lesson archive and meta.json into its folder (each file atomically).
+fn save_in(dir: &std::path::Path, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     write_atomic(&dir.join("model.nnova2"), &model.to_bytes()?)?;
     write_atomic(&dir.join("archive.json"), &serde_json::to_vec(archive).map_err(|e| e.to_string())?)?;
     write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?)
@@ -203,6 +211,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         context: 0,
         architecture: bicameral(),
         design: None,
+        growth: Default::default(),
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -867,6 +876,14 @@ fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
     let model = Bicameral::load(dir.join("model.nnova2"))?;
     meta.slots = model.word_capacity();
     meta.context = model.config.max_tokens;
+    // The file decides the size (it can differ from meta.json if saving was interrupted).
+    meta.parameters = model.parameter_count();
+    meta.groups = [
+        model.group_parameters(Focus::Left),
+        model.group_parameters(Focus::Right),
+        model.group_parameters(Focus::Interconnect),
+    ];
+    meta.design = model.neuro.clone();
     let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(_) => Vec::new(),
@@ -1485,6 +1502,10 @@ pub fn run() {
         .manage(Studio::default())
         .invoke_handler(tauri::generate_handler![
             status,
+            growth::growth_view,
+            growth::set_growth_mode,
+            growth::expand_model,
+            growth::roll_back_growth,
             list_models,
             create_model,
             model_sizes,

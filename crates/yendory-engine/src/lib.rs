@@ -30,7 +30,8 @@ pub mod tokenizer;
 pub use model::size_presets;
 
 pub use model::{
-    Ablation, AblationEffects, Bicameral, CacheStats, Config, Dropout, Focus, KvCache, Measurements,
-    SizePreset, ThinkOptions, ThinkingTree, Trace,
+    compare_outputs, Ablation, AblationEffects, Bicameral, CacheStats, Config, Dropout, Focus, Growth,
+    GrowthOption, KvCache, Measurements, NotOffered, OutputComparison, Preservation, SizePreset,
+    ThinkOptions, ThinkingTree, Trace,
 };
 pub use tokenizer::{TokenId, Tokenizer};

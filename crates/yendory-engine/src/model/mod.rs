@@ -5,6 +5,7 @@ mod cache;
 mod checkpoint;
 #[cfg(test)]
 mod golden;
+pub mod grow;
 mod linalg;
 mod measure;
 pub mod neuro;
@@ -13,6 +14,7 @@ mod think;
 pub use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
 pub use cache::{CacheStats, GateTrace, KvCache, NeuroRound, NeuroTrace, StageTrace, Trace};
+pub use grow::{compare_outputs, Growth, GrowthOption, NotOffered, OutputComparison, Preservation};
 pub use measure::{AblationEffects, Measurements};
 pub use neuro::NeuroSpec;
 use serde::{Deserialize, Serialize};
@@ -445,7 +447,8 @@ impl Bicameral {
         &self.slots[*self.offsets.get(name).expect("missing Nova-2 parameter")]
     }
     #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
-    pub(crate) fn slot_range(&self, name: &str) -> Range<usize> {
+    /// Where a named parameter matrix lies in the flat weight array.
+    pub fn slot_range(&self, name: &str) -> Range<usize> {
         self.slot(name).range.clone()
     }
     pub(crate) fn val(&self, name: &str) -> &[f32] {

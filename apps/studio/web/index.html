@@ -51,6 +51,7 @@
         <button type="button" id="vocabLimit" class="quiet">Change vocabulary limit…</button>
         <button type="button" id="contextLimit" class="quiet">Change context…</button>
       </div>
+      <div id="growthPanel"></div>
     </div>
 
     <h3>New model</h3>
@@ -75,6 +76,15 @@
         <option value="bicameral">Nova Bicameral: transformer + Dense hemisphere (default)</option>
         <option value="neuro">Nova Neuro (experimental): build a brain from specialised networks</option>
       </select>
+    </div>
+    <div class="line-form">
+      <label for="newGrowth">Growth</label>
+      <select id="newGrowth">
+        <option value="off">Off: the network keeps its size</option>
+        <option value="manual">Manual: you choose when and how it grows</option>
+        <option value="automatic">Automatic: Studio may grow it when training shows it needs capacity</option>
+      </select>
+      <span class="note">The size you choose is a starting point; growth keeps every trained weight. You can change this later on the model.</span>
     </div>
     <div id="neuroBuilder" hidden></div>
     <table class="ledger compact" id="sizeTable">
@@ -742,5 +752,6 @@
 <script src="js/review.js"></script>
 <script src="js/rewards.js"></script>
 <script src="js/neuro.js"></script>
+<script src="js/growth.js"></script>
 </body>
 </html>

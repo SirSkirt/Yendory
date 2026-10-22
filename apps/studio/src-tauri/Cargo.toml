@@ -1,6 +1,6 @@
 [package]
 name = "yendory-studio"
-version = "0.4.1"
+version = "0.4.2"
 description = "Yendory Studio: create, teach, examine and export Bicameral AI models"
 edition = "2021"
 publish = false

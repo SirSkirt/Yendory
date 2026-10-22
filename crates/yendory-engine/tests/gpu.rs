@@ -355,3 +355,19 @@ fn gpu_memory_stays_bounded_over_varied_lengths() {
     println!("GPU memory: one longest step {one} bytes, peak over 60 varied steps {peak} bytes");
     assert!(peak <= 3 * one, "memory grew with the number of batch lengths: {peak} vs {one}");
 }
+
+/// A grown network (wider, deeper, larger Dense) trains on the GPU with the CPU's values.
+#[test]
+fn grown_model_matches_the_cpu_on_the_gpu() {
+    let Some(gpu) = gpu() else { return };
+    let model = Bicameral::with_config(Config::default(), 4);
+    let (options, _) = model.growth_options();
+    let grown = model.grow(&options.iter().find(|o| o.id == "balanced").unwrap().growth, 7).unwrap();
+    let rows = rows(&grown);
+    let (cpu_loss, cpu_grads) = batch_loss_and_gradients(&grown, &rows, Ablation::default()).unwrap();
+    let g = GpuModel::upload(&gpu, &grown).unwrap();
+    let (gpu_loss, gpu_grads) = g.loss_and_gradients(&grown, &rows, Ablation::default()).unwrap();
+    println!("grown {} parameters: loss GPU {gpu_loss} CPU {cpu_loss}", grown.parameter_count());
+    assert!((gpu_loss - cpu_loss).abs() < 1e-4 * cpu_loss.abs().max(1.));
+    close("grown model gradients", &gpu_grads, &cpu_grads);
+}

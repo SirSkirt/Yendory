@@ -87,7 +87,7 @@ function showActive(meta) {
   for (const id of ["readFirstTeach", "readFirstPlan"]) $(id).hidden = read.length > 0;
   $("activeReading").textContent = read.length
     ? read.map(r => `${r.corpus}: ${fmt(r.tokens)} tokens, held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`).join(" · ")
-    : "nothing read yet";
+    : "nothing read yet";  window.showGrowth?.();
 }
 
 async function refreshModels() {
@@ -306,14 +306,17 @@ $("vocabCustom").addEventListener("input", safe(updateVocabNote, "Vocabulary"));
 $("createModel").addEventListener("click", safe(async () => {
   const name = $("newName").value.trim();
   if (!name) { $("newName").focus(); throw new Error("Give the new model a name"); }
+  const growthMode = $("newGrowth").value;
   if ($("archChoice").value === "neuro") {
     showActive(await invoke("create_neuro_model", { name, input: neuroInput(), wordLimit: chosenLimit(), context: chosenContext() }));
+    if (growthMode !== "off") { await invoke("set_growth_mode", { mode: growthMode }); window.showGrowth?.(); }
     $("newName").value = "";
     await refreshModels();
     say(`Created ${active.name}: an untrained Nova Neuro model with ${fmt(active.parameters)} parameters.`);
     return;
   }
   showActive(await invoke("create_model", { name, size: chosenSize, wordLimit: chosenLimit(), context: chosenContext() }));
+  if (growthMode !== "off") { await invoke("set_growth_mode", { mode: growthMode }); window.showGrowth?.(); }
   $("newName").value = "";
   await refreshModels();
   say(`Created ${active.name}: an untrained Bicameral model with ${fmt(active.parameters)} parameters.`);
