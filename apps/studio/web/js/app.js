@@ -101,7 +101,9 @@ async function refreshModels() {
   for (const m of models) {
     const isOpen = active?.id === m.id;
     const row = el("tr", { class: isOpen ? "current-row" : "" },
-      el("td", {}, m.name, m.architecture === "neuro" ? el("span", { class: "tag", title: "Nova Neuro (experimental)" }, " Neuro") : ""),
+      el("td", {}, m.name, m.architecture === "neuro"
+        ? el("span", { class: "tag arch arch-neuro", title: "Nova Neuro (experimental)" }, "Neuro")
+        : el("span", { class: "tag arch arch-bica", title: "Nova Bicameral" }, "Bica")),
       el("td", { class: "num" }, millions(m.parameters)),
       el("td", { class: "num" }, fmt(m.step)),
       el("td", { class: "num" }, fmt(m.words)),
