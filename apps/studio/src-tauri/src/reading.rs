@@ -5,6 +5,7 @@
 use super::*;
 use crate::sources::{gutenberg_book, sources, Convert, Fetch, Source};
 use std::time::Duration;
+use yendory_engine::learn::autogrow::Check;
 use yendory_engine::learn::corpus::{
     pretrain_mix, Category, Corpus, MixPart, PretrainConfig, PretrainEvent, END_OF_TEXT,
 };
@@ -680,6 +681,8 @@ struct ReadFinished {
     stopped: bool,
     early_stop: bool,
     error: Option<String>,
+    /// Automatic growth's decision after this run (models set to grow automatically).
+    growth: Option<growth::AutoDecision>,
 }
 
 #[tauri::command]
@@ -802,10 +805,30 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
                 &model_dir(&app, &meta.id)?.join("meta.json"),
                 &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?,
             )?;
+            let mut decision = None;
             if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
                 a.meta = meta.clone();
+                // A safe boundary: the run is over and nothing else trains until it is reported.
+                if !r.stopped {
+                    let checks: Vec<Check> = r
+                        .evaluations
+                        .iter()
+                        .map(|e| Check { train_loss: e.train_loss, held_out_loss: e.held_out_loss })
+                        .collect();
+                    let dir = model_dir(&app, &meta.id)?;
+                    decision = growth::automatic_after_reading(
+                        &dir,
+                        a,
+                        &checks,
+                        r.early_stop,
+                        cfg.batch_size,
+                        cfg.window,
+                    );
+                    meta = a.meta.clone();
+                }
             }
             Ok(ReadFinished {
+                growth: decision,
                 model: Some(meta),
                 accepted: r.accepted,
                 baseline_loss: r.baseline_loss,
@@ -825,6 +848,7 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
             stopped: false,
             early_stop: false,
             error: Some(e),
+            growth: None,
         });
         append_history(
             &app,

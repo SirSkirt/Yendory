@@ -1,6 +1,7 @@
 //! Learning: lesson parsing, training rows, batched gradients, the learning-rate schedule and
 //! held-out evaluation. Reference behaviour: `reference/lessons.py` and
 //! `reference/train_lessons.py` (the pipeline that trained the step-19,000 checkpoint).
+pub mod autogrow;
 pub mod bench;
 pub mod corpus;
 pub mod course;

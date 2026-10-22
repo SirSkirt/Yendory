@@ -2,6 +2,8 @@
 //! computed before; Studio keeps a recovery checkpoint of every model it grows, verifies the
 //! grown model before replacing the original, records the growth and can roll it back.
 use super::*;
+use yendory_engine::learn::autogrow::{judge, AutoGrowthRules, Check, Verdict};
+use yendory_engine::learn::memory::{self, FitEstimate, StepShape};
 use yendory_engine::model::grow::PROBES;
 use yendory_engine::{compare_outputs, Growth, GrowthOption, NotOffered, OutputComparison};
 
@@ -46,7 +48,68 @@ pub struct GrowthInfo {
     /// Parameters before the first growth (None: never grown).
     pub original_parameters: Option<usize>,
     pub history: Vec<GrowthRecord>,
+    /// Limits and thresholds of automatic growth.
+    pub rules: AutoGrowthRules,
+    /// Automatic growth's latest decisions (grown or not, and why), newest last.
+    pub decisions: Vec<AutoDecision>,
 }
+
+/// A decision of automatic growth at the end of a reading run.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDecision {
+    pub time: u64,
+    pub step: u64,
+    /// The growth step taken, if the network grew.
+    pub grown: Option<String>,
+    pub reason: String,
+}
+
+/// Decisions kept per model.
+const KEEP_DECISIONS: usize = 20;
+
+/// How training a model of a size would fit this computer's memory, with the batches of the
+/// Reading settings.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FitView {
+    /// "gpu" or "cpu": where training runs now.
+    device: &'static str,
+    #[serde(flatten)]
+    estimate: FitEstimate,
+}
+
+/// The fit of training `parameters` (with `activation` values per token) in batches of `rows`
+/// rows of `tokens` tokens, on the training device and within the memory settings.
+fn fit(parameters: usize, activation: usize, vocab: usize, rows: usize, tokens: usize) -> FitView {
+    let s = memory::memory_settings();
+    let shape = StepShape { parameters, activation_floats_per_token: activation, rows, tokens, vocab };
+    if yendory_engine::learn::device() == yendory_engine::learn::Device::Cpu {
+        // The CPU keeps weights, gradients, both moments and the activations in RAM.
+        let need = 16 * parameters as u64 + shape.working_bytes(rows);
+        let (total, _) = memory::system_ram();
+        return FitView {
+            device: "cpu",
+            estimate: FitEstimate {
+                micro_rows: rows,
+                optimizer_in_ram: true,
+                plan: "On the CPU, in system RAM".into(),
+                gpu_bytes: 0,
+                ram_bytes: need,
+                fits: (total > 0).then(|| need <= total.saturating_sub(s.ram_reserve_bytes)),
+            },
+        };
+    }
+    let fixed = |ram| yendory_engine::gpu::GpuModel::fixed_bytes_for(parameters, ram);
+    FitView {
+        device: "gpu",
+        estimate: memory::estimate(&s, &shape, fixed(false), fixed(true), s.ram_allowance()),
+    }
+}
+
+/// The Reading settings' batch, when the page gives none.
+const DEFAULT_ROWS: usize = 16;
+const DEFAULT_TOKENS: usize = 128;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +119,10 @@ pub struct OptionView {
     /// Weights, gradients and both AdamW moments while training (bytes).
     state_bytes: u64,
     state_bytes_added: u64,
+    /// How training the grown model would fit memory.
+    fit: FitView,
+    /// Within automatic growth's parameter limit.
+    within_limit: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -70,12 +137,22 @@ pub struct GrowthView {
     not_offered: Vec<NotOffered>,
     history: Vec<GrowthRecord>,
     can_roll_back: bool,
+    /// How training the model as it is fits memory.
+    fit: FitView,
+    rules: AutoGrowthRules,
+    decisions: Vec<AutoDecision>,
+    /// The batch the fits are estimated for.
+    rows: usize,
+    tokens: usize,
 }
 
-fn view(a: &Active) -> GrowthView {
+fn view(a: &Active, rows: usize, tokens: usize) -> GrowthView {
     let (options, not_offered) = a.model.growth_options();
     let now = a.model.parameter_count();
     let state = |p: usize| 16 * p as u64;
+    let c = &a.model.config;
+    let tokens = tokens.min(c.max_tokens);
+    let limit = a.meta.growth.rules.max_parameters;
     GrowthView {
         mode: a.meta.growth.mode,
         original_parameters: a.meta.growth.original_parameters.unwrap_or(now),
@@ -89,28 +166,135 @@ fn view(a: &Active) -> GrowthView {
             .map(|o| OptionView {
                 state_bytes: state(o.parameters_after),
                 state_bytes_added: state(o.parameters_after) - state(o.parameters_before),
+                fit: fit(o.parameters_after, o.activation_floats_per_token, c.vocab, rows, tokens),
+                within_limit: limit.is_none_or(|m| o.parameters_after <= m),
                 option: o,
             })
             .collect(),
         not_offered,
         can_roll_back: a.meta.growth.history.iter().any(|r| !r.rolled_back),
         history: a.meta.growth.history.clone(),
+        fit: fit(now, Bicameral::activation_floats_for(c, a.model.neuro.as_ref()), c.vocab, rows, tokens),
+        rules: a.meta.growth.rules.clone(),
+        decisions: a.meta.growth.decisions.clone(),
+        rows,
+        tokens,
     }
 }
 
-#[tauri::command]
-pub fn growth_view(studio: State<Studio>) -> Res<GrowthView> {
-    with_active(&studio, |a| Ok(view(a)))
+fn batch(rows: Option<usize>, tokens: Option<usize>) -> (usize, usize) {
+    (rows.unwrap_or(DEFAULT_ROWS).clamp(1, 128), tokens.unwrap_or(DEFAULT_TOKENS).clamp(16, 1 << 16))
+}
+
+fn save_meta(dir: &std::path::Path, meta: &Meta) -> Res<()> {
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
-pub fn set_growth_mode(app: AppHandle, studio: State<Studio>, mode: GrowthMode) -> Res<GrowthView> {
+pub fn growth_view(studio: State<Studio>, rows: Option<usize>, tokens: Option<usize>) -> Res<GrowthView> {
+    let (rows, tokens) = batch(rows, tokens);
+    with_active(&studio, |a| Ok(view(a, rows, tokens)))
+}
+
+#[tauri::command]
+pub fn set_growth_mode(
+    app: AppHandle,
+    studio: State<Studio>,
+    mode: GrowthMode,
+    rows: Option<usize>,
+    tokens: Option<usize>,
+) -> Res<GrowthView> {
+    let (rows, tokens) = batch(rows, tokens);
     let mut guard = studio.active.lock().unwrap();
     let a = guard.as_mut().ok_or("Open or create a model first")?;
     a.meta.growth.mode = mode;
-    let dir = model_dir(&app, &a.meta.id)?;
-    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&a.meta).map_err(|e| e.to_string())?)?;
-    Ok(view(a))
+    if mode == GrowthMode::Automatic && a.meta.growth.rules.max_parameters.is_none() {
+        // A limit from the start: automatic growth up to four times the model's size now.
+        a.meta.growth.rules.max_parameters = Some(4 * a.model.parameter_count());
+    }
+    save_meta(&model_dir(&app, &a.meta.id)?, &a.meta)?;
+    Ok(view(a, rows, tokens))
+}
+
+#[tauri::command]
+pub fn set_growth_rules(
+    app: AppHandle,
+    studio: State<Studio>,
+    rules: AutoGrowthRules,
+    rows: Option<usize>,
+    tokens: Option<usize>,
+) -> Res<GrowthView> {
+    let (rows, tokens) = batch(rows, tokens);
+    if rules.max_parameters.is_some_and(|m| m > yendory_engine::model::MAX_PARAMETERS)
+        || !(1..=1000).contains(&rules.plateau_checks)
+        || !(0. ..=0.5).contains(&rules.min_gain)
+        || !(0. ..=2.).contains(&rules.max_gap)
+    {
+        return Err(
+            "Check the limits: at most 1e9 parameters, 1-1000 checks, a gain of 0-50% and a gap of 0-200%"
+                .into(),
+        );
+    }
+    let mut guard = studio.active.lock().unwrap();
+    let a = guard.as_mut().ok_or("Open or create a model first")?;
+    a.meta.growth.rules = rules;
+    save_meta(&model_dir(&app, &a.meta.id)?, &a.meta)?;
+    Ok(view(a, rows, tokens))
+}
+
+/// Automatic growth at the end of a reading run (a safe boundary: nothing is training): judges
+/// the run's held-out checks and, when the network looks short of capacity, grows it by the
+/// largest step within the parameter limit and the memory limits. Every decision is recorded.
+pub(crate) fn automatic_after_reading(
+    dir: &std::path::Path,
+    a: &mut Active,
+    checks: &[Check],
+    early_stop: bool,
+    rows: usize,
+    tokens: usize,
+) -> Option<AutoDecision> {
+    if a.meta.growth.mode != GrowthMode::Automatic {
+        return None;
+    }
+    let last = a.meta.growth.history.iter().rev().find(|r| !r.rolled_back).map_or(0, |r| r.step);
+    let rules = a.meta.growth.rules.clone();
+    let mut decision = AutoDecision { time: now(), step: a.model.step, grown: None, reason: String::new() };
+    decision.reason = match judge(checks, early_stop, a.model.step.saturating_sub(last), &rules) {
+        Verdict::Wait(why) => format!("Not grown: {why}."),
+        Verdict::Grow(why) => {
+            let v = view(a, rows, tokens);
+            let allowed: Vec<&OptionView> =
+                v.options.iter().filter(|o| o.within_limit && o.fit.estimate.fits != Some(false)).collect();
+            let choice = allowed
+                .iter()
+                .find(|o| o.option.id == "balanced")
+                .or_else(|| allowed.iter().max_by_key(|o| o.option.parameters_after))
+                .map(|o| o.option.clone());
+            match choice {
+                None => format!(
+                    "Not grown, although {why}: no growth step stays within the limits ({} parameters at most; training memory as set)",
+                    rules.max_parameters.map_or("no limit on".into(), |m| m.to_string())
+                ),
+                Some(o) => match grow_active(dir, a, &o, true) {
+                    Ok(r) => {
+                        decision.grown = Some(r.label.clone());
+                        format!("Grown by {} ({} -> {} parameters): {why}.", r.label, r.parameters_before, r.parameters_after)
+                    }
+                    Err(e) => format!("Growth was due ({why}) but did not happen: {e}"),
+                },
+            }
+        }
+    };
+    let d = &mut a.meta.growth.decisions;
+    d.push(decision.clone());
+    let excess = d.len().saturating_sub(KEEP_DECISIONS);
+    d.drain(..excess);
+    let _ = save_meta(dir, &a.meta);
+    let _ = yendory_engine::learn::append_jsonl(
+        &dir.join("history.jsonl"),
+        &serde_json::json!({"time": now(), "automatic_growth": &decision}),
+    );
+    Some(decision)
 }
 
 fn extension(model: &Bicameral) -> &'static str {
@@ -208,7 +392,14 @@ pub(crate) fn roll_back_active(dir: &std::path::Path, a: &mut Active) -> Res<()>
 }
 
 #[tauri::command]
-pub fn expand_model(app: AppHandle, studio: State<Studio>, option: String) -> Res<GrowthView> {
+pub fn expand_model(
+    app: AppHandle,
+    studio: State<Studio>,
+    option: String,
+    rows: Option<usize>,
+    tokens: Option<usize>,
+) -> Res<GrowthView> {
+    let (rows, tokens) = batch(rows, tokens);
     not_teaching(&studio)?;
     let mut guard = studio.active.lock().unwrap();
     let a = guard.as_mut().ok_or("Open or create a model first")?;
@@ -217,9 +408,24 @@ pub fn expand_model(app: AppHandle, studio: State<Studio>, option: String) -> Re
     }
     let (options, _) = a.model.growth_options();
     let o = options.into_iter().find(|o| o.id == option).ok_or("Unknown growth step")?;
+    let f = fit(
+        o.parameters_after,
+        o.activation_floats_per_token,
+        a.model.config.vocab,
+        rows,
+        tokens.min(a.model.config.max_tokens),
+    );
+    if f.estimate.fits == Some(false) {
+        return Err(format!(
+            "The grown model would not fit the training memory limits: {} with batches of {rows} x {tokens} tokens needs about {} of {} memory. Change the Training memory settings or use smaller batches first; nothing was changed",
+            f.estimate.plan,
+            memory::gib(if f.device == "cpu" { f.estimate.ram_bytes } else { f.estimate.gpu_bytes }),
+            if f.device == "cpu" { "system" } else { "GPU" }
+        ));
+    }
     let dir = model_dir(&app, &a.meta.id)?;
     grow_active(&dir, a, &o, false)?;
-    Ok(view(a))
+    Ok(view(a, rows, tokens))
 }
 
 #[tauri::command]
@@ -229,7 +435,7 @@ pub fn roll_back_growth(app: AppHandle, studio: State<Studio>) -> Res<GrowthView
     let a = guard.as_mut().ok_or("Open or create a model first")?;
     let dir = model_dir(&app, &a.meta.id)?;
     roll_back_active(&dir, a)?;
-    Ok(view(a))
+    Ok(view(a, DEFAULT_ROWS, DEFAULT_TOKENS))
 }
 
 #[cfg(test)]
@@ -313,6 +519,78 @@ mod tests {
             assert_eq!(Bicameral::load(kept.path()).unwrap().weights, trained_grown.weights);
             assert!(roll_back_active(&dir, &mut a).is_err(), "nothing left to roll back");
             let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Automatic growth grows a plateaued, capacity-short model at the end of a reading run,
+    /// within the parameter limit, records why it did or did not, and never grows a model that
+    /// is still improving, memorising, over its limit or set to grow manually.
+    #[test]
+    fn automatic_growth_follows_the_evidence_and_the_limits() {
+        let fixture =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../../tests/compat/fixtures/nova2-step15000.nnova2");
+        let dir = temp_dir("auto");
+        let mut a = active(Bicameral::load(fixture).unwrap(), "auto");
+        save_in(&dir, &a.meta, &a.model, &a.archive).unwrap();
+        let checks = |held: &[f32], gap: f32| -> Vec<Check> {
+            held.iter().map(|&h| Check { train_loss: h * (1. - gap), held_out_loss: h }).collect()
+        };
+        let flat = checks(&[3.0, 2.2, 2.0, 1.999, 1.998, 1.998, 1.997], 0.02);
+        // Manual models are left alone.
+        assert!(automatic_after_reading(&dir, &mut a, &flat, false, 4, 64).is_none());
+        a.meta.growth.mode = GrowthMode::Automatic;
+        let n = a.model.parameter_count();
+        // Still improving, or memorising: not grown, with the reason.
+        let improving = checks(&[3.0, 2.6, 2.3, 2.1, 1.95, 1.85], 0.02);
+        let d = automatic_after_reading(&dir, &mut a, &improving, false, 4, 64).unwrap();
+        assert!(d.grown.is_none() && d.reason.contains("still improving"), "{}", d.reason);
+        let d = automatic_after_reading(
+            &dir,
+            &mut a,
+            &checks(&[3.0, 2.2, 2.0, 1.999, 1.998, 1.998, 1.997], 0.3),
+            false,
+            4,
+            64,
+        )
+        .unwrap();
+        assert!(d.grown.is_none() && d.reason.contains("memorising"), "{}", d.reason);
+        // Over the parameter limit: no step allowed.
+        a.meta.growth.rules.max_parameters = Some(n + 10);
+        let d = automatic_after_reading(&dir, &mut a, &flat, false, 4, 64).unwrap();
+        assert!(d.grown.is_none() && d.reason.contains("limits"), "{}", d.reason);
+        assert_eq!(a.model.parameter_count(), n);
+        // Within the limit: grown by a verified step, recorded as automatic.
+        a.meta.growth.rules.max_parameters = Some(2 * n);
+        let before = a.model.clone();
+        let d = automatic_after_reading(&dir, &mut a, &flat, false, 4, 64).unwrap();
+        println!("{}", d.reason);
+        assert!(d.grown.is_some(), "{}", d.reason);
+        let grown = a.model.parameter_count();
+        assert!(grown > n && grown <= 2 * n);
+        assert!(a.meta.growth.history.last().unwrap().automatic);
+        assert!(compare_outputs(&before, &a.model, &PROBES).unwrap().preserved());
+        // Right after a growth, the new capacity is trained first.
+        let d = automatic_after_reading(&dir, &mut a, &flat, false, 4, 64).unwrap();
+        assert!(d.grown.is_none() && d.reason.contains("since the last growth"), "{}", d.reason);
+        let meta: Meta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(meta.growth.decisions.len(), 5);
+        assert_eq!(meta.parameters, grown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Growth options carry their memory fit, and a fit beyond the limits is reported.
+    #[test]
+    fn growth_options_report_their_memory_fit() {
+        let a = active(Bicameral::with_config(yendory_engine::Config::default(), 2), "fit");
+        let v = view(&a, 8, 64);
+        assert!(v.options.iter().all(|o| o.fit.estimate.ram_bytes > 0 || o.fit.estimate.gpu_bytes > 0));
+        let big = v.options.iter().max_by_key(|o| o.option.parameters_after).unwrap();
+        assert!(big.fit.estimate.ram_bytes >= v.fit.estimate.ram_bytes);
+        // A CPU fit needs the model state and activations, and respects the RAM reserve.
+        let f = fit(1_000_000_000, 100_000, 50_000, 128, 4096);
+        let (total, _) = memory::system_ram();
+        if total > 0 {
+            assert_eq!(f.estimate.fits, Some(false), "a 1e9-parameter model with large batches does not fit");
         }
     }
 

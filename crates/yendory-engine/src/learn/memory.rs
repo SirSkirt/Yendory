@@ -288,6 +288,50 @@ impl Fitter {
     }
 }
 
+/// Whether a step of `shape` fits the settings on the GPU, and how it would run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FitEstimate {
+    pub micro_rows: usize,
+    pub optimizer_in_ram: bool,
+    /// The plan in words.
+    pub plan: String,
+    /// Estimated GPU memory of the plan (model buffers and working memory).
+    pub gpu_bytes: u64,
+    /// System RAM the plan offloads to.
+    pub ram_bytes: u64,
+    /// Within the GPU budget and the RAM limits; `None` when the GPU's memory is not given.
+    pub fits: Option<bool>,
+}
+
+/// Estimates how a step of `shape` would run under the settings (the plan the trainer would
+/// choose first) and whether it stays within the limits. `fixed_gpu`/`fixed_ram`: the model's
+/// own GPU buffers with the optimizer state on the GPU and in RAM.
+pub fn estimate(
+    s: &MemorySettings,
+    shape: &StepShape,
+    fixed_gpu: u64,
+    fixed_ram: u64,
+    ram_allowance: u64,
+) -> FitEstimate {
+    let ram_ok = ram_allowance >= shape.ram_offload_bytes();
+    let plan = Fitter::default()
+        .plan(s, shape, fixed_gpu, fixed_ram, ram_ok, false)
+        .unwrap_or(Plan { micro_rows: 1, optimizer_in_ram: s.optimizer_in_ram });
+    let gpu_bytes =
+        if plan.optimizer_in_ram { fixed_ram } else { fixed_gpu } + shape.working_bytes(plan.micro_rows);
+    let ram_bytes = if plan.optimizer_in_ram { shape.ram_offload_bytes() } else { 0 };
+    let ram_fits = !plan.optimizer_in_ram || ram_ok;
+    FitEstimate {
+        micro_rows: plan.micro_rows,
+        optimizer_in_ram: plan.optimizer_in_ram,
+        plan: plan.describe(shape.rows.max(1)),
+        gpu_bytes,
+        ram_bytes,
+        fits: s.gpu_budget().map(|b| gpu_bytes <= b && ram_fits),
+    }
+}
+
 /// "1.5 GB".
 pub fn gib(bytes: u64) -> String {
     if bytes >= 1 << 30 {

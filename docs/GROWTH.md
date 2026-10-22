@@ -1,7 +1,7 @@
 # Growing networks and using system RAM: design
 
-Status: Stage 1 (inspection), Stage 2 (manual growth) and Stage 3 (the training memory
-manager) complete; later stages are recorded in the sections below as they land.
+Status: all five stages complete: inspection, manual growth, the training memory manager,
+growth within the memory limits, and automatic growth from training evidence.
 
 ## 1. What exists today
 
@@ -200,6 +200,46 @@ allocation before that point so the manager can choose a plan instead.
 3. The memory manager: budgets, micro-batching, optimizer state in RAM, settings and statistics
    (done).
 4. Growth and memory together: expansion estimates and refuses plans beyond the limits; expanded
-   models train under the memory plan.
+   models train under the memory plan (done).
 5. Automatic growth from training evidence (plateaus, held-out results), within the limits, at
-   safe boundaries.
+   safe boundaries (done).
+
+## 5. Growth within the memory limits (Stage 4, as built)
+
+- Every growth step in Studio shows the training memory the grown model needs with the Reading
+  settings' batch, *as the trainer would run it*: on the GPU, the plan the memory manager would
+  choose (whole batches, micro-batches, or the optimizer state in RAM) with its GPU and RAM
+  bytes (`learn::memory::estimate`); on the CPU, the RAM for weights, gradients, both moments and
+  activations. Each is marked as fitting, over the limits, or unknown (GPU size not given).
+- Expanding refuses a step whose estimate is over the Training memory limits (GPU budget, RAM
+  limit and reserve), before anything is changed, and says what it would need.
+- A grown model trains under the same memory manager as any model: when it no longer fits
+  whole batches, it trains in micro-batches and, if needed, with the optimizer state in RAM
+  (`tests/gpu_memory.rs`: a model grown past the budget trains within it and gives the CPU's
+  weights).
+- The Training memory panel shows the next growth step's memory against the limits.
+
+## 6. Automatic growth (Stage 5, as built)
+
+- **When**: only at the end of a reading run that finished (not stopped, no error): the run is
+  over and nothing else trains until it is reported, so the model is not in use. Lessons and
+  courses never grow a model mid-way (their snapshots and resumes rely on a fixed shape).
+- **Evidence** (`learn::autogrow::judge`), from the run's held-out checks, never from a token
+  count:
+  - enough training since the last growth (default 3,000 steps) for its new capacity to train;
+  - a plateau: the best held-out loss improved by less than 0.5% over the last 4 checks, or
+    the run stopped early because it stopped improving;
+  - not memorising: the training loss over those checks is within 10% of the held-out loss. A
+    network whose training loss is far below its held-out loss is not short of capacity, so it
+    is left as it is (more varied text helps it more).
+- **Choice and limits**: the balanced step if it is within the model's size limit (default four
+  times its size when Automatic is chosen; editable) and the memory limits; otherwise the
+  largest step that is; otherwise none, with the reason.
+- **Safety**: the same verified growth as manual expansion (recovery checkpoint, output check,
+  rollback). Because the grown network computes what the original did, and reading keeps a
+  checkpoint only when the held-out loss improves, automatic growth cannot make the kept model
+  worse on held-out text.
+- **Record**: every decision (grown or not, and why) is kept with the model (the latest 20 in
+  `meta.json`, all in `history.jsonl`), shown in the growth panel and announced when reading
+  finishes. All thresholds are settings of the model.
+

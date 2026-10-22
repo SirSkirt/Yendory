@@ -303,3 +303,63 @@ fn trainer_adapts_to_the_budget_and_reports() {
 fn rows_max(m: &Bicameral) -> usize {
     rows(m, 4).iter().map(|r| r.ids.len()).max().unwrap()
 }
+
+/// A model grown past the GPU budget still trains on the GPU: the trainer moves the optimizer
+/// state to system RAM and uses micro-batches, and trains the CPU's weights.
+#[test]
+fn a_grown_model_trains_past_the_budget_by_offloading() {
+    let _lock = GLOBALS.lock().unwrap();
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    if yendory_engine::learn::gpu_name().is_err() {
+        println!("no GPU available; skipped");
+        return;
+    }
+    let (_, small) = models().remove(0);
+    let (options, _) = small.growth_options();
+    let start = small.grow(&options.iter().find(|o| o.id == "balanced").unwrap().growth, 3).unwrap();
+    let rows = rows(&start, 4);
+    let n = start.parameter_count();
+    // The budget holds the small model with whole batches, but not the grown one.
+    let shape = |m: &Bicameral| StepShape {
+        parameters: m.parameter_count(),
+        activation_floats_per_token: Bicameral::activation_floats_for(&m.config, m.neuro.as_ref()),
+        rows: 4,
+        tokens: rows_max(m),
+        vocab: m.config.vocab,
+    };
+    let small_need =
+        GpuModel::fixed_bytes_for(small.parameter_count(), false) + shape(&small).working_bytes(4);
+    let grown_least = GpuModel::fixed_bytes_for(n, true) + shape(&start).working_bytes(1);
+    let grown_whole = GpuModel::fixed_bytes_for(n, false) + shape(&start).working_bytes(4);
+    println!(
+        "small model {small_need} bytes; grown: {grown_least} at least, {grown_whole} with whole batches"
+    );
+    assert!(grown_whole > small_need);
+    let budget = small_need.max(grown_least) + (1 << 20);
+    assert!(budget < grown_whole, "the grown model's whole batches must not fit");
+    memory::set_memory_settings(MemorySettings {
+        gpu_memory_bytes: Some(budget * 100 / 90 + 100),
+        ram_limit_bytes: Some(1 << 40),
+        ram_reserve_bytes: 0,
+        ..MemorySettings::default()
+    });
+    set_device(Device::Gpu(yendory_engine::gpu::Api::Auto));
+    let mut m = start.clone();
+    let mut t = Trainer::new(&m);
+    for _ in 0..2 {
+        t.step(&mut m, &rows, Ablation::default(), 2e-3, Focus::Joint).unwrap();
+    }
+    t.sync(&mut m).unwrap();
+    set_device(Device::Cpu);
+    memory::set_memory_settings(MemorySettings::default());
+    let r = t.memory_report().unwrap();
+    println!("{r:?}");
+    assert!(t.on_gpu(), "still on the GPU");
+    assert!(r.optimizer_in_ram || r.micro_rows.is_some(), "{r:?}");
+    assert!(r.gpu_bytes <= budget, "within the budget: {} > {budget}", r.gpu_bytes);
+    let mut cpu = start.clone();
+    for _ in 0..2 {
+        cpu = cpu_step(&cpu, &rows, Ablation::default(), Focus::Joint).1;
+    }
+    close("grown model under the budget", &m.weights, &cpu.weights);
+}

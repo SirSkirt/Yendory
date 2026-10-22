@@ -1512,6 +1512,7 @@ pub fn run() {
             growth::set_growth_mode,
             growth::expand_model,
             growth::roll_back_growth,
+            growth::set_growth_rules,
             list_models,
             create_model,
             model_sizes,

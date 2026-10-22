@@ -89,8 +89,24 @@ async function renderMemory() {
       v.marginAfterRestart ? el("b", {}, "The new margin applies after Studio restarts. ") : "",
       "Micro-batches give exactly the same training step; the optimizer state in RAM gives the same step with the GPU computing the gradient and the CPU applying it."),
     r?.steps ? el("p", { class: "note" }, "Last GPU training: " + memoryReportLine(r, v.gpuBudget), r.note ? ` (${r.note})` : "") : "",
+    el("p", { class: "note", id: "memoryNext", hidden: "" }),
     ...v.warnings.map(w => el("p", { class: "note bad" }, w)));
+  showMemoryNext();
 }
+
+// The next growth step's training memory (set by the growth panel for the open model).
+function showMemoryNext() {
+  const p = $("memoryNext");
+  if (!p) return;
+  const n = window.nextGrowth;
+  p.hidden = !n;
+  if (!n) return;
+  const f = n.fit;
+  p.replaceChildren(`Next growth of the open model (${n.label}, ${fmt(n.parameters)} parameters): about `,
+    f.device === "cpu" ? `${bytes(f.ramBytes)} of RAM on the CPU` : `${bytes(f.gpuBytes)} of GPU memory${f.ramBytes ? ` and ${bytes(f.ramBytes)} of RAM` : ""} (${f.plan})`,
+    f.fits === false ? el("span", { class: "bad" }, " — over these limits") : f.fits ? " — within these limits" : "", ".");
+}
+window.showMemoryNext = showMemoryNext;
 
 let memoryTimer = null;
 function pollMemory() {
