@@ -590,6 +590,26 @@ D and E show the loss guard and patience were not what blocked C. Counting rejec
 judges those answers like `protect_answers_net` judges this lesson's: a candidate is rejected
 only when it loses more earlier-lesson answers than it gains in this lesson.
 
+### All lessons at once (mixed, like reading)
+
+The owner's proposal: teach a course's lessons together, every batch mixing all of them (one
+session over every lesson's training units; each held-out question keeps its lesson), instead
+of one lesson after another. Same new model, seed and settings (Joint, learning rate 0.001,
+30 epochs, patience 8, current guards); what the final model answers on every lesson's held-out
+questions:
+
+| Course | One lesson at a time (current) | Best one-at-a-time variant (F) | All lessons mixed |
+|---|---|---|---|
+| Basic English | 10/101 (10%) | 55/101 (54%) | **88/101 (87%)**: 8/10, 12/17, 16/16, 15/18, 19/22, 18/18 |
+| Basic Reasoning | 42/85 (49%) | - | **73/85 (86%)**: 14/16, 16/17, 6/14, 22/22, 15/16 |
+| Basic Math | 24/92 (26%) | - | **43/92 (47%)**: counting 17/18, addition 9/19, subtraction 1/16, compare 7/19, word problems 9/20 |
+
+Every lesson improves at once and nothing is forgotten, because no lesson is ever trained
+without the others: there is no earlier lesson for the guards to protect, and the held-out
+guard judges all lessons together. Each mixed session was still accepting candidates at its
+30-epoch limit. Arithmetic (addition and subtraction of unseen pairs) is the hardest pattern
+for a 1.2M model either way.
+
 The decision on defaults is the owner's (see docs/STATUS.md).
 
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
