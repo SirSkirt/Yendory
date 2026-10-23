@@ -233,9 +233,14 @@
       <button type="button" id="addBuiltinLessons">Add</button>
       <span class="note">Basic English, Reasoning and Math, shipped with Yendory: teach them to check that a model learns from lessons, separately from your own.</span>
     </div>
+    <div class="line-form" id="togetherControls">
+      <span class="note"><b>Taught together</b> (the default): ticked lessons are taught in one mixed session, every batch drawing on all of them like reading, and each is then graded on its own held-out questions; unticked lessons are taught one at a time afterwards. Teaching together avoids the forgetting that blocks lessons taught one after another (docs/LEARNING.md).</span>
+      <button type="button" id="togetherAll" class="quiet">Tick all</button>
+      <button type="button" id="togetherNone" class="quiet">Untick all</button>
+    </div>
     <table class="ledger" id="lessonTable">
-      <thead><tr><th>#</th><th>Lesson file</th><th class="num">Taught units</th><th class="num">Held out</th><th>Contents</th><th>Status</th><th></th></tr></thead>
-      <tbody><tr><td colspan="7" class="empty">No lessons added.</td></tr></tbody>
+      <thead><tr><th title="Taught together with the other ticked lessons">Together</th><th>#</th><th>Lesson file</th><th class="num">Taught units</th><th class="num">Held out</th><th>Contents</th><th>Status</th><th></th></tr></thead>
+      <tbody><tr><td colspan="8" class="empty">No lessons added.</td></tr></tbody>
     </table>
 
     <h3>Settings</h3>
@@ -373,7 +378,7 @@
       </div>
       <div id="courseNotes"></div>
       <table class="ledger compact" id="courseLessons">
-        <thead><tr><th>#</th><th>Lesson file</th><th>Stage</th><th class="num">Pass mark %</th><th class="num">Train · evaluation · exam</th><th>Extra practice</th><th></th></tr></thead>
+        <thead><tr><th title="Taught together with the other ticked lessons of the same stage">Together</th><th>#</th><th>Lesson file</th><th>Stage</th><th class="num">Pass mark %</th><th class="num">Train · evaluation · exam</th><th>Extra practice</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
       <div id="courseCheck"></div>
@@ -408,7 +413,7 @@
         <label class="check"><input type="checkbox" id="cProtect"> Never accept a step that loses an answer the model already gives</label>
         <label class="check"><input type="checkbox" id="cRequeue"> A lesson not passed after its retries moves once to the end of the course (then it is recorded as unresolved)</label>
       </div>
-      <p class="note">Changing training settings does not count as a revision of the course; changing lessons, practice material, the exam, pass marks or exam weights does.</p>
+      <p class="note">Changing training settings does not count as a revision of the course; changing lessons, practice material, the exam, pass marks, exam weights or teaching a lesson on its own instead of together does.</p>
     </div>
   </section>
 

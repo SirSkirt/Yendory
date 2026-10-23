@@ -610,7 +610,29 @@ guard judges all lessons together. Each mixed session was still accepting candid
 30-epoch limit. Arithmetic (addition and subtraction of unseen pairs) is the hardest pattern
 for a 1.2M model either way.
 
-The decision on defaults is the owner's (see docs/STATUS.md).
+### Teaching together, the default (0.4.9)
+
+Following that result, lessons are taught together by default, in the Classroom and in courses
+(Courses and the Planner), and the lessons to teach together are chosen like the corpora of a
+reading (a "Together" tick box per lesson, all ticked by default):
+
+- **Classroom** (`course::teach_course_together`): the ticked lessons (two or more) are taught
+  first, in one session over all their training units, every batch drawing on all of them
+  (`course::teach_group`). The session's guards judge all their held-out questions together;
+  each lesson is then graded on its own held-out questions against its pass mark. While some are
+  below their mark and retries remain, the next attempt trains the group again with the units of
+  the lessons not yet passed twice and the others once, so no lesson is ever trained without the
+  rest; an attempt that changes nothing ends the group. Lessons still below their mark are
+  Unresolved (their progress is kept). Unticked lessons are then taught one at a time, with the
+  group's lessons as their rehearsal archive.
+- **Courses** (`program::run_course`): the ticked lessons of the same stage form one group (the
+  stage decides which parts of the brain may train, so lessons of different stages are not
+  mixed); each group is taught when its first lesson comes up, then the remaining lessons one at
+  a time. Course remediation practises the targeted lessons of a group together too (each
+  strategy's practice material for every one of them, in one session). A stopped group is taught
+  again when the run resumes (accepted changes are kept). A lesson set to be taught on its own
+  changes the course's version (fingerprint); the default leaves the version of existing courses
+  as it was.
 
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 

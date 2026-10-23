@@ -364,6 +364,9 @@ $("renameModel").addEventListener("click", safe(async () => {
 // ---- classroom -----------------------------------------------------------------------------
 let lessonsList = [];
 const fileState = {};  // lesson index -> outcome text during/after teaching
+// Lessons taught together, by file name (every lesson is, unless unticked).
+const lessonTogether = {};
+const isTogether = l => lessonTogether[l.name] !== false;
 
 function lessonStatus(l, i) {
   if (fileState[i]) return fileState[i];
@@ -376,10 +379,12 @@ function renderLessons() {
   const body = $("lessonTable").tBodies[0];
   body.replaceChildren();
   if (!lessonsList.length) {
-    body.append(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "No lessons added.")));
+    body.append(el("tr", {}, el("td", { colspan: 8, class: "empty" }, "No lessons added.")));
     return;
   }
   lessonsList.forEach((l, i) => body.append(el("tr", { id: "lesson-" + i },
+    el("td", {}, el("input", { type: "checkbox", checked: isTogether(l) ? "" : null, disabled: teaching ? "" : null, "aria-label": `Teach ${l.name} together with the others`,
+      onchange: e => { lessonTogether[l.name] = e.target.checked; } })),
     el("td", { class: "num" }, i + 1),
     el("td", {}, l.name),
     el("td", { class: "num" }, fmt(l.train)),
@@ -396,6 +401,9 @@ $("addLessons").addEventListener("click", safe(async () => {
   for (const k of Object.keys(fileState)) delete fileState[k];
   renderLessons();
 }, "Add lessons"));
+for (const [id, on] of [["togetherAll", true], ["togetherNone", false]]) {
+  $(id).addEventListener("click", () => { for (const l of lessonsList) lessonTogether[l.name] = on; renderLessons(); });
+}
 $("clearLessons").addEventListener("click", safe(async () => {
   lessonsList = await invoke("remove_lesson", { index: null });
   renderLessons();
@@ -454,6 +462,7 @@ $("teach").addEventListener("click", safe(async () => {
     retries: $("optRetries").checked,
     requeue: $("optRequeue").checked,
     education: $("optEducation").value,
+    together: lessonsList.map(isTogether),
   };
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
@@ -501,7 +510,15 @@ function epochDecision(ep) {
 }
 function scoreCell(s) { return s ? `${s.exact_correct}/${s.exact_total}` : "—"; }
 function onTeachEvent(e) {
-  if (e.type === "file_started") {
+  if (e.type === "group_started") {
+    for (const i of e.indices) fileState[i] = el("span", { class: "tag" }, "teaching together…");
+    renderLessons();
+    $("progressTitle").textContent = `Teaching ${active?.name ?? ""} · ${e.indices.length} lessons together`;
+    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("b", {}, `Taught together (one mixed session): ${e.names.join(", ")}`))));
+  } else if (e.type === "group_scored") {
+    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note" },
+      `After attempt ${e.attempt + 1}, each lesson on its own held-out questions: ` + e.indices.map((ix, k) => `${lessonsList[ix]?.name ?? "lesson " + (ix + 1)} ${(100 * e.rates[k]).toFixed(0)}%${e.passed[k] ? " (passed)" : ""}`).join(" · "))));
+  } else if (e.type === "file_started") {
     progress.index = e.index;
     fileState[e.index] = el("span", { class: "tag" }, e.pass > 1 ? "trying again…" : "teaching…");
     renderLessons();

@@ -587,6 +587,30 @@ fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, R
     ))
 }
 
+/// One lesson's score on its own held-out questions (all of them): teacher-forced loss and
+/// exact answers. Used for lessons taught together, where the session scores the group.
+pub(super) fn lesson_score(model: &Bicameral, items: &[Item]) -> Result<Score, String> {
+    let held: Vec<&Item> = items.iter().filter(|i| i.held_out).collect();
+    let rows = rows_of(model, &held, &mut Rng::new(0x0005_C04E))?;
+    let heldout_loss =
+        if rows.is_empty() { 0. } else { batch_loss_and_gradients_loss(model, &rows, Ablation::default())? };
+    let report = evaluate(model, &held, Ablation::default())?;
+    let overall = report.overall();
+    Ok(Score {
+        heldout_loss,
+        exact_correct: overall.correct,
+        exact_total: overall.total,
+        prefers_supported: report.prefers_supported.correct,
+        prefers_total: report.prefers_supported.total,
+        retention_loss: None,
+        panel_correct: 0,
+        panel_total: 0,
+        by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
+        dense_reliance: None,
+        without_dense_loss: None,
+    })
+}
+
 /// Teacher-forced mean loss of rows (no gradient is applied).
 pub(super) fn batch_loss_and_gradients_loss(
     model: &Bicameral,

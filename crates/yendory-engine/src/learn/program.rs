@@ -3,7 +3,7 @@
 //! attempts with different strategies when the course is failed. Progress is saved after every
 //! lesson and every remediation session so an interrupted run resumes where it stopped.
 //! The rules are written out in docs/LEARNING.md ("Courses").
-use super::course::{teach_lesson, CourseEvent, FileOutcome, FileRecord, Next, Queue};
+use super::course::{teach_group, teach_lesson, CourseEvent, FileOutcome, FileRecord, Next, Queue};
 use super::curriculum::{PreparedCourse, PreparedLesson, Section};
 use super::eval::{evaluate, Report};
 use super::lessons::{Item, Kind};
@@ -601,6 +601,35 @@ fn run_course_inner(
                 save(host, &current, &archive, run)?;
             }
             Phase::Teaching => {
+                // Lessons taught together: the "together" lessons of one stage not yet taught,
+                // in one mixed session (the stage of the earliest such lesson first).
+                let waiting = run.queue.waiting_first();
+                let pending: Vec<usize> = (0..prep.lessons.len())
+                    .filter(|&i| prep.lessons[i].together && run.records[i].is_none() && waiting.contains(&i))
+                    .collect();
+                if let Some(&first) = pending.first() {
+                    let stage = prep.lessons[first].stage;
+                    let group: Vec<usize> =
+                        pending.into_iter().filter(|&i| prep.lessons[i].stage == stage).collect();
+                    if group.len() >= 2 {
+                        if teach_course_group(
+                            &mut current,
+                            &mut archive,
+                            prep,
+                            run,
+                            &group,
+                            opts,
+                            host,
+                            rewards.as_deref_mut(),
+                            stop,
+                        )? {
+                            save(host, &current, &archive, run)?;
+                            return Ok(RunResult { model: current, archive, stopped: true });
+                        }
+                        save(host, &current, &archive, run)?;
+                        continue;
+                    }
+                }
                 let before = run.queue.clone();
                 let Some(next) = run.queue.pop() else {
                     let grade = grade_course(&current, prep, run)?;
@@ -747,15 +776,36 @@ fn run_course_inner(
                     let rec = run.remediation[k].clone();
                     let index = rec.targets[rec.done];
                     let lesson = &prep.lessons[index];
+                    // Lessons taught together are practised together: the following targets
+                    // of the same stage that are "together" lessons join this session.
+                    let group: Vec<usize> = if lesson.together {
+                        rec.targets[rec.done..]
+                            .iter()
+                            .copied()
+                            .take_while(|&i| {
+                                prep.lessons[i].together && prep.lessons[i].stage == lesson.stage
+                            })
+                            .collect()
+                    } else {
+                        vec![index]
+                    };
                     let seed = run.seed ^ (rec.attempt as u64 * 0x9E37) ^ (index as u64 * 7919);
-                    let (cfg, practice) = remedy_session(&current, prep, lesson, &rec, opts, seed)?;
+                    let (cfg, mut practice) = remedy_session(&current, prep, lesson, &rec, opts, seed)?;
+                    let mut items = lesson.items.clone();
+                    for &j in &group[1..] {
+                        let (_, more) =
+                            remedy_session(&current, prep, &prep.lessons[j], &rec, opts, seed ^ j as u64)?;
+                        practice.extend(more);
+                        items.extend(prep.lessons[j].items.iter().cloned());
+                    }
+                    let names: Vec<&str> = group.iter().map(|&j| prep.lessons[j].name.as_str()).collect();
                     let others: Vec<Item> =
-                        archive.iter().filter(|i| i.source != lesson.name).cloned().collect();
-                    let name = lesson.name.clone();
+                        archive.iter().filter(|i| !names.contains(&i.source.as_str())).cloned().collect();
+                    let name = names.join(" + ");
                     let attempt = rec.attempt;
                     let r = super::session::teach_rewarded(
                         &current,
-                        &lesson.items,
+                        &items,
                         Some(&practice),
                         &others,
                         &cfg,
@@ -772,19 +822,22 @@ fn run_course_inner(
                     )?;
                     if r.learned {
                         current = r.model;
-                        if !archive.iter().any(|i| i.source == lesson.name) {
-                            archive.extend(lesson.items.iter().cloned());
-                        }
-                        if !run.practice_archived[index] {
-                            archive.extend(lesson.practice.iter().cloned());
-                            run.practice_archived[index] = true;
+                        for &j in &group {
+                            let l = &prep.lessons[j];
+                            if !archive.iter().any(|i| i.source == l.name) {
+                                archive.extend(l.items.iter().cloned());
+                            }
+                            if !run.practice_archived[j] {
+                                archive.extend(l.practice.iter().cloned());
+                                run.practice_archived[j] = true;
+                            }
                         }
                     }
                     if r.stopped || stop.load(Ordering::Acquire) {
                         save(host, &current, &archive, run)?;
                         return Ok(RunResult { model: current, archive, stopped: true });
                     }
-                    run.remediation[k].done += 1;
+                    run.remediation[k].done += group.len();
                     save(host, &current, &archive, run)?;
                 }
                 if run.remediation[k].done < run.remediation[k].targets.len() {
@@ -821,6 +874,124 @@ fn run_course_inner(
             return Ok(RunResult { model: current, archive, stopped: true });
         }
     }
+}
+
+/// Teaches a group of a course's lessons together (one mixed session, see
+/// [`teach_group`]) and records each lesson like a lesson taught on its own. Returns true when
+/// teaching was stopped (the group is taught again when the run resumes; accepted changes are
+/// kept).
+#[allow(clippy::too_many_arguments)]
+fn teach_course_group(
+    current: &mut Bicameral,
+    archive: &mut Vec<Item>,
+    prep: &PreparedCourse,
+    run: &mut CourseRun,
+    group: &[usize],
+    opts: &RunOptions,
+    host: &mut dyn CourseHost,
+    rewards: Option<&mut super::reward::Rewards>,
+    stop: &AtomicBool,
+) -> Result<bool, String> {
+    let first = &prep.lessons[group[0]];
+    let cfg = session_cfg(prep, first, opts, run.seed.wrapping_add(group[0] as u64 * 7919 + 1));
+    let stage = first.stage;
+    let mut lessons: Vec<(usize, Vec<Item>)> = Vec::new();
+    let mut records: Vec<FileRecord> = Vec::new();
+    for &index in group {
+        let lesson = &prep.lessons[index];
+        records.push(FileRecord {
+            index,
+            name: lesson.name.clone(),
+            sha256: lesson.sha256.clone(),
+            bytes: 0,
+            train_units: lesson.items.iter().filter(|i| !i.held_out).count(),
+            heldout_units: lesson.items.iter().filter(|i| i.held_out).count(),
+            start_step: current.step,
+            end_step: current.step,
+            outcome: FileOutcome::Failed,
+            error: None,
+            epochs_run: 0,
+            baseline: None,
+            final_score: None,
+            pass: 1,
+            attempts: Vec::new(),
+            pass_mark: lesson.pass_mark,
+            own_before: super::course::own_rate(current, &lesson.items).ok(),
+            own_after: None,
+            with_memory: None,
+        });
+        let taught = match host.study() {
+            Some(st) => {
+                let (taught, report, copies) = st.before_lesson(current, &lesson.name, &lesson.items)?;
+                if let Some(report) = report {
+                    host.event(&ProgramEvent::Lesson {
+                        index,
+                        stage,
+                        event: CourseEvent::Studied { index, report, copies },
+                    });
+                }
+                taught
+            }
+            None => lesson.items.clone(),
+        };
+        lessons.push((index, taught));
+    }
+    let mut stopped = false;
+    let lead = group[0];
+    teach_group(
+        current,
+        archive,
+        &lessons,
+        cfg.retry.retries,
+        &cfg,
+        &mut records,
+        &mut stopped,
+        rewards,
+        &mut |e| {
+            let index = match e {
+                CourseEvent::FileFinished(r) => r.index,
+                _ => lead,
+            };
+            host.event(&ProgramEvent::Lesson { index, stage, event: e.clone() })
+        },
+        &mut |_, _| Ok(()),
+        stop,
+    )?;
+    if stopped {
+        return Ok(true);
+    }
+    if let Some(e) = records.iter().find_map(|r| r.error.clone()) {
+        return Err(format!(
+            "{}: {e}",
+            group.iter().map(|&i| prep.lessons[i].name.as_str()).collect::<Vec<_>>().join(" + ")
+        ));
+    }
+    run.queue.remove(group);
+    if records.iter().any(|r| r.changed()) {
+        run.queue.changed();
+    }
+    for mut record in records {
+        let index = record.index;
+        let lesson = &prep.lessons[index];
+        record.own_after = super::course::own_rate(current, &lesson.items).ok();
+        record.with_memory = host.study().and_then(|st| st.after_lesson(current, &lesson.items));
+        if record.outcome != FileOutcome::Passed {
+            record.outcome = FileOutcome::Unresolved;
+            record.error = Some("below its pass mark after being taught together with the others".into());
+        }
+        record.end_step = current.step;
+        let score = lesson_score(current, lesson)?;
+        run.when_taught[index] = Some(score);
+        host.event(&ProgramEvent::LessonTaught {
+            index,
+            name: lesson.name.clone(),
+            outcome: record.outcome,
+            when_taught: score,
+            record: Some(Box::new(record.clone())),
+        });
+        run.records[index] = Some(record);
+    }
+    Ok(false)
 }
 
 /// What ended a course run, for the restart rules.

@@ -109,32 +109,48 @@ $("teach").addEventListener("click", () => {
   setTimeout(() => { if (!teaching && teachCard.steps().every(s => s.state === "waiting")) teachCard.hide(); }, 2500);
 });
 
+// The steps an event of lesson `index` updates: every lesson of its group when taught together.
+const groupSteps = (track, index) => (track.group?.includes(index) ? track.group : [index]).map(i => "L" + i);
 const baseTeachEvent = onTeachEvent;
 onTeachEvent = e => {
   baseTeachEvent(e);
   if (teachCard.container.hidden) return;
+  if (e.type === "group_started") {
+    teachTrack.group = e.indices;
+    teachCard.set({ subtitle: `${e.indices.length} lessons taught together`, status: "Training" });
+    for (const i of e.indices) teachCard.step("L" + i, { state: "running", progress: 0, detail: `Taught together with ${e.indices.length - 1} other lesson(s) in one mixed session.` });
+    return;
+  }
+  if (e.type === "group_scored") {
+    e.indices.forEach((i, k) => teachCard.step("L" + i, { detail: `After attempt ${e.attempt + 1}: ${(100 * e.rates[k]).toFixed(0)}% of its held-out questions right${e.passed[k] ? " (passed)" : ""}.` }));
+    return;
+  }
+  if (e.type === "file_started" && teachTrack.group?.includes(e.index)) return;
   if (e.type === "file_started") {
     teachCard.set({ subtitle: `Lesson ${e.index + 1} of ${e.files} — ${e.name}`, status: e.pass > 1 ? "Second try" : "Training" });
     teachCard.step("L" + e.index, { state: "running", progress: 0, detail: e.pass > 1 ? "Second try, after the other lessons." : "Measuring where the model starts." });
   } else if (e.type === "attempt_started") {
     teachTrack.epochs = e.epochs; teachTrack.epochNow = 0; teachTrack.seen = [];
     teachTrack.attempt = e.attempt === 0 ? "First attempt" : `Retry ${e.attempt} of ${e.attempts - 1}${e.remedy ? ": " + e.remedy : ""}`;
-    teachCard.step("L" + e.index, { detail: teachTrack.attempt, progress: 0 });
+    for (const id of groupSteps(teachTrack, e.index)) teachCard.step(id, { detail: teachTrack.attempt, progress: 0 });
   } else if (e.type === "diagnosed") {
     teachCard.step("L" + e.index, { detail: `Not passed (held-out ${(100 * e.diagnosis.heldout_rate).toFixed(0)}%): ${CAUSE_TEXT[e.diagnosis.cause] || e.diagnosis.cause}. Next: ${e.diagnosis.remedy}` });
   } else if (e.type === "session") {
     const s = e.event;
+    const ids = groupSteps(teachTrack, e.index);
+    const all = ids.length > 1 ? " (all lessons of the group)" : "";
     if (s.type === "started") {
-      teachCard.step("L" + e.index, { detail: `${teachTrack.attempt}. Starts with ${s.baseline.exact_correct} of ${s.baseline.exact_total} held-out questions right; ${fmt(s.train_units)} units to learn.` });
+      for (const id of ids) teachCard.step(id, { detail: `${teachTrack.attempt}. Starts with ${s.baseline.exact_correct} of ${s.baseline.exact_total} held-out questions right${all}; ${fmt(s.train_units)} units to learn.` });
     } else if (s.type === "batch") {
-      teachCard.step("L" + e.index, { progress: attemptProgress(teachTrack, s), progressLabel: batchLabel(teachTrack, s) });
+      for (const id of ids) teachCard.step(id, { progress: attemptProgress(teachTrack, s), progressLabel: batchLabel(teachTrack, s) });
     } else if (s.type === "epoch") {
       const a = s.accepted_score;
-      teachCard.step("L" + e.index, { detail: `${teachTrack.attempt}. After epoch ${s.epoch}: ${a.exact_correct} of ${a.exact_total} held-out questions right, held-out loss ${a.heldout_loss.toFixed(3)}.` });
+      for (const id of ids) teachCard.step(id, { detail: `${teachTrack.attempt}. After epoch ${s.epoch}: ${a.exact_correct} of ${a.exact_total} held-out questions right${all}, held-out loss ${a.heldout_loss.toFixed(3)}.` });
     }
   } else if (e.type === "file_finished") {
     teachCard.step("L" + e.index, { state: OUTCOME_STATE[e.outcome] || "done", progress: null,
       detail: [outcomeText(e), learningText(e)].filter(Boolean).join(". ") + "." });
+    if (teachTrack.group?.every(i => teachCard.steps().find(s => s.id === "L" + i)?.state !== "running")) teachTrack.group = null;
   }
 };
 const baseTeachFinished = onTeachFinished;
@@ -174,19 +190,29 @@ onPlanEvent = payload => {
     planCard.set({ subtitle: `Plan ${plan.name} · pre-test ${percent(e.score)} (ungraded)` });
   } else if (e.type === "lesson") {
     const c = e.event, id = "L" + c.index;
-    if (c.type === "file_started") {
+    const ids = groupSteps(planTrack, c.index);
+    if (c.type === "group_started") {
+      planTrack.group = c.indices;
+      planCard.set({ subtitle: `${c.indices.length} lessons together · ${stageName(e.stage)}`, status: "Training" });
+      c.indices.forEach((i, k) => planCard.step("L" + i, { title: `Lesson ${i + 1} — ${c.names[k]}`, state: "running", progress: 0, detail: `${stageName(e.stage)} · taught together with ${c.indices.length - 1} other lesson(s) in one mixed session.` }));
+    } else if (c.type === "group_scored") {
+      c.indices.forEach((i, k) => planCard.step("L" + i, { detail: `After attempt ${c.attempt + 1}: ${percent(c.rates[k])} of its evaluation questions right${c.passed[k] ? " (passed)" : ""}.` }));
+    } else if (c.type === "file_started" && planTrack.group?.includes(c.index)) {
+      // Part of the group already shown.
+    } else if (c.type === "file_started") {
       planCard.set({ subtitle: `Lesson ${c.index + 1} — ${c.name} · ${stageName(e.stage)}`, status: c.pass > 1 ? "Second try" : "Training" });
       planCard.step(id, { title: `Lesson ${c.index + 1} — ${c.name}`, state: "running", progress: 0, detail: `${stageName(e.stage)}${c.pass > 1 ? " · second try" : ""}.` });
     } else if (c.type === "attempt_started") {
       Object.assign(planTrack, { epochs: c.epochs, epochNow: 0, seen: [], candidates: 1 });
       planTrack.attempt = c.attempt === 0 ? "First attempt" : `Retry ${c.attempt}${c.remedy ? ": " + c.remedy : ""}`;
-      planCard.step(id, { detail: planTrack.attempt, progress: 0 });
+      for (const s of ids) planCard.step(s, { detail: planTrack.attempt, progress: 0 });
     } else if (c.type === "diagnosed") {
       planCard.step(id, { detail: `Not passed yet (${percent(c.diagnosis.heldout_rate)}): ${CAUSE_TEXT[c.diagnosis.cause] || c.diagnosis.cause}.` });
     } else if (c.type === "session" && c.event.type === "batch") {
-      planCard.step(id, { progress: attemptProgress(planTrack, c.event), progressLabel: batchLabel(planTrack, c.event) });
+      for (const s of ids) planCard.step(s, { progress: attemptProgress(planTrack, c.event), progressLabel: batchLabel(planTrack, c.event) });
     }
   } else if (e.type === "lesson_taught") {
+    if (planTrack.group?.includes(e.index) && planTrack.group.indexOf(e.index) === planTrack.group.length - 1) planTrack.group = null;
     planCard.step("L" + e.index, { state: OUTCOME_STATE[e.outcome] || "done", progress: null,
       detail: [`${outcomeText(e)}: ${percent(e.when_taught)} of its evaluation questions right`, e.record ? learningText(e.record) : ""].filter(Boolean).join(". ") + "." });
   } else if (e.type === "graded") {

@@ -49,7 +49,7 @@ function showCourse(c) {
   const checks = c.check.lessons;
   const body = $("courseLessons").tBodies[0];
   body.replaceChildren();
-  if (!c.lessons.length) body.append(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "Add lesson files: their names give their order and stage.")));
+  if (!c.lessons.length) body.append(el("tr", {}, el("td", { colspan: 8, class: "empty" }, "Add lesson files: their names give their order and stage.")));
   c.lessons.forEach((l, i) => {
     const k = checks.find(x => x.name === l.name) || {};
     const mark = el("input", { type: "number", class: "mark", min: 0, max: 100, step: 5, value: Math.round(l.passMark * 100),
@@ -60,6 +60,8 @@ function showCourse(c) {
       k.practice != null ? el("div", { class: "note" }, `${fmt(k.practice)} practice question(s)${k.practice_excluded ? `, ${k.practice_excluded} excluded (match evaluation or exam)` : ""}`) : "",
       el("button", { class: "quiet", onclick: safe(async () => showCourse(await invoke("attach_practice", { id: course.id, index: i })), "Attach practice") }, "attach…"));
     body.append(el("tr", {},
+      el("td", {}, el("input", { type: "checkbox", checked: l.together ? "" : null, "aria-label": `Teach ${l.name} together with the others of its stage`,
+        onchange: safe(e => edit({ type: "lessonTogether", index: i, on: e.target.checked }), "Together") })),
       el("td", { class: "num" }, l.number ?? "—"),
       el("td", {}, l.name, l.nameProblem && l.stageFrom !== "manual" ? el("div", { class: "bad note" }, l.nameProblem) : ""),
       el("td", {}, stageChoice(l, i), l.stageFrom === "default" ? el("div", { class: "note" }, `taught as ${stageName(l.effectiveStage)}`) : ""),
@@ -69,8 +71,19 @@ function showCourse(c) {
       el("td", {}, el("button", { class: "quiet", onclick: safe(() => edit({ type: "removeLesson", index: i }), "Remove lesson") }, "remove"))));
   });
   for (const [j, p] of (c.unmatchedPractice || []).entries()) body.append(el("tr", {},
-    el("td", {}, "—"), el("td", { colspan: 5, class: "warn" }, `${p}: practice file without a lesson of the same number and stage`),
+    el("td", {}, ""), el("td", {}, "—"), el("td", { colspan: 5, class: "warn" }, `${p}: practice file without a lesson of the same number and stage`),
     el("td", {}, el("button", { class: "quiet", onclick: safe(() => edit({ type: "removeUnmatched", index: j }), "Remove") }, "remove"))));
+
+  // Taught together: the ticked lessons of each stage form one mixed session.
+  const together = c.lessons.filter(l => l.together);
+  const byStage = new Map();
+  for (const l of together) byStage.set(stageName(l.effectiveStage), [...(byStage.get(stageName(l.effectiveStage)) || []), l.name]);
+  $("courseNotes").append(el("p", { class: "note" },
+    el("b", {}, "Taught together: "),
+    together.length < 2 ? "no group (every lesson is taught on its own). " : [...byStage].map(([st, names]) => names.length > 1 ? `${names.length} ${st} lessons in one mixed session` : `${names[0]} on its own (the only ticked ${st} lesson)`).join("; ") + ". ",
+    "Ticked lessons of the same stage are taught in one session, every batch drawing on all of them like reading; the rest one at a time afterwards. Remediation practises them together too. ",
+    el("button", { type: "button", class: "quiet", onclick: safe(() => edit({ type: "allTogether", on: true }), "Together") }, "Tick all"), " ",
+    el("button", { type: "button", class: "quiet", onclick: safe(() => edit({ type: "allTogether", on: false }), "Together") }, "Untick all")));
 
   // Exam and checks.
   const ck = c.check;
@@ -181,7 +194,8 @@ function showPlan(p) {
     const move = (d) => { const a = [...ids]; [a[i], a[i + d]] = [a[i + d], a[i]]; return setCourses(a); };
     const cls = { passed: "ok", failed: "bad", current: "", pending: "", missing: "bad" }[c.state];
     body.append(el("tr", { class: c.state === "current" ? "current-row" : null },
-      el("td", { class: "num" }, i + 1), el("td", {}, c.name),
+      el("td", { class: "num" }, i + 1), el("td", {}, c.name, c.lessons ? el("div", { class: "note" },
+        c.together >= 2 ? `${c.lessons} lessons, ${c.together === c.lessons ? "all" : c.together} taught together` : `${c.lessons} lessons, taught one at a time`) : ""),
       el("td", { class: "num" }, percent(c.required)), el("td", { class: "num" }, c.state === "pending" ? "—" : percent(c.grade)),
       el("td", {}, el("span", { class: cls }, c.state)),
       el("td", {}, movable && i > fixed ? el("button", { class: "quiet", onclick: safe(() => move(-1), "Move") }, "↑") : "",
@@ -277,7 +291,9 @@ function onPlanEvent({ planId, event: e }) {
     planLog(`Pre-test (ungraded): ${percent(e.score)}.`);
   } else if (e.type === "lesson") {
     const c = e.event;
-    if (c.type === "file_started") $("planNow").textContent = `Lesson ${c.index + 1} of ${c.files}: ${c.name} · ${stageName(e.stage)}${c.pass > 1 ? " · second try" : ""}`;
+    if (c.type === "group_started") { $("planNow").textContent = `${c.indices.length} lessons together · ${stageName(e.stage)}: ${c.names.join(", ")}`; planLog(`Taught together: ${c.names.join(", ")}.`); }
+    else if (c.type === "group_scored") planLog(`After attempt ${c.attempt + 1}: ` + c.indices.map((i, k) => `lesson ${i + 1} ${percent(c.rates[k])}${c.passed[k] ? " (passed)" : ""}`).join(" · "));
+    else if (c.type === "file_started") $("planNow").textContent = `Lesson ${c.index + 1} of ${c.files}: ${c.name} · ${stageName(e.stage)}${c.pass > 1 ? " · second try" : ""}`;
     else if (c.type === "attempt_started") { live.line = c.attempt === 0 ? "first attempt" : `retry ${c.attempt}${c.remedy ? ": " + c.remedy : ""}`; if (c.attempt) planLog(`${live.line}`); }
     else if (c.type === "diagnosed") planLog(`Not passed yet (${percent(c.diagnosis.heldout_rate)}): ${c.diagnosis.cause.replace("_", " ")}.`, "warn");
     else if (c.type === "session" && c.event.type === "batch") {

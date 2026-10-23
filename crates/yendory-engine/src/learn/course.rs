@@ -193,6 +193,19 @@ pub enum CourseEvent {
         report: crate::memory::StudyReport,
         copies: usize,
     },
+    /// These lessons are taught together, mixed in one session (the first index carries the
+    /// session's attempts and events; each lesson gets its own `FileFinished`).
+    GroupStarted {
+        indices: Vec<usize>,
+        names: Vec<String>,
+    },
+    /// After an attempt of a group: each lesson's held-out score and whether it passed.
+    GroupScored {
+        indices: Vec<usize>,
+        attempt: u32,
+        rates: Vec<f32>,
+        passed: Vec<bool>,
+    },
 }
 
 pub struct CourseResult {
@@ -245,6 +258,18 @@ impl Queue {
     }
     pub fn defer(&mut self, index: usize) {
         self.waiting.push_back((index, Some(self.changes)));
+    }
+    /// Takes lessons out of the queue (they are taught together instead).
+    pub fn remove(&mut self, indices: &[usize]) {
+        self.waiting.retain(|(i, _)| !indices.contains(i));
+    }
+    /// Puts a lesson first, for its first pass.
+    pub fn push_front(&mut self, index: usize) {
+        self.waiting.push_front((index, None));
+    }
+    /// Lessons waiting for their first pass.
+    pub fn waiting_first(&self) -> Vec<usize> {
+        self.waiting.iter().filter(|(_, d)| d.is_none()).map(|(i, _)| *i).collect()
     }
 }
 
@@ -466,6 +491,27 @@ pub fn teach_course_rewarded(
     files: &[CourseFile],
     archive: &[Item],
     cfg: &SessionConfig,
+    study: Option<&mut dyn crate::memory::StudyHook>,
+    rewards: Option<&mut Rewards>,
+    observer: &mut dyn FnMut(&CourseEvent),
+    on_learned: &mut OnLearned,
+    stop: &AtomicBool,
+) -> Result<CourseResult, String> {
+    teach_course_together(model, files, &[], archive, cfg, study, rewards, observer, on_learned, stop)
+}
+
+/// [`teach_course_rewarded`] with lessons taught together: the files with `together[i]` set
+/// (at least two of them) are taught first in one mixed session ([`teach_group`]: every batch
+/// mixes all of them, like reading); the other files follow one at a time, rehearsing them.
+/// A lesson of the group still below its pass mark after the group's attempts is Unresolved
+/// (its progress is kept). With fewer than two files marked, every file is taught one at a time.
+#[allow(clippy::too_many_arguments)]
+pub fn teach_course_together(
+    model: &Bicameral,
+    files: &[CourseFile],
+    together: &[bool],
+    archive: &[Item],
+    cfg: &SessionConfig,
     mut study: Option<&mut dyn crate::memory::StudyHook>,
     mut rewards: Option<&mut Rewards>,
     observer: &mut dyn FnMut(&CourseEvent),
@@ -480,6 +526,132 @@ pub fn teach_course_rewarded(
     let mut queue = Queue::new(files.len());
     let mut stopped = false;
     let retries = cfg.retry.retries.min(3);
+    let marked: Vec<usize> =
+        (0..files.len()).filter(|&i| together.get(i).copied().unwrap_or(false)).collect();
+    if marked.len() >= 2 {
+        // The group's files are checked like any file (duplicates, parse errors, nothing to judge);
+        // those that cannot be taught are recorded now and left out.
+        let mut group: Vec<(usize, Vec<Item>)> = Vec::new();
+        let mut records: Vec<FileRecord> = Vec::new();
+        let mut originals: Vec<Vec<Item>> = Vec::new();
+        for &index in &marked {
+            let file = &files[index];
+            let sha256 = sha256_hex(file.text.as_bytes());
+            observer(&CourseEvent::FileStarted {
+                index,
+                files: files.len(),
+                name: file.name.clone(),
+                sha256: sha256.clone(),
+                pass: 1,
+            });
+            let mut record = FileRecord {
+                index,
+                name: file.name.clone(),
+                sha256: sha256.clone(),
+                bytes: file.text.len(),
+                train_units: 0,
+                heldout_units: 0,
+                start_step: current.step,
+                end_step: current.step,
+                outcome: FileOutcome::Failed,
+                error: None,
+                epochs_run: 0,
+                baseline: None,
+                final_score: None,
+                pass: 1,
+                attempts: Vec::new(),
+                pass_mark: cfg.pass_mark,
+                own_before: None,
+                own_after: None,
+                with_memory: None,
+            };
+            if let Some((_, first)) = seen.iter().find(|(h, _)| *h == sha256) {
+                record.outcome = FileOutcome::Duplicate;
+                record.error = Some(format!("same content as {first}"));
+            } else {
+                seen.push((sha256.clone(), file.name.clone()));
+                match parse_lesson(&file.text, &file.name) {
+                    Err(e) => record.error = Some(e),
+                    Ok(items) => {
+                        record.train_units = items.iter().filter(|i| !i.held_out).count();
+                        record.heldout_units = items.iter().filter(|i| i.held_out).count();
+                        let judgeable = record.train_units > 0
+                            && items.iter().any(|i| i.held_out && i.kind != Kind::Prose);
+                        if judgeable {
+                            parsed[index] = Some(items.clone());
+                            record.own_before = own_rate(&current, &items).ok();
+                            let taught = match study.as_deref_mut() {
+                                Some(st) => {
+                                    let (taught, report, copies) =
+                                        st.before_lesson(&current, &file.name, &items)?;
+                                    if let Some(report) = report {
+                                        observer(&CourseEvent::Studied { index, report, copies });
+                                    }
+                                    taught
+                                }
+                                None => items.clone(),
+                            };
+                            group.push((index, taught));
+                            records.push(record);
+                            originals.push(items);
+                            continue;
+                        }
+                        record.error = Some(
+                            "The lesson needs training units and held-out units (about 10% are held out by hash)".into(),
+                        );
+                    }
+                }
+            }
+            observer(&CourseEvent::FileFinished(record.clone()));
+            finals[index] = Some(record);
+        }
+        queue.remove(&marked);
+        if group.len() == 1 {
+            // One teachable file is taught on its own, in the queue.
+            let (index, _) = group.pop().unwrap();
+            parsed[index] = None;
+            seen.retain(|(_, n)| *n != files[index].name);
+            queue.push_front(index);
+        } else if !group.is_empty() {
+            let before = current.step;
+            teach_group(
+                &mut current,
+                &mut archive,
+                &group,
+                retries,
+                cfg,
+                &mut records,
+                &mut stopped,
+                rewards.as_deref_mut(),
+                observer,
+                on_learned,
+                stop,
+            )?;
+            if current.step != before {
+                queue.changed();
+            }
+            for (k, mut record) in records.into_iter().enumerate() {
+                let items = &originals[k];
+                if !stopped && record.error.is_none() {
+                    record.own_after = own_rate(&current, items).ok();
+                    record.with_memory = study.as_deref_mut().and_then(|st| st.after_lesson(&current, items));
+                    if record.outcome != FileOutcome::Passed {
+                        record.outcome = FileOutcome::Unresolved;
+                        record.error =
+                            Some("below its pass mark after being taught together with the others".into());
+                    }
+                }
+                record.end_step = current.step;
+                observer(&CourseEvent::FileFinished(record.clone()));
+                let index = record.index;
+                finals[index] = Some(record);
+            }
+            if stopped {
+                let files = finals.into_iter().flatten().collect();
+                return Ok(CourseResult { model: current, archive, files, stopped });
+            }
+        }
+    }
     while let Some(next) = queue.pop() {
         if stop.load(Ordering::Acquire) {
             stopped = true;
@@ -735,6 +907,148 @@ pub(super) fn teach_lesson(
             None => return Ok(()),
         }
         because = Some(diagnosis);
+    }
+    Ok(())
+}
+
+/// Teaches several lessons together: one session over all their training units mixed in every
+/// batch (like reading), judged on all their held-out questions; each lesson is then scored on
+/// its own held-out questions against its pass mark (`records[k].pass_mark`). While some lessons
+/// are below their mark and attempts remain, the next attempt practises the group again with the
+/// training units of the lessons not yet passed twice, the others once (so nothing is trained
+/// without the rest). Stops early when an attempt changes nothing. Lessons that pass get
+/// `FileOutcome::Passed`; the others' outcome is left to the caller. `lessons` and `records`
+/// are in the same order; `lessons[k]` is (index, taught items).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn teach_group(
+    current: &mut Bicameral,
+    archive: &mut Vec<Item>,
+    lessons: &[(usize, Vec<Item>)],
+    retries: u32,
+    cfg: &SessionConfig,
+    records: &mut [FileRecord],
+    stopped: &mut bool,
+    mut rewards: Option<&mut Rewards>,
+    observer: &mut dyn FnMut(&CourseEvent),
+    on_learned: &mut OnLearned,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    let indices: Vec<usize> = lessons.iter().map(|(i, _)| *i).collect();
+    let lead = indices[0];
+    let sources: std::collections::BTreeSet<String> =
+        lessons.iter().flat_map(|(_, items)| items.iter().map(|i| i.source.clone())).collect();
+    let all: Vec<Item> = lessons.iter().flat_map(|(_, items)| items.iter().cloned()).collect();
+    observer(&CourseEvent::GroupStarted {
+        indices: indices.clone(),
+        names: records.iter().map(|r| r.name.clone()).collect(),
+    });
+    for (k, (_, items)) in lessons.iter().enumerate() {
+        records[k].baseline = Some(super::session::lesson_score(current, items)?);
+    }
+    let mut practice: Option<Vec<Item>> = None;
+    let mut passed = vec![false; lessons.len()];
+    for attempt in 0..=retries {
+        let others: Vec<Item> = archive.iter().filter(|i| !sources.contains(&i.source)).cloned().collect();
+        let remedy = practice.as_ref().map(|_| {
+            "the lessons not yet passed are practised twice, mixed with the others so nothing is trained alone".to_string()
+        });
+        observer(&CourseEvent::AttemptStarted {
+            index: lead,
+            attempt,
+            attempts: retries + 1,
+            learning_rate: cfg.learning_rate,
+            epochs: cfg.epochs,
+            strategy: cfg.strategy,
+            remedy: remedy.clone(),
+        });
+        let mut forward = |e: &Event| observer(&CourseEvent::Session { index: lead, event: e.clone() });
+        let r = match teach_rewarded(
+            current,
+            &all,
+            practice.as_deref(),
+            &others,
+            cfg,
+            rewards.as_deref_mut(),
+            &mut forward,
+            stop,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                for rec in records.iter_mut() {
+                    rec.error = Some(e.clone());
+                }
+                return Ok(());
+            }
+        };
+        if r.stopped {
+            *stopped = true;
+            for rec in records.iter_mut() {
+                rec.outcome = FileOutcome::Stopped;
+            }
+            return Ok(());
+        }
+        if r.learned {
+            *current = r.model.clone();
+            for (_, items) in lessons {
+                let source = items.first().map(|i| i.source.clone()).unwrap_or_default();
+                if !archive.iter().any(|i| i.source == source) {
+                    archive.extend(items.iter().cloned());
+                }
+            }
+            on_learned(current, archive)?;
+        }
+        let tally = CandidateTally::of(&r.epochs);
+        let mut rates = Vec::new();
+        for (k, (_, items)) in lessons.iter().enumerate() {
+            let score = super::session::lesson_score(current, items)?;
+            let rate = score.exact_rate();
+            passed[k] = rate >= records[k].pass_mark;
+            rates.push(rate);
+            let rec = &mut records[k];
+            rec.epochs_run += r.epochs.len();
+            rec.final_score = Some(score.clone());
+            rec.attempts.push(AttemptRecord {
+                attempt,
+                learning_rate: cfg.learning_rate,
+                epochs: cfg.epochs,
+                strategy: cfg.strategy,
+                rehearsal_share: cfg.rehearsal_share,
+                practice_units: practice.as_ref().map_or(rec.train_units, |p| {
+                    p.iter()
+                        .filter(|i| i.source == items.first().map(|f| f.source.as_str()).unwrap_or(""))
+                        .count()
+                }),
+                learned: r.learned,
+                passed: passed[k],
+                epochs_run: r.epochs.len(),
+                final_score: score,
+                candidates: tally.clone(),
+                because: None,
+            });
+        }
+        observer(&CourseEvent::GroupScored {
+            indices: indices.clone(),
+            attempt,
+            rates,
+            passed: passed.clone(),
+        });
+        if passed.iter().all(|&p| p) || attempt == retries || !r.learned {
+            break;
+        }
+        // Practise the lessons not yet passed twice, the others once.
+        let mut next = Vec::new();
+        for (k, (_, items)) in lessons.iter().enumerate() {
+            let units: Vec<&Item> = items.iter().filter(|i| !i.held_out).collect();
+            for _ in 0..if passed[k] { 1 } else { 2 } {
+                next.extend(units.iter().map(|i| (*i).clone()));
+            }
+        }
+        practice = Some(next);
+    }
+    for (k, rec) in records.iter_mut().enumerate() {
+        if passed[k] {
+            rec.outcome = FileOutcome::Passed;
+        }
     }
     Ok(())
 }

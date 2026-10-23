@@ -1160,6 +1160,10 @@ struct TeachOptions {
     /// Experimental bicameral education stage ("dense", "transformer", "cooperative").
     #[serde(default)]
     education: Option<String>,
+    /// For each lesson in the list: taught together with the other chosen lessons in one mixed
+    /// session (the default for every lesson), or on its own afterwards.
+    #[serde(default)]
+    together: Option<Vec<bool>>,
 }
 
 /// The bicameral education stage named by the frontend.
@@ -1206,6 +1210,10 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     let files = studio.lessons.lock().unwrap().clone();
     if files.is_empty() {
         return Err("Add lesson files first".into());
+    }
+    let together = options.together.clone().unwrap_or_else(|| vec![true; files.len()]);
+    if together.len() != files.len() {
+        return Err("The lesson list changed; choose the lessons to teach together again".into());
     }
     let (meta, model, archive) =
         with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
@@ -1279,9 +1287,10 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         // sessions schedule their units by emphasis.
         let mut rewards = rewards::rewards_for(&app, &id);
         let result = guarded(|| {
-            yendory_engine::learn::course::teach_course_rewarded(
+            yendory_engine::learn::course::teach_course_together(
                 &model,
                 &files,
+                &together,
                 &archive,
                 &cfg,
                 memory.as_mut().map(|s| s as &mut dyn yendory_engine::memory::StudyHook),

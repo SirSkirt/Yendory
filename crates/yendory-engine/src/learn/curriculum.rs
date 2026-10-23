@@ -139,6 +139,14 @@ pub struct LessonDef {
     /// The file name is ambiguous; the course cannot start until the stage is chosen by hand.
     #[serde(default)]
     pub name_problem: Option<String>,
+    /// Taught together with the course's other "together" lessons of the same stage, in one
+    /// mixed session (the default), instead of on its own.
+    #[serde(default = "yes")]
+    pub together: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Final-exam section weights (relative; sections without questions are left out and the
@@ -348,6 +356,7 @@ impl CourseDef {
                         practice: Vec::new(),
                         name_problem: info.problem,
                         file,
+                        together: true,
                     };
                     match self.lessons.iter_mut().find(|l| l.file.name == lesson.file.name) {
                         Some(old) => {
@@ -418,12 +427,18 @@ impl CourseDef {
                 let mut practice: Vec<String> =
                     l.practice.iter().map(|p| sha256_hex(p.text.as_bytes())).collect();
                 practice.sort();
-                serde_json::json!({
+                let mut lesson = serde_json::json!({
                     "sha256": sha256_hex(l.file.text.as_bytes()),
                     "stage": self.stage_of(l),
                     "pass_mark": l.pass_mark,
                     "practice": practice,
-                })
+                });
+                // Taught on its own instead of together: a different course (recorded only
+                // then, so courses made before this setting keep their fingerprint).
+                if !l.together {
+                    lesson["together"] = false.into();
+                }
+                lesson
             })
             .collect();
         let doc = serde_json::json!({
@@ -456,6 +471,9 @@ pub struct PreparedLesson {
     pub items: Vec<Item>,
     /// Extra practice units (training only), used in remediation.
     pub practice: Vec<Item>,
+    /// Taught together with the other "together" lessons of its stage (see `LessonDef`).
+    #[serde(default = "yes")]
+    pub together: bool,
 }
 impl PreparedLesson {
     pub fn eval_items(&self) -> Vec<&Item> {
@@ -657,7 +675,15 @@ pub fn prepare(def: &CourseDef) -> PreparedCourse {
             }
         }
         lessons.push((
-            PreparedLesson { name, sha256, stage, pass_mark: l.pass_mark, items, practice },
+            PreparedLesson {
+                name,
+                sha256,
+                stage,
+                pass_mark: l.pass_mark,
+                items,
+                practice,
+                together: l.together,
+            },
             check.lessons.len(),
         ));
         check.lessons.push(lc);

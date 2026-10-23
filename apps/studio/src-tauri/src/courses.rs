@@ -61,6 +61,8 @@ pub struct LessonView {
     practice: Vec<String>,
     name_problem: Option<String>,
     has_extra_practice_block: bool,
+    /// Taught together with the other "together" lessons of its stage (one mixed session).
+    together: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -99,6 +101,7 @@ fn view(def: &CourseDef, notes: Vec<String>) -> CourseView {
                 practice: l.practice.iter().map(|p| p.name.clone()).collect(),
                 name_problem: l.name_problem.clone(),
                 has_extra_practice_block: l.file.text.contains("[Extra Practice]"),
+                together: l.together,
             })
             .collect(),
         exam: def.exam.as_ref().map(|e| e.name.clone()),
@@ -306,6 +309,15 @@ pub enum CourseEdit {
         index: usize,
         percent: f32,
     },
+    /// Teach this lesson together with the others of its stage, or on its own.
+    LessonTogether {
+        index: usize,
+        on: bool,
+    },
+    /// Every lesson together, or every lesson on its own.
+    AllTogether {
+        on: bool,
+    },
     /// "name" (from the file name), "default" (the course default), or a stage / "whole".
     LessonStage {
         index: usize,
@@ -373,6 +385,15 @@ pub fn edit_course(app: AppHandle, id: String, edit: CourseEdit) -> Res<CourseVi
         CourseEdit::LessonPassMark { index, percent: p } => {
             let i = lesson(&mut def, index)?;
             def.lessons[i].pass_mark = percent(p)?;
+        }
+        CourseEdit::LessonTogether { index, on } => {
+            let i = lesson(&mut def, index)?;
+            def.lessons[i].together = on;
+        }
+        CourseEdit::AllTogether { on } => {
+            for l in &mut def.lessons {
+                l.together = on;
+            }
         }
         CourseEdit::LessonStage { index, stage } => {
             let i = lesson(&mut def, index)?;
@@ -530,6 +551,9 @@ pub struct PlanCourse {
     state: String,
     grade: Option<f32>,
     required: Option<f32>,
+    /// Lessons, and how many of them are taught together.
+    lessons: usize,
+    together: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -574,6 +598,8 @@ fn plan_view(app: &AppHandle, plan: &Plan) -> PlanView {
                 name: def.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "(deleted course)".into()),
                 state: state.into(),
                 grade: last.and_then(|r| r.grades.last().map(|g| g.grade)),
+                lessons: def.as_ref().map_or(0, |d| d.lessons.len()),
+                together: def.as_ref().map_or(0, |d| d.lessons.iter().filter(|l| l.together).count()),
                 required: def.map(|d| d.required_grade()),
             }
         })
