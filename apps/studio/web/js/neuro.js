@@ -133,6 +133,22 @@ document.addEventListener("DOMContentLoaded", safe(async () => {
   }
 }, "Nova Neuro builder"));
 
+// How much the next-token distribution changes when each Nova Neuro system is switched off.
+function effectsTable(e) {
+  if (!e) return "";
+  const row = (label, v, what) => v == null ? "" : el("tr", {}, el("th", {}, label), el("td", { class: "num" }, v.toFixed(3)), el("td", { class: "note" }, what));
+  return el("div", {},
+    el("h4", {}, "Each system's effect on this token (measured by switching it off)"),
+    el("table", { class: "ledger compact" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Switched off"), el("th", { class: "num" }, "Output change"), el("th", {}, ""))),
+      el("tbody", {},
+        row("Working memory", e.without_memory, "its output set to zero"),
+        row("Associative memory", e.without_associative, "its output set to zero"),
+        row("Executive Controller", e.without_controller, "every gate fully open instead of its choices"),
+        row("Extra computation rounds", e.one_round, "one round instead of the model's rounds"))),
+    el("p", { class: "note" }, "0 means the reply's next-token probabilities are unchanged; 1 means completely different. A system with a small effect is not yet used much by the trained model."));
+}
+
 // Brain page: Nova Neuro's measured activity for the inspected token (from the Engine's trace of
 // a real forward pass). The plate above shows the language core's attention.
 window.showNeuroActivity = m => {
@@ -146,11 +162,12 @@ window.showNeuroActivity = m => {
     n.modules.forEach((name, k) => rows.push(el("tr", {},
       el("td", {}, `Round ${ri + 1}`), el("td", {}, name),
       el("td", { class: "num" }, pct(r.gates[k] ?? 0)), el("td", { class: "num" }, (r.outputs[k] ?? 0).toFixed(3)),
-      el("td", { class: "note" }, name === "associative memory" ? r.patterns.map(([i, w]) => `#${i} ${pct(w)}`).join(" · ") : ""))));
+      el("td", { class: "note" }, name === "associative memory" ? r.patterns.slice(0, 5).map(([i, w]) => `#${i} ${pct(w)}`).join(" · ") : ""))));
   });
   box.replaceChildren(
     el("h3", {}, "Nova Neuro activity (measured)"),
-    el("p", { class: "note" }, "For the inspected token: how strongly the Executive Controller opened each network's gate in each round, the size of each network's output before its gate, and, for associative memory, the patterns it recalled most. The plate above shows the language core's attention. A fuller Neuro visualizer comes in a later stage."),
+    el("p", { class: "note" }, "For the inspected token: how strongly the Executive Controller opened each network's gate in each round, the size of each network's output before its gate, and, for associative memory, the patterns it recalled most. The plate above draws the same measurements: choose a block in “Attention shown” to see the networks in that block's round."),
+    effectsTable(m.neuro_effects),
     el("table", { class: "ledger compact" },
       el("thead", {}, el("tr", {}, el("th", {}, "Round"), el("th", {}, "Network"), el("th", { class: "num" }, "Controller gate"), el("th", { class: "num" }, "Output size"), el("th", {}, "Recalled patterns"))),
       el("tbody", {}, ...rows)),

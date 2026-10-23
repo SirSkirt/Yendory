@@ -16,6 +16,18 @@ pub struct AblationEffects {
     pub without_left_to_right: f32,
 }
 
+/// Nova Neuro: how much the next-token distribution changes when one of its systems is switched
+/// off (total variation distance; `None` when the model does not have that network).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NeuroEffects {
+    pub without_memory: Option<f32>,
+    pub without_associative: Option<f32>,
+    /// Every controller gate fully open (the controller's choices removed).
+    pub without_controller: Option<f32>,
+    /// One computation round instead of the model's rounds (`None` with one round).
+    pub one_round: Option<f32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Measurements {
     pub step: u64,
@@ -34,6 +46,9 @@ pub struct Measurements {
     pub ablation: AblationEffects,
     /// Parameters per pathway: transformer (left), dense (right), interconnect.
     pub parameters: [usize; 3],
+    /// Nova Neuro: the effect of switching off each of its systems.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neuro_effects: Option<NeuroEffects>,
 }
 
 pub(super) fn probabilities(model: &Bicameral, logits: &[f32]) -> Vec<f64> {
@@ -70,6 +85,33 @@ impl Bicameral {
         };
         let without_right = ablated(Ablation { no_afferent: true, ..Ablation::default() })?;
         let without_efferent = ablated(Ablation { no_efferent: true, ..Ablation::default() })?;
+        let neuro_effects = match &self.neuro {
+            None => None,
+            Some(n) => {
+                let effect = |on: bool, abl: Ablation| -> Result<Option<f32>, String> {
+                    Ok(if on { Some(total_variation(&full, &ablated(abl)?)) } else { None })
+                };
+                let has_modules = n.memory.is_some() || n.associative.is_some();
+                Some(NeuroEffects {
+                    without_memory: effect(
+                        n.memory.is_some(),
+                        Ablation { no_memory: true, ..Ablation::default() },
+                    )?,
+                    without_associative: effect(
+                        n.associative.is_some(),
+                        Ablation { no_associative: true, ..Ablation::default() },
+                    )?,
+                    without_controller: effect(
+                        has_modules,
+                        Ablation { no_controller: true, ..Ablation::default() },
+                    )?,
+                    one_round: effect(
+                        self.config.loops > 1,
+                        Ablation { one_round: true, ..Ablation::default() },
+                    )?,
+                })
+            }
+        };
         let mut top: Vec<(usize, f64)> = full.iter().copied().enumerate().collect();
         top.sort_by(|a, b| b.1.total_cmp(&a.1));
         let window = &ids[ids.len().saturating_sub(self.config.max_tokens)..];
@@ -97,6 +139,7 @@ impl Bicameral {
                 self.group_parameters(Focus::Right),
                 self.group_parameters(Focus::Interconnect),
             ],
+            neuro_effects,
             trace,
         })
     }

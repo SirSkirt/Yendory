@@ -77,6 +77,32 @@ fn neuro_reads_learns_a_lesson_and_can_be_measured() {
         assert!(!r.patterns.is_empty());
     }
     assert_eq!(nt.memory_norm.len(), 2);
+    // Per-unit values for the brain visualizer, consistent with the summaries.
+    let design = s.model.neuro.as_ref().unwrap();
+    let (mem, assoc) = (design.memory.as_ref().unwrap(), design.associative.as_ref().unwrap());
+    assert_eq!(nt.memory_state.len(), mem.layers);
+    for (state, norm) in nt.memory_state.iter().zip(&nt.memory_norm) {
+        assert_eq!(state.len(), mem.width);
+        assert!((state.iter().map(|x| x * x).sum::<f32>().sqrt() - norm).abs() < 1e-4);
+    }
+    for r in &nt.rounds {
+        assert_eq!(r.bus.len(), design.bus);
+        assert!((r.bus.iter().map(|x| x * x).sum::<f32>().sqrt() - r.bus_norm).abs() < 1e-4);
+        assert_eq!(r.controller.len(), design.controller);
+        assert_eq!(r.patterns.len(), assoc.patterns.min(yendory_engine::model::TRACE_PATTERNS));
+        assert!(r.patterns.windows(2).all(|w| w[0].1 >= w[1].1), "strongest first");
+    }
+    // Each system's effect, measured by switching it off.
+    let e = m.neuro_effects.as_ref().expect("Neuro effects are measured");
+    for v in [e.without_memory, e.without_associative, e.without_controller] {
+        assert!(v.is_some_and(|v| (0. ..=1.).contains(&v)));
+    }
+    assert_eq!(e.one_round.is_some(), s.model.config.loops > 1);
+    assert!(Bicameral::with_config(yendory_engine::Config::default(), 1)
+        .measure("hi")
+        .unwrap()
+        .neuro_effects
+        .is_none());
     let tree =
         s.model.think("Where is Tom?", &ThinkOptions { max_tokens: 4, ..ThinkOptions::default() }).unwrap();
     assert!(!tree.steps.is_empty());

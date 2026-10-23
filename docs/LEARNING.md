@@ -531,6 +531,55 @@ reading the model has no general English, so held-out questions that need it rar
 
 Learned files join the archive, so later files rehearse them and are guarded against forgetting them.
 
+## Built-in courses (`learn::builtin`)
+
+Basic English (6 lessons), Basic Reasoning (5) and Basic Math (5) ship with Yendory, so training
+can be checked independently of a teacher's own lessons (Studio: Classroom "Built-in lessons",
+Courses "Built-in courses"). They are generated from small word lists by fixed templates and a
+fixed seed: every copy has the same files. Each lesson teaches one pattern with 125-186 taught
+questions; its 10-22 held-out questions (the usual hash) are new combinations of the same
+pattern (new names, colours, numbers), so a model passes only by learning the pattern:
+
+| Course | Lessons |
+|---|---|
+| Basic English | Greetings; Colours (the colour is in the sentence); Where things are (in/on/under); Yes or no; Who did it (gave X to Y); Plurals |
+| Basic Reasoning (`[Reasoning Lesson]`, with a contradicted answer for the preference check) | Who has it; True or false; Comparisons across two facts; Rules about groups (all/no); Order of events |
+| Basic Math | Counting (before/after); Addition to 10+10; Subtraction to 12; Bigger or smaller; Word problems |
+
+### What they showed (0.4.6)
+
+A new 1.2M Bicameral model, each course taught lesson by lesson with ordinary Classroom training
+(Joint, learning rate 0.001, 30 epochs, patience 8, earlier lessons as the rehearsal archive),
+held-out exact answers at the end of each lesson's session:
+
+| Course | Lesson 1 | Later lessons |
+|---|---|---|
+| Basic English | Greetings 0/10 -> 10/10 | Colours, Where, Yes/no, Who, Plurals: 0, nothing accepted |
+| Basic Reasoning | Who has it 0/16 -> 15/16 | Rules about groups 0/22 -> 22/22; the other three: nothing accepted |
+| Basic Math | Counting 0/18 -> 16/18 | Bigger or smaller 0/19 -> 6/19; the other three: nothing accepted |
+
+Each lesson is learnable on its own (Colours alone: 0/17 -> 12/17). After an earlier lesson is
+mastered, every candidate of a later lesson is rejected by the earlier-lesson guards: training
+on new material first raises the earlier lessons' held-out loss (Greetings: 0.19 -> 0.45-1.1),
+far beyond the allowed +0.02, and loses some of their answers; the working model is restored
+to the accepted model each epoch, so the same thing happens again until patience ends the
+session. Only lessons that happen not to disturb the earlier ones get through. The guards
+behave as written; in sequence they freeze learning after the first mastered lesson.
+
+`SessionConfig::recover_earlier` (experimental, default off): when every candidate of an epoch is
+rejected only for forgetting earlier lessons, training continues from the one with the lowest
+held-out loss on this lesson instead of restarting, so rehearsal can win the earlier lessons
+back. Acceptance still needs every guard. Basic English, matched seed, what the final model
+answers after all six lessons:
+
+| Variant | Lessons passed in their session | Final model, all held-out questions |
+|---|---|---|
+| A: current | 1 | 10/101 (10%) |
+| B: `recover_earlier` | 1 | 10/101 (10%) |
+| C: B + rehearsal share 0.3 | 2 (Where things are 0 -> 16/16) | 35/101 (35%): Greetings 9/10, Colours 10/17, Where 16/16 |
+
+The decision on defaults is the owner's (see docs/STATUS.md).
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a

@@ -84,9 +84,19 @@ pub struct NeuroRound {
     /// Length of the bus state the modules read, and of the combined write-back.
     pub bus_norm: f32,
     pub write_norm: f32,
-    /// Associative memory: the most strongly retrieved patterns (index, weight).
+    /// Associative memory: the most strongly retrieved patterns (index, weight), strongest
+    /// first (up to [`TRACE_PATTERNS`]).
     pub patterns: Vec<(usize, f32)>,
+    /// The bus state the networks read this round (before its norm).
+    #[serde(default)]
+    pub bus: Vec<f32>,
+    /// The Executive Controller's hidden activations this round (empty without networks).
+    #[serde(default)]
+    pub controller: Vec<f32>,
 }
+
+/// Recalled associative patterns kept in a trace, per round.
+pub const TRACE_PATTERNS: usize = 32;
 /// Nova Neuro's activity for the newest token.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NeuroTrace {
@@ -98,6 +108,9 @@ pub struct NeuroTrace {
     pub memory_norm: Vec<f32>,
     /// The memory's update gate: mean opening per layer (0 keep, 1 overwrite).
     pub memory_update: Vec<f32>,
+    /// Working memory: each layer's state after this token.
+    #[serde(default)]
+    pub memory_state: Vec<Vec<f32>>,
 }
 impl KvCache {
     pub fn new(model: &Bicameral, abl: Ablation) -> Self {
@@ -346,6 +359,9 @@ impl KvCache {
                 nt.memory_change.push(l2(&change));
                 nt.memory_norm.push(l2(&self.memory[l]));
                 nt.memory_update.push(z.iter().sum::<f32>() / z.len().max(1) as f32);
+                if tracing {
+                    nt.memory_state.push(self.memory[l].clone());
+                }
                 x = self.memory[l].clone();
             }
             let mut out = affine(model, "n.wm_out", None, &x);
@@ -367,12 +383,18 @@ impl KvCache {
             }
             let bn = norm(&bus, model.val("n.bus_norm"));
             let mut r = NeuroRound { bus_norm: l2(&bus), ..NeuroRound::default() };
+            if tracing {
+                r.bus = bus.clone();
+            }
             let gates = if modules.is_empty() {
                 Vec::new()
             } else if self.abl.no_controller {
                 vec![1.; modules.len()]
             } else {
                 let hid = silu(&affine(model, "n.ctl1", Some("n.ctl1b"), &bn));
+                if tracing {
+                    r.controller = hid.clone();
+                }
                 sigmoid(&affine(model, "n.ctl2", Some("n.ctl2b"), &hid))
             };
             let mut write: Option<Vec<f32>> = None;
@@ -395,7 +417,7 @@ impl KvCache {
                         if tracing {
                             let mut top: Vec<(usize, f32)> = p.iter().copied().enumerate().collect();
                             top.sort_by(|a, b| b.1.total_cmp(&a.1));
-                            r.patterns = top.into_iter().take(5).collect();
+                            r.patterns = top.into_iter().take(TRACE_PATTERNS).collect();
                         }
                         let mut out = affine(model, "n.as_vals", None, &p);
                         if self.abl.no_associative || self.abl.no_right {

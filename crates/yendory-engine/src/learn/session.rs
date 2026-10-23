@@ -109,6 +109,13 @@ pub struct SessionConfig {
     /// most held-out answers, then the lowest held-out loss). No extra training steps.
     #[serde(default)]
     pub blend: f32,
+    /// Experimental (default off): when every candidate of an epoch is rejected only because
+    /// earlier lessons were forgotten (their held-out loss or answers), training continues from
+    /// the one with the lowest held-out loss on this lesson instead of restarting from the
+    /// accepted model, so rehearsal can win the earlier lessons back. Acceptance still needs
+    /// every guard: the accepted model never forgets more than the guards allow.
+    #[serde(default)]
+    pub recover_earlier: bool,
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -181,6 +188,7 @@ impl Default for SessionConfig {
             reading_share: 0.,
             reading: None,
             blend: 0.,
+            recover_earlier: false,
         }
     }
 }
@@ -765,9 +773,24 @@ impl Judge<'_> {
             s.exact_correct > b.exact_correct
                 || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
         });
+        // Rejected only for forgetting earlier lessons (with `recover_earlier`): training may
+        // continue from it when no candidate is safe, so rehearsal can restore those lessons.
+        let earlier =
+            |r: &Rejection| matches!(r, Rejection::EarlierLessonsLoss | Rejection::EarlierAnswersLost);
+        let recoverable = cfg.recover_earlier
+            && records.last().is_some_and(|r| {
+                r.rejections.iter().any(earlier)
+                    && r.rejections.iter().all(|x| earlier(x) || *x == Rejection::NoImprovement)
+            });
+        let plateau_is_safe = plateau.as_ref().is_some_and(|(pc, ..)| {
+            records.get(*pc).is_some_and(|r| r.rejections == [Rejection::NoImprovement])
+        });
+        let closer = plateau.as_ref().map_or(true, |(_, _, b, _, _)| s.heldout_loss < b.heldout_loss);
         if eligible && improves && better_than_best {
             *best = Some((ci, cand, s, now_correct, report));
-        } else if safe && better_than_plateau {
+        } else if safe && (better_than_plateau || !plateau_is_safe) {
+            *plateau = Some((ci, cand, s, now_correct, report));
+        } else if recoverable && !plateau_is_safe && closer && s.heldout_loss.is_finite() {
             *plateau = Some((ci, cand, s, now_correct, report));
         }
     }

@@ -61,6 +61,9 @@ function showActive(meta) {
   $("activeStep").textContent = fmt(meta.step);
   $("activeWords").textContent = fmt(meta.words);
   const neuroModel = meta.architecture === "neuro";
+  // The brain page draws the open model's architecture; a measurement of another model is cleared.
+  if (lastMeasure && !!lastMeasure.trace.neuro !== neuroModel) { lastMeasure = null; Brain.clear(); }
+  Brain.setArchitecture(neuroModel, meta.design);
   const label = (id, text) => { const th = $(id).previousElementSibling; if (th) th.textContent = text; };
   label("activeLeft", neuroModel ? "Language core (transformer)" : "Transformer (left)");
   label("activeRight", neuroModel ? "Modules (Nova Neuro)" : "Dense (right)");
@@ -899,7 +902,14 @@ function renderMeasure() {
   const m = lastMeasure;
   if (!m) return;
   const idx = Number($("stageSelect").value || m.trace.stages.length - 1);
-  const { attention } = Brain.show(m, idx);
+  const neuro = !!m.trace.neuro;
+  Brain.setArchitecture(neuro, active?.design);
+  const { attention } = neuro ? Brain.showNeuro(m, idx, active?.design) : Brain.show(m, idx);
+  // The readings name the paths of the architecture shown.
+  const reading = (id, bica, neuroText) => { const th = $(id).previousElementSibling; if (th) th.textContent = neuro ? neuroText : bica; };
+  reading("gateMeans", "Gate openings (exchange, rounds)", "Write-back gate (per round)");
+  reading("effectRight", "Output change without right → left", "Output change without the networks' write-back");
+  reading("effectLeft", "Output change without left → right", "Output change without language core → bus");
   $("gateMeans").textContent = m.gate_means.map(g => g.toFixed(2)).join(" · ") || "—";
   $("effectRight").textContent = m.ablation.without_right_to_left.toFixed(3);
   $("effectLeft").textContent = m.ablation.without_left_to_right.toFixed(3);

@@ -1102,6 +1102,22 @@ async fn add_lessons(app: AppHandle, studio: State<'_, Studio>) -> Res<Vec<Lesso
     Ok(lesson_previews(&studio))
 }
 
+/// Adds a built-in course's lessons to the Classroom list.
+#[tauri::command]
+fn add_builtin_lessons(studio: State<Studio>, id: String) -> Res<Vec<LessonPreview>> {
+    not_teaching(&studio)?;
+    let (_, files) = courses::builtin_files(&id)?;
+    let mut lessons = studio.lessons.lock().unwrap();
+    for f in files {
+        // The same file twice would be taught twice: an existing copy is replaced.
+        lessons.retain(|l| l.name != f.name || l.text != f.text);
+        lessons.push(f);
+    }
+    yendory_engine::learn::course::sort_files(&mut lessons);
+    drop(lessons);
+    Ok(lesson_previews(&studio))
+}
+
 #[tauri::command]
 fn lessons(studio: State<Studio>) -> Vec<LessonPreview> {
     lesson_previews(&studio)
@@ -1549,6 +1565,9 @@ pub fn run() {
             training_device,
             set_training_device,
             set_cpu_threads,
+            add_builtin_lessons,
+            courses::builtin_courses,
+            courses::add_builtin_course,
             memory::training_memory_view,
             memory::set_training_memory,
             benchmark_training,

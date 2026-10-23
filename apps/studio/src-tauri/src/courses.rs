@@ -150,6 +150,67 @@ pub fn create_course(app: AppHandle, name: String) -> Res<CourseView> {
     Ok(view(&def, Vec::new()))
 }
 
+/// A built-in course (Basic English, Reasoning, Math) and its lessons.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinView {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    lessons: Vec<BuiltinLesson>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinLesson {
+    name: String,
+    taught: usize,
+    held_out: usize,
+}
+
+#[tauri::command]
+pub fn builtin_courses() -> Vec<BuiltinView> {
+    yendory_engine::learn::builtin::builtin_courses()
+        .into_iter()
+        .map(|c| BuiltinView {
+            id: c.id,
+            name: c.name,
+            description: c.description,
+            lessons: c
+                .lessons
+                .iter()
+                .map(|f| {
+                    let items = parse_lesson(&f.text, &f.name).unwrap_or_default();
+                    BuiltinLesson {
+                        name: f.name.clone(),
+                        taught: items.iter().filter(|i| !i.held_out && i.answer.is_some()).count(),
+                        held_out: items.iter().filter(|i| i.held_out).count(),
+                    }
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The lesson files of a built-in course.
+pub(crate) fn builtin_files(id: &str) -> Res<(String, Vec<CourseFile>)> {
+    yendory_engine::learn::builtin::builtin_courses()
+        .into_iter()
+        .find(|c| c.id == id)
+        .map(|c| (c.name.to_string(), c.lessons))
+        .ok_or_else(|| "Unknown built-in course".into())
+}
+
+/// Adds a built-in course to the course list (a new course each time; edit it like any other).
+#[tauri::command]
+pub fn add_builtin_course(app: AppHandle, id: String) -> Res<CourseView> {
+    let (name, files) = builtin_files(&id)?;
+    let mut def = CourseDef::new(&fresh_id('c'), &name);
+    let notes = def.add_files(files);
+    save_course(&app, &def)?;
+    Ok(view(&def, notes))
+}
+
 #[tauri::command]
 pub async fn course_detail(app: AppHandle, id: String) -> Res<CourseView> {
     Ok(view(&load_course(&app, &id)?, Vec::new()))

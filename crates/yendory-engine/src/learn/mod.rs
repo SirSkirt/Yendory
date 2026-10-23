@@ -3,6 +3,7 @@
 //! `reference/train_lessons.py` (the pipeline that trained the step-19,000 checkpoint).
 pub mod autogrow;
 pub mod bench;
+pub mod builtin;
 pub mod corpus;
 pub mod course;
 pub mod curriculum;

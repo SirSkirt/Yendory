@@ -209,6 +209,8 @@ table { border-collapse: collapse; width: 100%; }
   --brain-left: #284a7e;  --brain-left-fill: #e4e9f1;
   --brain-right: #a5463c; --brain-right-fill: #f4e3dd;
   --brain-bridge: #8a8f5a; --brain-bridge-live: #3f7a3a;
+  --neuro-memory: #2c6e5c; --neuro-memory-fill: #dfeee8;
+  --neuro-control: #6a4a8c; --neuro-control-fill: #ebe3f2;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -216,6 +218,8 @@ table { border-collapse: collapse; width: 100%; }
     --brain-left: #93b2e4;  --brain-left-fill: #1c2433;
     --brain-right: #e0907f; --brain-right-fill: #2e1e1a;
     --brain-bridge: #b8bb86; --brain-bridge-live: #8fd18a;
+    --neuro-memory: #82cdb6; --neuro-memory-fill: #162a24;
+    --neuro-control: #c3a6e6; --neuro-control-fill: #261d30;
   }
 }
 .plate-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
@@ -237,6 +241,28 @@ table { border-collapse: collapse; width: 100%; }
 .brain-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; color: var(--ink-soft); font-size: 12px; }
 .legend-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
 .legend-dot.language { background: var(--brain-left); } .legend-dot.association { background: var(--brain-right); } .legend-dot.bridge { background: var(--brain-bridge); }
+.legend-dot.n-memory { background: var(--neuro-memory); } .legend-dot.n-control { background: var(--neuro-control); }
+/* Nova Neuro plate: one brain, its networks as regions; only the model's networks are drawn solid. */
+#hemisphereBrain[hidden], #neuroBrain[hidden], .brain-legend[hidden] { display: none; }
+#neuroBrain { width: 100%; height: auto; max-height: 470px; display: block; }
+#neuroBrain .n-outline { fill: none; stroke: var(--rule-strong); stroke-width: 2; stroke-dasharray: 2 5; opacity: .7; }
+#neuroBrain .n-region { stroke-width: 2.5; }
+#neuroBrain .n-region.core { fill: var(--brain-left-fill); stroke: var(--brain-left); }
+#neuroBrain .n-region.assoc { fill: var(--brain-right-fill); stroke: var(--brain-right); }
+#neuroBrain .n-region.memory { fill: var(--neuro-memory-fill); stroke: var(--neuro-memory); }
+#neuroBrain .n-region.control { fill: var(--neuro-control-fill); stroke: var(--neuro-control); }
+#neuroBrain .n-region.absent { fill: none; stroke: var(--ink-soft); stroke-dasharray: 5 5; opacity: .45; }
+#neuroBrain .n-label { font-family: var(--serif); font-style: italic; }
+#neuroBrain .n-label.core { fill: var(--brain-left); } #neuroBrain .n-label.assoc { fill: var(--brain-right); }
+#neuroBrain .n-label.memory { fill: var(--neuro-memory); } #neuroBrain .n-label.control { fill: var(--neuro-control); }
+#neuroBrain .n-label.bus { fill: var(--brain-bridge); }
+#neuroBrain .n-label.absent { fill: var(--ink-soft); opacity: .7; }
+#neuroBrain .n-bus { fill: none; stroke: var(--brain-bridge); stroke-width: 3; stroke-dasharray: 1 7; stroke-linecap: round; opacity: .55; }
+#neuroBrain .n-fiber { stroke-width: 2; opacity: .3; stroke-linecap: round; }
+#neuroBrain .n-fiber.control { stroke: var(--neuro-control); } #neuroBrain .n-fiber.bus { stroke: var(--brain-bridge); }
+#neuroBrain .n-fiber.memory { stroke: var(--neuro-memory); } #neuroBrain .n-fiber.assoc { stroke: var(--brain-right); }
+#neuroBrain .n-fiber.absent { display: none; }
+#neuroBrain circle { cursor: crosshair; transition: opacity .2s; }
 .readings select { width: 100%; margin-bottom: 8px; }
 .readings label { font-size: 13px; color: var(--ink-soft); }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }

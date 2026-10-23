@@ -227,6 +227,12 @@
       <button type="button" id="addLessons" class="primary">Add lessons…</button>
       <button type="button" id="clearLessons" class="quiet">Clear list</button>
     </div>
+    <div class="line-form">
+      <label for="builtinLessons">Built-in lessons</label>
+      <select id="builtinLessons"><option value="">Loading…</option></select>
+      <button type="button" id="addBuiltinLessons">Add</button>
+      <span class="note">Basic English, Reasoning and Math, shipped with Yendory: teach them to check that a model learns from lessons, separately from your own.</span>
+    </div>
     <table class="ledger" id="lessonTable">
       <thead><tr><th>#</th><th>Lesson file</th><th class="num">Taught units</th><th class="num">Held out</th><th>Contents</th><th>Status</th><th></th></tr></thead>
       <tbody><tr><td colspan="7" class="empty">No lessons added.</td></tr></tbody>
@@ -351,6 +357,7 @@
     <p class="lede">A course is a set of lesson files with pass marks, extra practice material held in reserve, and a final exam. Its grade is 70% lessons (re-graded at the end of the course) and 30% final exam; it passes when the grade reaches the average of its lesson pass marks.</p>
     <p class="note">File names decide everything: the first number orders the lessons; the words <b>Dense</b>, <b>Transformer</b> or <b>Co-op</b> choose Stage A, B or C; a file named <b>Practice</b> is extra practice for the lesson with the same number and stage (an <code>[Extra Practice]</code> block inside a lesson works too); a file named <b>Exam</b> is the final exam, with <code>[Dense]</code>, <code>[Transformer]</code>, <code>[Co-op]</code> or <code>[Whole Brain]</code> sections. Answers may list accepted forms and rules, separated by <code>|</code>: <code>animal | creature | !plant</code> (Dense: keywords, a <code>!</code> word must not appear) or <code>A robin is an animal. | must: robin animal | never: not</code> (sentences). Training uses the first form.</p>
     <div class="actions"><button type="button" id="newCourse" class="primary">New course…</button></div>
+    <div id="builtinCourses"></div>
     <table class="ledger" id="courseList">
       <thead><tr><th>Course</th><th class="num">Lessons</th><th class="num">Required grade</th><th>Status</th><th></th></tr></thead>
       <tbody><tr><td colspan="5" class="empty">No courses yet.</td></tr></tbody>
@@ -685,7 +692,8 @@
     <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on § 7 Study. Everything below is the network itself.</p>
     <div class="plate-wrap">
       <figure class="plate">
-        <div class="brain-legend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
+        <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
+        <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span></div>
         <div class="brain-stage">
           <svg id="hemisphereBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of two trainable neural pathways joined by a trainable bridge">
             <defs><clipPath id="clipLeft"><path d="M 385 74 C 320 25 250 55 211 90 C 125 74 88 138 116 189 C 62 251 116 337 202 341 C 255 395 328 352 385 337 Z"/></clipPath><clipPath id="clipRight"><path d="M 415 74 C 480 25 550 55 589 90 C 675 74 712 138 684 189 C 738 251 684 337 598 341 C 545 395 472 352 415 337 Z"/></clipPath></defs>
@@ -697,6 +705,27 @@
             <g id="leftActivity" clip-path="url(#clipLeft)"></g><g id="rightActivity" clip-path="url(#clipRight)"></g>
             <text class="label left" x="240" y="387" text-anchor="middle" font-size="15">Transformer</text>
             <text class="label right" x="560" y="387" text-anchor="middle" font-size="15">Dense pathway</text>
+          </svg>
+          <svg id="neuroBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of Nova Neuro's networks: the language core, working memory, associative memory and the Executive Controller, joined by a communication bus" hidden>
+            <path class="n-outline" d="M110 230 C90 140 160 62 290 48 C390 22 560 28 640 80 C730 132 735 240 690 292 C650 335 575 345 515 336 C480 380 400 390 360 362 C275 374 150 340 110 230 Z"/>
+            <g id="nFibers" fill="none">
+              <path data-fiber="gate-memory" class="n-fiber control" d="M200 240 Q215 305 268 322"/>
+              <path data-fiber="gate-associative" class="n-fiber control" d="M215 112 Q420 -50 630 112"/>
+              <path data-fiber="read" class="n-fiber bus" d="M256 176 Q270 160 290 170"/>
+              <path data-fiber="out-memory" class="n-fiber memory" d="M350 288 Q362 272 382 262"/>
+              <path data-fiber="out-associative" class="n-fiber assoc" d="M578 192 Q552 172 523 182"/>
+            </g>
+            <ellipse id="nBusRing" class="n-bus" cx="405" cy="180" rx="134" ry="104"/>
+            <ellipse class="n-region control" data-region="controller" cx="190" cy="176" rx="66" ry="66"/>
+            <ellipse class="n-region core" data-region="core" cx="405" cy="180" rx="116" ry="88"/>
+            <ellipse class="n-region assoc" data-region="associative" cx="640" cy="190" rx="62" ry="74"/>
+            <ellipse class="n-region memory" data-region="memory" cx="380" cy="318" rx="118" ry="32"/>
+            <g id="nBusDots"></g><g id="nCoreDots"></g><g id="nControlDots"></g><g id="nAssocDots"></g><g id="nMemoryDots"></g>
+            <text class="n-label core" x="405" y="64" text-anchor="middle" font-size="14">Language core</text>
+            <text class="n-label control" x="190" y="262" text-anchor="middle" font-size="14">Executive Controller</text>
+            <text class="n-label assoc" x="640" y="285" text-anchor="middle" font-size="14" data-label="associative">Associative memory</text>
+            <text class="n-label memory" x="380" y="372" text-anchor="middle" font-size="14" data-label="memory">Working memory</text>
+            <text class="n-label bus" x="552" y="92" text-anchor="middle" font-size="12">bus</text>
           </svg>
         </div>
         <figcaption id="brainDetail">Inspect a question to display measured activity. Brightness is the size of real attention weights and activations, not intelligence.</figcaption>
