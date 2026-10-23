@@ -116,6 +116,12 @@ pub struct SessionConfig {
     /// every guard: the accepted model never forgets more than the guards allow.
     #[serde(default)]
     pub recover_earlier: bool,
+    /// Experimental (default off): earlier-lesson answers are judged by their net change, like
+    /// `protect_answers_net` for this lesson's: a candidate is rejected only when it loses more
+    /// earlier-lesson answers (of the baseline's) than it gains held-out answers of this lesson
+    /// over the accepted model. Off: no earlier-lesson answer may be lost.
+    #[serde(default)]
+    pub earlier_answers_net: bool,
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -189,6 +195,7 @@ impl Default for SessionConfig {
             reading: None,
             blend: 0.,
             recover_earlier: false,
+            earlier_answers_net: false,
         }
     }
 }
@@ -707,11 +714,18 @@ impl Judge<'_> {
         }
         let lost_panel =
             base_panel_correct.iter().zip(correct_set(&panel)).filter(|(b, n)| **b && !*n).count();
-        if lost_panel > 0 {
-            rejections.push(Rejection::EarlierAnswersLost);
-            reasons.push(format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced"));
-        }
         let now_correct = correct_set(&report);
+        let gained_here = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| !**b && **n).count();
+        if lost_panel > 0 && !(cfg.earlier_answers_net && lost_panel <= gained_here) {
+            rejections.push(Rejection::EarlierAnswersLost);
+            reasons.push(if cfg.earlier_answers_net {
+                format!(
+                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced, more than the {gained_here} gained in this lesson"
+                )
+            } else {
+                format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced")
+            });
+        }
         if cfg.protect_correct_answers {
             let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
             let gained = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| !**b && **n).count();
@@ -788,9 +802,9 @@ impl Judge<'_> {
         let closer = plateau.as_ref().map_or(true, |(_, _, b, _, _)| s.heldout_loss < b.heldout_loss);
         if eligible && improves && better_than_best {
             *best = Some((ci, cand, s, now_correct, report));
-        } else if safe && (better_than_plateau || !plateau_is_safe) {
-            *plateau = Some((ci, cand, s, now_correct, report));
-        } else if recoverable && !plateau_is_safe && closer && s.heldout_loss.is_finite() {
+        } else if (safe && (better_than_plateau || !plateau_is_safe))
+            || (recoverable && !plateau_is_safe && closer && s.heldout_loss.is_finite())
+        {
             *plateau = Some((ci, cand, s, now_correct, report));
         }
     }

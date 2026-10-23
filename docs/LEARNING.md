@@ -577,6 +577,18 @@ answers after all six lessons:
 | A: current | 1 | 10/101 (10%) |
 | B: `recover_earlier` | 1 | 10/101 (10%) |
 | C: B + rehearsal share 0.3 | 2 (Where things are 0 -> 16/16) | 35/101 (35%): Greetings 9/10, Colours 10/17, Where 16/16 |
+| D: C + earlier lessons' loss may rise 10% (`retention_relative`) | 2 | 35/101: identical to C |
+| E: C + patience 16 | 2 | 35/101: identical to C |
+| F: C + `earlier_answers_net` | 3 (Where 16/16, Who did it 15/22) | 55/101 (54%) |
+| G: `earlier_answers_net` alone | 2 (Yes or no 13/18) | 15/101 (15%) |
+| H: `recover_earlier` + `earlier_answers_net` | 3 | 41/101 (41%) |
+
+D and E show the loss guard and patience were not what blocked C. Counting rejection reasons
+(variant C) showed the guard that did: candidates reached 12/17 (Colours), 14/18 (Yes or no),
+11/22 (Who did it) and 16/18 (Plurals) on the lesson being taught, and were rejected for losing
+1-4 of the 8 earlier-lesson panel answers. `earlier_answers_net` (experimental, default off)
+judges those answers like `protect_answers_net` judges this lesson's: a candidate is rejected
+only when it loses more earlier-lesson answers than it gains in this lesson.
 
 The decision on defaults is the owner's (see docs/STATUS.md).
 
