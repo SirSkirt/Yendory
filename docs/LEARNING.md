@@ -633,6 +633,12 @@ reading (a "Together" tick box per lesson, all ticked by default):
   again when the run resumes (accepted changes are kept). A lesson set to be taught on its own
   changes the course's version (fingerprint); the default leaves the version of existing courses
   as it was.
+- **What a group is judged on** (0.5.0): a single lesson's session samples up to 40 held-out
+  questions per kind of question (`eval_limit`) to keep checks quick. A group is judged on every
+  held-out question of every lesson instead: the sample hid lessons and its total did not follow
+  the lessons chosen (27 or 28 lessons both gave 192). Every session score also carries each
+  lesson's own count (`Score::by_lesson`), so the progress cards show each lesson's held-out
+  questions at the start and after every epoch, next to the group's total.
 
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 

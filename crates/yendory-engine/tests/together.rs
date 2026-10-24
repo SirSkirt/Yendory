@@ -53,6 +53,32 @@ fn classroom_teaches_the_chosen_lessons_together_then_the_rest() {
         events.iter().rposition(|e| matches!(e, CourseEvent::FileFinished(f) if f.index == 2)).unwrap();
     let alone = events.iter().position(|e| matches!(e, CourseEvent::Session { index: 3, .. })).unwrap();
     assert!(alone > group_end);
+    // The group's session grades every held-out question of every lesson, and reports each
+    // lesson's own share of them.
+    use yendory_engine::learn::session::Event;
+    let baseline = events
+        .iter()
+        .find_map(|e| match e {
+            CourseEvent::Session { index: 0, event: Event::Started { baseline, .. } } => {
+                Some(baseline.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let held: usize = r.files[..3].iter().map(|f| f.heldout_units).sum();
+    assert_eq!(baseline.exact_total, held, "all held-out questions, not a sample");
+    assert_eq!(baseline.by_lesson.len(), 3);
+    for f in &r.files[..3] {
+        assert_eq!(baseline.by_lesson[&f.name].1, f.heldout_units, "{}", f.name);
+    }
+    let epoch = events
+        .iter()
+        .find_map(|e| match e {
+            CourseEvent::Session { event: Event::Epoch(ep), .. } => Some(ep.accepted_score.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(epoch.by_lesson.values().map(|v| v.0).sum::<usize>(), epoch.exact_correct);
     assert_eq!(r.files.len(), 4);
     for f in &r.files[..3] {
         let (b, e) = (f.baseline.as_ref().unwrap(), f.final_score.as_ref().unwrap());

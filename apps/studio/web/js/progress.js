@@ -111,12 +111,23 @@ $("teach").addEventListener("click", () => {
 
 // The steps an event of lesson `index` updates: every lesson of its group when taught together.
 const groupSteps = (track, index) => (track.group?.includes(index) ? track.group : [index]).map(i => "L" + i);
+// A lesson's own held-out score inside a group's session (the session reports every lesson's).
+const ownScore = (score, name) => score?.by_lesson?.[name];
+function groupLessonText(track, i, score, when) {
+  const name = track.names?.[i];
+  const now = ownScore(score, name), start = track.start?.[name];
+  if (!now) return null;
+  const pct = ([c, n]) => `${c} of ${n}`;
+  return `${track.attempt}. ${when}: ${pct(now)} of its held-out questions right${start && when !== "Start" ? ` (started at ${start[0]})` : ""}; whole group ${score.exact_correct} of ${score.exact_total}.`;
+}
 const baseTeachEvent = onTeachEvent;
 onTeachEvent = e => {
   baseTeachEvent(e);
   if (teachCard.container.hidden) return;
   if (e.type === "group_started") {
     teachTrack.group = e.indices;
+    teachTrack.names = Object.fromEntries(e.indices.map((ix, k) => [ix, e.names[k]]));
+    teachTrack.start = null;
     teachCard.set({ subtitle: `${e.indices.length} lessons taught together`, status: "Training" });
     for (const i of e.indices) teachCard.step("L" + i, { state: "running", progress: 0, detail: `Taught together with ${e.indices.length - 1} other lesson(s) in one mixed session.` });
     return;
@@ -140,12 +151,13 @@ onTeachEvent = e => {
     const ids = groupSteps(teachTrack, e.index);
     const all = ids.length > 1 ? " (all lessons of the group)" : "";
     if (s.type === "started") {
-      for (const id of ids) teachCard.step(id, { detail: `${teachTrack.attempt}. Starts with ${s.baseline.exact_correct} of ${s.baseline.exact_total} held-out questions right${all}; ${fmt(s.train_units)} units to learn.` });
+      if (ids.length > 1) teachTrack.start = { ...(s.baseline.by_lesson || {}) };
+      for (const id of ids) teachCard.step(id, { detail: (ids.length > 1 && groupLessonText(teachTrack, Number(id.slice(1)), s.baseline, "Start")) || `${teachTrack.attempt}. Starts with ${s.baseline.exact_correct} of ${s.baseline.exact_total} held-out questions right${all}; ${fmt(s.train_units)} units to learn.` });
     } else if (s.type === "batch") {
       for (const id of ids) teachCard.step(id, { progress: attemptProgress(teachTrack, s), progressLabel: batchLabel(teachTrack, s) });
     } else if (s.type === "epoch") {
       const a = s.accepted_score;
-      for (const id of ids) teachCard.step(id, { detail: `${teachTrack.attempt}. After epoch ${s.epoch}: ${a.exact_correct} of ${a.exact_total} held-out questions right${all}, held-out loss ${a.heldout_loss.toFixed(3)}.` });
+      for (const id of ids) teachCard.step(id, { detail: (ids.length > 1 && groupLessonText(teachTrack, Number(id.slice(1)), a, `After epoch ${s.epoch}`)) || `${teachTrack.attempt}. After epoch ${s.epoch}: ${a.exact_correct} of ${a.exact_total} held-out questions right${all}, held-out loss ${a.heldout_loss.toFixed(3)}.` });
     }
   } else if (e.type === "file_finished") {
     teachCard.step("L" + e.index, { state: OUTCOME_STATE[e.outcome] || "done", progress: null,
@@ -193,6 +205,8 @@ onPlanEvent = payload => {
     const ids = groupSteps(planTrack, c.index);
     if (c.type === "group_started") {
       planTrack.group = c.indices;
+      planTrack.names = Object.fromEntries(c.indices.map((ix, k) => [ix, c.names[k]]));
+      planTrack.start = null;
       planCard.set({ subtitle: `${c.indices.length} lessons together · ${stageName(e.stage)}`, status: "Training" });
       c.indices.forEach((i, k) => planCard.step("L" + i, { title: `Lesson ${i + 1} — ${c.names[k]}`, state: "running", progress: 0, detail: `${stageName(e.stage)} · taught together with ${c.indices.length - 1} other lesson(s) in one mixed session.` }));
     } else if (c.type === "group_scored") {
@@ -210,6 +224,11 @@ onPlanEvent = payload => {
       planCard.step(id, { detail: `Not passed yet (${percent(c.diagnosis.heldout_rate)}): ${CAUSE_TEXT[c.diagnosis.cause] || c.diagnosis.cause}.` });
     } else if (c.type === "session" && c.event.type === "batch") {
       for (const s of ids) planCard.step(s, { progress: attemptProgress(planTrack, c.event), progressLabel: batchLabel(planTrack, c.event) });
+    } else if (c.type === "session" && ids.length > 1 && (c.event.type === "started" || c.event.type === "epoch")) {
+      const score = c.event.type === "started" ? c.event.baseline : c.event.accepted_score;
+      if (c.event.type === "started") planTrack.start = { ...(score.by_lesson || {}) };
+      const when = c.event.type === "started" ? "Start" : `After epoch ${c.event.epoch}`;
+      for (const s of ids) { const t = groupLessonText(planTrack, Number(s.slice(1)), score, when); if (t) planCard.step(s, { detail: t }); }
     }
   } else if (e.type === "lesson_taught") {
     if (planTrack.group?.includes(e.index) && planTrack.group.indexOf(e.index) === planTrack.group.length - 1) planTrack.group = null;

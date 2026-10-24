@@ -304,6 +304,25 @@ pub struct Score {
     /// its own (measured in bicameral education only).
     #[serde(default)]
     pub without_dense_loss: Option<f32>,
+    /// Exact matches per lesson (the items' source file): (correct, total). Lessons taught
+    /// together show each lesson's own progress with it.
+    #[serde(default)]
+    pub by_lesson: std::collections::BTreeMap<String, (usize, usize)>,
+}
+
+/// Exact matches per lesson: each item's outcomes (one per question, one per conversation
+/// turn), in the order `evaluate` reports them.
+fn by_lesson(items: &[&Item], report: &Report) -> std::collections::BTreeMap<String, (usize, usize)> {
+    let mut out: std::collections::BTreeMap<String, (usize, usize)> = std::collections::BTreeMap::new();
+    let mut outcomes = report.outcomes.iter();
+    for it in items {
+        let e = out.entry(it.source.clone()).or_default();
+        for o in outcomes.by_ref().take(it.outcome_count()) {
+            e.0 += usize::from(o.correct);
+            e.1 += 1;
+        }
+    }
+    out
 }
 impl Score {
     /// Share of held-out questions answered exactly right.
@@ -581,6 +600,7 @@ fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, R
             by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
             dense_reliance,
             without_dense_loss,
+            by_lesson: by_lesson(&p.heldout_items, &report),
         },
         report,
         panel,
@@ -608,6 +628,7 @@ pub(super) fn lesson_score(model: &Bicameral, items: &[Item]) -> Result<Score, S
         by_kind: report.exact.iter().map(|(k, v)| (k.clone(), (v.correct, v.total))).collect(),
         dense_reliance: None,
         without_dense_loss: None,
+        by_lesson: by_lesson(&held, &report),
     })
 }
 

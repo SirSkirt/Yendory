@@ -153,6 +153,9 @@ impl FileRecord {
     }
 }
 
+// Session events carry whole scores (with each lesson's counts); events are short-lived, so
+// their size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CourseEvent {
@@ -945,6 +948,10 @@ pub(super) fn teach_group(
     for (k, (_, items)) in lessons.iter().enumerate() {
         records[k].baseline = Some(super::session::lesson_score(current, items)?);
     }
+    // The group is judged on every held-out question of every lesson (a single lesson's session
+    // samples up to `eval_limit` per kind; for a group that sample would hide lessons, and the
+    // total would not follow the lessons chosen).
+    let cfg = &SessionConfig { eval_limit: None, ..cfg.clone() };
     let mut practice: Option<Vec<Item>> = None;
     let mut passed = vec![false; lessons.len()];
     for attempt in 0..=retries {
