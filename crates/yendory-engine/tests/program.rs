@@ -234,7 +234,15 @@ fn small_course(mark: f32) -> CourseDef {
 #[test]
 fn a_failed_course_gets_three_different_remediations_then_stops_on_its_best_checkpoint() {
     let model = Bicameral::with_config(Config::default(), 3);
-    let prep = prepare(&small_course(1.0));
+    let mut c = small_course(1.0);
+    // This test follows a course that fails through all three remediations. With saved earlier
+    // lessons trained alongside and training kept going through epochs rejected only for them
+    // (the defaults since 0.5.1), this course passes on its third remediation (grade 0 -> 0.24
+    // -> 0.74 -> 1.00; see `defaults_pass_the_course_the_old_settings_fail`), so it runs with both
+    // off.
+    c.settings.train_earlier = false;
+    c.settings.recover_earlier = false;
+    let prep = prepare(&c);
     assert!(prep.check.problems.is_empty(), "{:?}", prep.check.problems);
     let mut run = CourseRun::new(&prep, false, 7);
     let stop = Arc::new(AtomicBool::new(false));
@@ -270,6 +278,22 @@ fn a_failed_course_gets_three_different_remediations_then_stops_on_its_best_chec
         .filter(|e| matches!(e, ProgramEvent::LessonTaught { outcome: FileOutcome::Unresolved, .. }))
         .count();
     assert!(lessons_taught >= 1);
+}
+
+/// The same course and seed with the defaults: the remediations reach every pass mark.
+#[test]
+fn defaults_pass_the_course_the_old_settings_fail() {
+    let model = Bicameral::with_config(Config::default(), 3);
+    let prep = prepare(&small_course(1.0));
+    let mut run = CourseRun::new(&prep, false, 7);
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut h = host(&stop, None);
+    run_course(&model, &[], &prep, &mut run, None, &RunOptions::default(), &mut h, &stop).unwrap();
+    let g = run.grades.last().unwrap();
+    println!("grades: {:?}", run.grades.iter().map(|g| g.grade).collect::<Vec<_>>());
+    assert_eq!(run.phase, Phase::Passed);
+    assert!(g.passed && g.lessons.iter().all(|l| l.passed));
+    assert!(!run.remediation.is_empty());
 }
 
 #[test]

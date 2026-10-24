@@ -668,6 +668,12 @@ Studio lists a model's saved lessons under the Classroom's lesson table (units a
 questions of each) and can remove one, e.g. a lesson renamed or replaced, so its old copy is no
 longer rehearsed, trained or guarded. Removing one changes only the archive, not the model.
 
+The course test that follows a failing course through its three remediations
+(`tests/program.rs`, pass mark 100%, two lessons of different stages and a separate exam) now
+passes on its third remediation with these defaults: course grade 0 -> 0.24 -> 0.74 -> 1.00
+(Dense lesson 7/7, Transformer lesson 5/5, exam 100%). With both settings off it still fails, as
+before; the remediation test runs with them off, and a second test checks the defaults pass.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a
