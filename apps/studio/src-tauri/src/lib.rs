@@ -1164,6 +1164,67 @@ struct TeachOptions {
     /// session (the default for every lesson), or on its own afterwards.
     #[serde(default)]
     together: Option<Vec<bool>>,
+    /// Lessons taught together also train the model's saved earlier lessons in the same mix.
+    #[serde(default = "yes")]
+    train_earlier: bool,
+    /// Keep training through epochs rejected only for earlier lessons, without saving them.
+    #[serde(default = "yes")]
+    recover_earlier: bool,
+}
+
+/// One saved earlier lesson in the model's rehearsal archive.
+#[derive(Serialize)]
+struct SavedLesson {
+    name: String,
+    units: usize,
+    held_out: usize,
+}
+
+/// The saved earlier lessons of the open model, in the order they were saved.
+#[tauri::command]
+fn saved_lessons(studio: State<'_, Studio>) -> Res<Vec<SavedLesson>> {
+    with_active(&studio, |a| {
+        let mut out: Vec<SavedLesson> = Vec::new();
+        for it in &a.archive {
+            let i = match out.iter().position(|l| l.name == it.source) {
+                Some(i) => i,
+                None => {
+                    out.push(SavedLesson { name: it.source.clone(), units: 0, held_out: 0 });
+                    out.len() - 1
+                }
+            };
+            out[i].units += 1;
+            if it.held_out && it.kind != Kind::Prose {
+                out[i].held_out += 1;
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Removes one saved earlier lesson from the open model's archive (e.g. a lesson renamed or
+/// replaced since): it is no longer rehearsed, trained alongside or guarded.
+#[tauri::command]
+fn forget_saved_lesson(app: AppHandle, studio: State<'_, Studio>, name: String) -> Res<Vec<SavedLesson>> {
+    if studio.teaching.load(Ordering::Acquire) {
+        return Err("Wait until teaching has finished".into());
+    }
+    {
+        let mut guard = studio.active.lock().unwrap();
+        let a = guard.as_mut().ok_or("Open or create a model first")?;
+        let before = a.archive.len();
+        a.archive.retain(|i| i.source != name);
+        if a.archive.len() == before {
+            return Err(format!("{name} is not among the saved lessons"));
+        }
+        save_all(&app, &a.meta, &a.model, &a.archive)?;
+        append_history(
+            &app,
+            &a.meta.id,
+            serde_json::json!({"type": "saved_lesson_removed", "time": now(), "name": name}),
+        );
+    }
+    saved_lessons(studio)
 }
 
 /// The bicameral education stage named by the frontend.
@@ -1238,6 +1299,8 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         seed: now(),
         word_limit: meta.word_limit,
         education: education_stage(options.education.as_deref())?,
+        train_earlier: options.train_earlier,
+        recover_earlier: options.recover_earlier,
         ..SessionConfig::default()
     };
     append_history(
@@ -1533,6 +1596,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            saved_lessons,
+            forget_saved_lesson,
             growth::growth_view,
             growth::set_growth_mode,
             growth::expand_model,

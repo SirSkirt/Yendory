@@ -566,7 +566,8 @@ to the accepted model each epoch, so the same thing happens again until patience
 session. Only lessons that happen not to disturb the earlier ones get through. The guards
 behave as written; in sequence they freeze learning after the first mastered lesson.
 
-`SessionConfig::recover_earlier` (experimental, default off): when every candidate of an epoch is
+`SessionConfig::recover_earlier` (experimental then; on by default for the Classroom and courses
+since 0.5.1, see *Saved earlier lessons in the mix*): when every candidate of an epoch is
 rejected only for forgetting earlier lessons, training continues from the one with the lowest
 held-out loss on this lesson instead of restarting, so rehearsal can win the earlier lessons
 back. Acceptance still needs every guard. Basic English, matched seed, what the final model
@@ -639,6 +640,33 @@ reading (a "Together" tick box per lesson, all ticked by default):
   the lessons chosen (27 or 28 lessons both gave 192). Every session score also carries each
   lesson's own count (`Score::by_lesson`), so the progress cards show each lesson's held-out
   questions at the start and after every epoch, next to the group's total.
+
+### Saved earlier lessons in the mix (0.5.1)
+
+A model keeps the lessons it was taught before (its rehearsal archive, `archive.json`). Lessons
+outside the current run were still guarded: a candidate was rejected when their held-out loss
+rose more than 0.02 or one of their panel answers was lost. In a 20-lesson group (learning rate
+0.000003) the first epoch was accepted at 45/404 and every later candidate (58-67/404) was
+rejected only by that guard; each epoch restored the accepted model, so the run could not move.
+Two settings, both on by default for the Classroom and courses (the owner's request), off in
+`SessionConfig::default()`:
+
+- **Train the saved lessons alongside** (`train_earlier`, `CourseSettings::train_earlier`): the
+  saved lessons outside the group are added to the group's session, every batch drawing on them
+  too, and their held-out questions join the group's judging (`by_lesson` lists them). They also
+  stay guarded as earlier lessons. Retries practise them once. The events name them
+  (`GroupStarted::earlier`) and give each one's held-out rate after every attempt
+  (`GroupScored::earlier_rates`); they are not graded against a pass mark and have no record of
+  their own. Course remediation of together lessons mixes them in the same way.
+- **Keep training through rejected epochs** (`recover_earlier`, `CourseSettings::recover_earlier`):
+  when an epoch's candidates are rejected only because earlier lessons slipped, training continues
+  from the closest one without accepting or saving it, so later epochs can win those lessons back.
+  A checkpoint is accepted and saved only when every guard passes; the flat-epoch limit still
+  ends the attempt.
+
+Studio lists a model's saved lessons under the Classroom's lesson table (units and held-out
+questions of each) and can remove one, e.g. a lesson renamed or replaced, so its old copy is no
+longer rehearsed, trained or guarded. Removing one changes only the archive, not the model.
 
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 

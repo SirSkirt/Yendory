@@ -113,6 +113,7 @@ function showCourse(c) {
   $("cRetries").value = s.retries; $("cFlat").value = s.flat_epochs ?? 4; $("cTimeLimit").value = s.time_limit_hours ?? "";
   $("cFoundation").checked = s.foundation; $("cRehearsal").checked = s.rehearsal;
   $("cProtect").checked = s.protect_answers; $("cRequeue").checked = s.requeue;
+  $("cTrainEarlier").checked = s.train_earlier ?? true; $("cRecoverEarlier").checked = s.recover_earlier ?? true;
   refreshCoursesQuiet();
 }
 const refreshCoursesQuiet = () => refreshCourses().catch(e => log("ERROR", e));
@@ -142,10 +143,13 @@ for (const id of ["wDense", "wTransformer", "wCoop", "wWhole"]) $(id).addEventLi
 } }), "Weights"));
 for (const id of ["cExamMinOn", "cExamMin"]) $(id).addEventListener("change", safe(() => edit({ type: "examMinimum", percent: $("cExamMinOn").checked ? Number($("cExamMin").value) : null }), "Exam minimum"));
 $("cPretest").addEventListener("change", safe(() => edit({ type: "pretest", on: $("cPretest").checked }), "Pre-test"));
-for (const id of ["cEpochs", "cBatch", "cRate", "cRetries", "cTimeLimit", "cFoundation", "cRehearsal", "cProtect", "cRequeue"]) $(id).addEventListener("change", safe(() => edit({ type: "settings", settings: {
+for (const id of ["cEpochs", "cBatch", "cRate", "cRetries", "cFlat", "cTimeLimit", "cFoundation", "cRehearsal", "cProtect", "cRequeue", "cTrainEarlier", "cRecoverEarlier"]) $(id).addEventListener("change", safe(() => edit({ type: "settings", settings: {
+  // Settings not shown here keep their values.
+  ...course.settings,
   epochs: Number($("cEpochs").value), batch_size: Number($("cBatch").value), learning_rate: Number($("cRate").value),
   retries: Number($("cRetries").value), flat_epochs: Number($("cFlat").value), time_limit_hours: $("cTimeLimit").value === "" ? null : Number($("cTimeLimit").value),
   foundation: $("cFoundation").checked, rehearsal: $("cRehearsal").checked, protect_answers: $("cProtect").checked, requeue: $("cRequeue").checked,
+  train_earlier: $("cTrainEarlier").checked, recover_earlier: $("cRecoverEarlier").checked,
 } }), "Training settings"));
 
 // ---- plans ---------------------------------------------------------------------------------
@@ -291,7 +295,7 @@ function onPlanEvent({ planId, event: e }) {
     planLog(`Pre-test (ungraded): ${percent(e.score)}.`);
   } else if (e.type === "lesson") {
     const c = e.event;
-    if (c.type === "group_started") { $("planNow").textContent = `${c.indices.length} lessons together · ${stageName(e.stage)}: ${c.names.join(", ")}`; planLog(`Taught together: ${c.names.join(", ")}.`); }
+    if (c.type === "group_started") { $("planNow").textContent = `${c.indices.length} lessons together · ${stageName(e.stage)}: ${c.names.join(", ")}`; planLog(`Taught together: ${c.names.join(", ")}${c.earlier?.length ? `, with ${c.earlier.length} saved earlier lesson(s) trained alongside (still guarded)` : ""}.`); }
     else if (c.type === "group_scored") planLog(`After attempt ${c.attempt + 1}: ` + c.indices.map((i, k) => `lesson ${i + 1} ${percent(c.rates[k])}${c.passed[k] ? " (passed)" : ""}`).join(" · "));
     else if (c.type === "file_started") $("planNow").textContent = `Lesson ${c.index + 1} of ${c.files}: ${c.name} · ${stageName(e.stage)}${c.pass > 1 ? " · second try" : ""}`;
     else if (c.type === "attempt_started") { live.line = c.attempt === 0 ? "first attempt" : `retry ${c.attempt}${c.remedy ? ": " + c.remedy : ""}`; if (c.attempt) planLog(`${live.line}`); }

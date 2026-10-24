@@ -201,6 +201,10 @@ pub enum CourseEvent {
     GroupStarted {
         indices: Vec<usize>,
         names: Vec<String>,
+        /// Saved earlier lessons (archive sources outside the group) trained in the same mix
+        /// (`SessionConfig::train_earlier`); empty when they are only guarded.
+        #[serde(default)]
+        earlier: Vec<String>,
     },
     /// After an attempt of a group: each lesson's held-out score and whether it passed.
     GroupScored {
@@ -208,6 +212,9 @@ pub enum CourseEvent {
         attempt: u32,
         rates: Vec<f32>,
         passed: Vec<bool>,
+        /// Held-out exact rate of each saved earlier lesson in `GroupStarted::earlier`.
+        #[serde(default)]
+        earlier_rates: Vec<f32>,
     },
 }
 
@@ -940,10 +947,30 @@ pub(super) fn teach_group(
     let lead = indices[0];
     let sources: std::collections::BTreeSet<String> =
         lessons.iter().flat_map(|(_, items)| items.iter().map(|i| i.source.clone())).collect();
-    let all: Vec<Item> = lessons.iter().flat_map(|(_, items)| items.iter().cloned()).collect();
+    // Saved earlier lessons outside the group, by source: trained in the mix when
+    // `train_earlier` is on (they stay guarded either way).
+    let mut earlier: Vec<(String, Vec<Item>)> = Vec::new();
+    if cfg.train_earlier {
+        for it in archive.iter().filter(|i| !sources.contains(&i.source)) {
+            match earlier.iter_mut().find(|(s, _)| *s == it.source) {
+                Some((_, items)) => items.push(it.clone()),
+                None => earlier.push((it.source.clone(), vec![it.clone()])),
+            }
+        }
+        // A saved lesson without held-out questions or training units cannot be judged here.
+        earlier.retain(|(_, items)| {
+            items.iter().any(|i| i.held_out && i.kind != Kind::Prose) && items.iter().any(|i| i.trainable())
+        });
+    }
+    let all: Vec<Item> = lessons
+        .iter()
+        .flat_map(|(_, items)| items.iter().cloned())
+        .chain(earlier.iter().flat_map(|(_, items)| items.iter().cloned()))
+        .collect();
     observer(&CourseEvent::GroupStarted {
         indices: indices.clone(),
         names: records.iter().map(|r| r.name.clone()).collect(),
+        earlier: earlier.iter().map(|(s, _)| s.clone()).collect(),
     });
     for (k, (_, items)) in lessons.iter().enumerate() {
         records[k].baseline = Some(super::session::lesson_score(current, items)?);
@@ -1033,11 +1060,16 @@ pub(super) fn teach_group(
                 because: None,
             });
         }
+        let mut earlier_rates = Vec::with_capacity(earlier.len());
+        for (_, items) in &earlier {
+            earlier_rates.push(super::session::lesson_score(current, items)?.exact_rate());
+        }
         observer(&CourseEvent::GroupScored {
             indices: indices.clone(),
             attempt,
             rates,
             passed: passed.clone(),
+            earlier_rates,
         });
         if passed.iter().all(|&p| p) || attempt == retries || !r.learned {
             break;
@@ -1050,6 +1082,8 @@ pub(super) fn teach_group(
                 next.extend(units.iter().map(|i| (*i).clone()));
             }
         }
+        // Saved earlier lessons in the mix are practised once.
+        next.extend(earlier.iter().flat_map(|(_, items)| items.iter().filter(|i| !i.held_out).cloned()));
         practice = Some(next);
     }
     for (k, rec) in records.iter_mut().enumerate() {

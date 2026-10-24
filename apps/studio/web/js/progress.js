@@ -128,7 +128,7 @@ onTeachEvent = e => {
     teachTrack.group = e.indices;
     teachTrack.names = Object.fromEntries(e.indices.map((ix, k) => [ix, e.names[k]]));
     teachTrack.start = null;
-    teachCard.set({ subtitle: `${e.indices.length} lessons taught together`, status: "Training" });
+    teachCard.set({ subtitle: `${e.indices.length} lessons taught together${e.earlier?.length ? ` + ${e.earlier.length} saved earlier lesson(s)` : ""}`, status: "Training" });
     for (const i of e.indices) teachCard.step("L" + i, { state: "running", progress: 0, detail: `Taught together with ${e.indices.length - 1} other lesson(s) in one mixed session.` });
     return;
   }

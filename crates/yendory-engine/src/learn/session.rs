@@ -109,8 +109,8 @@ pub struct SessionConfig {
     /// most held-out answers, then the lowest held-out loss). No extra training steps.
     #[serde(default)]
     pub blend: f32,
-    /// Experimental (default off): when every candidate of an epoch is rejected only because
-    /// earlier lessons were forgotten (their held-out loss or answers), training continues from
+    /// Off by default here; on by default for courses and the Classroom. When every candidate
+    /// of an epoch is rejected only because earlier lessons were forgotten (their held-out loss or answers), training continues from
     /// the one with the lowest held-out loss on this lesson instead of restarting from the
     /// accepted model, so rehearsal can win the earlier lessons back. Acceptance still needs
     /// every guard: the accepted model never forgets more than the guards allow.
@@ -122,6 +122,13 @@ pub struct SessionConfig {
     /// over the accepted model. Off: no earlier-lesson answer may be lost.
     #[serde(default)]
     pub earlier_answers_net: bool,
+    /// Lessons taught together (`course::teach_group`) only; off by default here, on by default
+    /// for courses and the Classroom: the saved earlier lessons outside the group (the archive)
+    /// are trained in the same mixed session and their held-out questions join the group's
+    /// judging. They also stay guarded as earlier lessons, so a checkpoint is accepted only when
+    /// their held-out loss and answers pass the earlier-lesson guards.
+    #[serde(default)]
+    pub train_earlier: bool,
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -196,6 +203,7 @@ impl Default for SessionConfig {
             blend: 0.,
             recover_earlier: false,
             earlier_answers_net: false,
+            train_earlier: false,
         }
     }
 }

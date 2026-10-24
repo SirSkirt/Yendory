@@ -240,6 +240,12 @@ pub struct CourseSettings {
     pub reading_share: f32,
     /// Weight blending: one more candidate per epoch (0 = off; see `SessionConfig::blend`).
     pub blend: f32,
+    /// Lessons taught together also train the model's saved earlier lessons in the same mix
+    /// (see `SessionConfig::train_earlier`).
+    pub train_earlier: bool,
+    /// Keep training through epochs rejected only for earlier lessons, without saving them
+    /// (see `SessionConfig::recover_earlier`).
+    pub recover_earlier: bool,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -260,6 +266,8 @@ impl Default for CourseSettings {
             dropout: 0.,
             reading_share: 0.,
             blend: 0.,
+            train_earlier: true,
+            recover_earlier: true,
         }
     }
 }

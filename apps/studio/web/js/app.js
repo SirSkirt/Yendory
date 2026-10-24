@@ -58,6 +58,7 @@ function showActive(meta) {
   $("activeEntry").hidden = !meta;
   if (!meta) return;
   $("activeName").textContent = meta.name;
+  refreshSaved();
   $("activeStep").textContent = fmt(meta.step);
   $("activeWords").textContent = fmt(meta.words);
   const neuroModel = meta.architecture === "neuro";
@@ -395,6 +396,21 @@ function renderLessons() {
       lessonsList = await invoke("remove_lesson", { index: i }); renderLessons();
     }, "Remove lesson") }, "remove")))));
 }
+// The open model's saved earlier lessons (its rehearsal archive).
+function renderSaved(list) {
+  $("savedCount").textContent = list.length ? `${list.length} lesson${list.length === 1 ? "" : "s"}` : "none";
+  const body = $("savedTable").tBodies[0];
+  if (!list.length) { body.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty" }, "No saved lessons."))); return; }
+  body.replaceChildren(...list.map(l => {
+    const remove = el("button", { type: "button", class: "quiet" }, "Remove");
+    remove.addEventListener("click", safe(async () => {
+      if (!await askYes(`Remove "${l.name}" from this model's saved lessons? It will no longer be rehearsed, trained alongside or guarded. The model itself is not changed.`)) return;
+      renderSaved(await invoke("forget_saved_lesson", { name: l.name }));
+    }, "Remove saved lesson"));
+    return el("tr", {}, el("td", {}, l.name), el("td", { class: "num" }, fmt(l.units)), el("td", { class: "num" }, fmt(l.held_out)), el("td", {}, remove));
+  }));
+}
+function refreshSaved() { invoke("saved_lessons").then(renderSaved).catch(() => renderSaved([])); }
 async function refreshLessons() { lessonsList = await invoke("lessons"); renderLessons(); }
 $("addLessons").addEventListener("click", safe(async () => {
   lessonsList = await invoke("add_lessons");
@@ -463,6 +479,8 @@ $("teach").addEventListener("click", safe(async () => {
     requeue: $("optRequeue").checked,
     education: $("optEducation").value,
     together: lessonsList.map(isTogether),
+    trainEarlier: $("optTrainEarlier").checked,
+    recoverEarlier: $("optRecoverEarlier").checked,
   };
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
@@ -514,10 +532,12 @@ function onTeachEvent(e) {
     for (const i of e.indices) fileState[i] = el("span", { class: "tag" }, "teaching together…");
     renderLessons();
     $("progressTitle").textContent = `Teaching ${active?.name ?? ""} · ${e.indices.length} lessons together`;
-    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("b", {}, `Taught together (one mixed session): ${e.names.join(", ")}`))));
+    $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7 }, el("b", {}, `Taught together (one mixed session): ${e.names.join(", ")}`),
+      e.earlier?.length ? el("span", { class: "note" }, ` · with ${e.earlier.length} saved earlier lesson(s) trained alongside and guarded: ${e.earlier.join(", ")}`) : "")));
   } else if (e.type === "group_scored") {
     $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note" },
-      `After attempt ${e.attempt + 1}, each lesson on its own held-out questions: ` + e.indices.map((ix, k) => `${lessonsList[ix]?.name ?? "lesson " + (ix + 1)} ${(100 * e.rates[k]).toFixed(0)}%${e.passed[k] ? " (passed)" : ""}`).join(" · "))));
+      `After attempt ${e.attempt + 1}, each lesson on its own held-out questions: ` + e.indices.map((ix, k) => `${lessonsList[ix]?.name ?? "lesson " + (ix + 1)} ${(100 * e.rates[k]).toFixed(0)}%${e.passed[k] ? " (passed)" : ""}`).join(" · ")
+      + (e.earlier_rates?.length ? ` · saved earlier lessons: ${e.earlier_rates.map(r => (100 * r).toFixed(0) + "%").join(", ")}` : ""))));
   } else if (e.type === "file_started") {
     progress.index = e.index;
     fileState[e.index] = el("span", { class: "tag" }, e.pass > 1 ? "trying again…" : "teaching…");

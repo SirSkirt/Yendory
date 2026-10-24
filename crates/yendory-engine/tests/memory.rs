@@ -100,6 +100,7 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         blend: 0.,
         recover_earlier: false,
         earlier_answers_net: false,
+        train_earlier: false,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);

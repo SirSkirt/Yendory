@@ -393,6 +393,8 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         reading_share: s.reading_share,
         reading: opts.reading.clone(),
         blend: s.blend,
+        train_earlier: s.train_earlier,
+        recover_earlier: s.recover_earlier,
         ..SessionConfig::default()
     }
 }
@@ -801,6 +803,12 @@ fn run_course_inner(
                     let names: Vec<&str> = group.iter().map(|&j| prep.lessons[j].name.as_str()).collect();
                     let others: Vec<Item> =
                         archive.iter().filter(|i| !names.contains(&i.source.as_str())).cloned().collect();
+                    // Together lessons also practise the saved earlier lessons in the same mix
+                    // (they stay guarded as earlier lessons).
+                    if lesson.together && cfg.train_earlier {
+                        items.extend(others.iter().cloned());
+                        practice.extend(others.iter().filter(|i| !i.held_out).cloned());
+                    }
                     let name = names.join(" + ");
                     let attempt = rec.attempt;
                     let r = super::session::teach_rewarded(

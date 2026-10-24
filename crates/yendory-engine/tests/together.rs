@@ -98,6 +98,93 @@ fn classroom_teaches_the_chosen_lessons_together_then_the_rest() {
     }
 }
 
+/// Saved earlier lessons (the archive) are trained in the group's mix and judged with it when
+/// `train_earlier` is on, and reported on their own; off, they are only guarded.
+#[test]
+fn saved_earlier_lessons_train_alongside_the_group() {
+    use yendory_engine::learn::lessons::parse_lesson;
+    use yendory_engine::learn::session::Event;
+    let files = english(3);
+    let saved = &files[2];
+    let archive = parse_lesson(&saved.text, &saved.name).unwrap();
+    let saved_held = archive
+        .iter()
+        .filter(|i| i.held_out && i.kind != yendory_engine::learn::lessons::Kind::Prose)
+        .count();
+    let model = Bicameral::with_config(Config::default(), 6);
+    for on in [true, false] {
+        let cfg = SessionConfig {
+            epochs: 1,
+            patience: 1,
+            foundation: false,
+            learning_rate: 2e-3,
+            train_earlier: on,
+            recover_earlier: on,
+            retry: yendory_engine::learn::session::RetryPolicy { retries: 0, ..Default::default() },
+            ..SessionConfig::default()
+        };
+        let mut events = Vec::new();
+        let r = teach_course_together(
+            &model,
+            &files[..2],
+            &[true, true],
+            &archive,
+            &cfg,
+            None,
+            None,
+            &mut |e| events.push(e.clone()),
+            &mut |_, _| Ok(()),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let earlier = events
+            .iter()
+            .find_map(|e| {
+                if let CourseEvent::GroupStarted { earlier, .. } = e {
+                    Some(earlier.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let rates = events
+            .iter()
+            .find_map(|e| {
+                if let CourseEvent::GroupScored { earlier_rates, .. } = e {
+                    Some(earlier_rates.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let baseline = events
+            .iter()
+            .find_map(|e| match e {
+                CourseEvent::Session { event: Event::Started { baseline, .. }, .. } => Some(baseline.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let group_held: usize = r.files.iter().map(|f| f.heldout_units).sum();
+        if on {
+            assert_eq!(earlier, std::slice::from_ref(&saved.name));
+            assert_eq!(rates.len(), 1);
+            assert_eq!(
+                baseline.exact_total,
+                group_held + saved_held,
+                "the saved lesson is judged with the group"
+            );
+            assert_eq!(baseline.by_lesson[&saved.name].1, saved_held);
+        } else {
+            assert!(earlier.is_empty() && rates.is_empty());
+            assert_eq!(baseline.exact_total, group_held, "only guarded, not judged with the group");
+        }
+        // Each lesson of the group is still graded on its own held-out questions only.
+        for f in &r.files {
+            assert_eq!(f.final_score.as_ref().unwrap().exact_total, f.heldout_units);
+        }
+    }
+}
+
 struct Host {
     groups: Vec<Vec<usize>>,
     taught: Vec<usize>,
