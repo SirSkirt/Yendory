@@ -710,7 +710,7 @@
     <div class="plate-wrap">
       <figure class="plate">
         <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
-        <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span></div>
+        <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-relational"></i> Relational network · slots read</span><span><i class="legend-dot n-experts"></i> Experts · router's choice</span><span><i class="legend-dot n-code"></i> Consolidation · code</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span></div>
         <div class="brain-stage">
           <svg id="hemisphereBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of two trainable neural pathways joined by a trainable bridge">
             <defs><clipPath id="clipLeft"><path d="M 385 74 C 320 25 250 55 211 90 C 125 74 88 138 116 189 C 62 251 116 337 202 341 C 255 395 328 352 385 337 Z"/></clipPath><clipPath id="clipRight"><path d="M 415 74 C 480 25 550 55 589 90 C 675 74 712 138 684 189 C 738 251 684 337 598 341 C 545 395 472 352 415 337 Z"/></clipPath></defs>
@@ -723,26 +723,38 @@
             <text class="label left" x="240" y="387" text-anchor="middle" font-size="15">Transformer</text>
             <text class="label right" x="560" y="387" text-anchor="middle" font-size="15">Dense pathway</text>
           </svg>
-          <svg id="neuroBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of Nova Neuro's networks: the language core, working memory, associative memory and the Executive Controller, joined by a communication bus" hidden>
+          <svg id="neuroBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of Nova Neuro's networks: the language core, working memory, associative memory, the relational network, experts, consolidation and the Executive Controller, joined by a communication bus" hidden>
             <path class="n-outline" d="M110 230 C90 140 160 62 290 48 C390 22 560 28 640 80 C730 132 735 240 690 292 C650 335 575 345 515 336 C480 380 400 390 360 362 C275 374 150 340 110 230 Z"/>
             <g id="nFibers" fill="none">
               <path data-fiber="gate-memory" class="n-fiber control" d="M200 240 Q215 305 268 322"/>
-              <path data-fiber="gate-associative" class="n-fiber control" d="M215 112 Q420 -50 630 112"/>
+              <path data-fiber="gate-associative" class="n-fiber control" d="M236 222 Q420 420 556 304"/>
+              <path data-fiber="gate-relational" class="n-fiber control" d="M215 112 Q380 0 534 92"/>
+              <path data-fiber="gate-experts" class="n-fiber control" d="M226 126 Q470 -60 640 146"/>
+              <path data-fiber="gate-consolidation" class="n-fiber control" d="M186 242 Q188 258 192 272"/>
               <path data-fiber="read" class="n-fiber bus" d="M256 176 Q270 160 290 170"/>
               <path data-fiber="out-memory" class="n-fiber memory" d="M350 288 Q362 272 382 262"/>
-              <path data-fiber="out-associative" class="n-fiber assoc" d="M578 192 Q552 172 523 182"/>
+              <path data-fiber="out-associative" class="n-fiber assoc" d="M566 282 Q548 266 520 252"/>
+              <path data-fiber="out-relational" class="n-fiber relational" d="M548 120 Q535 132 518 136"/>
+              <path data-fiber="out-experts" class="n-fiber experts" d="M622 184 Q575 178 539 182"/>
+              <path data-fiber="out-consolidation" class="n-fiber consolidation" d="M248 292 Q270 270 292 256"/>
             </g>
             <ellipse id="nBusRing" class="n-bus" cx="405" cy="180" rx="134" ry="104"/>
             <ellipse class="n-region control" data-region="controller" cx="190" cy="176" rx="66" ry="66"/>
             <ellipse class="n-region core" data-region="core" cx="405" cy="180" rx="116" ry="88"/>
-            <ellipse class="n-region assoc" data-region="associative" cx="640" cy="190" rx="62" ry="74"/>
+            <ellipse class="n-region assoc" data-region="associative" cx="612" cy="296" rx="58" ry="30"/>
             <ellipse class="n-region memory" data-region="memory" cx="380" cy="318" rx="118" ry="32"/>
-            <g id="nBusDots"></g><g id="nCoreDots"></g><g id="nControlDots"></g><g id="nAssocDots"></g><g id="nMemoryDots"></g>
-            <text class="n-label core" x="405" y="64" text-anchor="middle" font-size="14">Language core</text>
+            <ellipse class="n-region relational" data-region="relational" cx="590" cy="98" rx="52" ry="30"/>
+            <ellipse class="n-region experts" data-region="experts" cx="668" cy="186" rx="46" ry="50"/>
+            <ellipse class="n-region consolidation" data-region="consolidation" cx="196" cy="300" rx="56" ry="28"/>
+            <g id="nBusDots"></g><g id="nCoreDots"></g><g id="nControlDots"></g><g id="nAssocDots"></g><g id="nMemoryDots"></g><g id="nRelDots"></g><g id="nExpertDots"></g><g id="nCodeDots"></g>
+            <text class="n-label core" x="405" y="64" text-anchor="middle" font-size="14" data-label="core">Language core</text>
             <text class="n-label control" x="190" y="262" text-anchor="middle" font-size="14">Executive Controller</text>
-            <text class="n-label assoc" x="640" y="285" text-anchor="middle" font-size="14" data-label="associative">Associative memory</text>
+            <text class="n-label assoc" x="612" y="345" text-anchor="middle" font-size="14" data-label="associative">Associative memory</text>
+            <text class="n-label relational" x="590" y="58" text-anchor="middle" font-size="14" data-label="relational">Relational network</text>
+            <text class="n-label experts" x="668" y="252" text-anchor="middle" font-size="14" data-label="experts">Experts</text>
+            <text class="n-label consolidation" x="196" y="345" text-anchor="middle" font-size="14" data-label="consolidation">Consolidation</text>
             <text class="n-label memory" x="380" y="372" text-anchor="middle" font-size="14" data-label="memory">Working memory</text>
-            <text class="n-label bus" x="552" y="92" text-anchor="middle" font-size="12">bus</text>
+            <text class="n-label bus" x="276" y="100" text-anchor="middle" font-size="12">bus</text>
           </svg>
         </div>
         <figcaption id="brainDetail">Inspect a question to display measured activity. Brightness is the size of real attention weights and activations, not intelligence.</figcaption>
@@ -790,6 +802,7 @@
   <span id="statusLine">Ready.</span>
   <details id="diagnostics"><summary>Diagnostics <span id="diagCount">0</span></summary><pre id="diagLog">No messages.</pre></details>
 </footer>
+<script src="js/dropdown.js"></script>
 <script src="js/brain.js"></script>
 <script src="js/app.js"></script>
 <script src="js/ui.js"></script>

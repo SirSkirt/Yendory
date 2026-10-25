@@ -95,6 +95,9 @@ pub struct Meta {
     /// Nova Neuro: the modules and their sizes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     design: Option<yendory_engine::model::NeuroSpec>,
+    /// Transformer blocks (0: a Nova Neuro brain of other networks only; unknown in older files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocks: Option<usize>,
     /// Network growth: the setting, the original size and every growth (docs/GROWTH.md).
     #[serde(default)]
     growth: growth::GrowthInfo,
@@ -155,6 +158,7 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
     meta.context = model.config.max_tokens;
     meta.architecture = model.architecture().into();
     meta.design = model.neuro.clone();
+    meta.blocks = Some(model.config.blocks);
     meta.updated = now();
 }
 
@@ -212,6 +216,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         context: 0,
         architecture: bicameral(),
         design: None,
+        blocks: None,
         growth: Default::default(),
     };
     refresh_meta(&mut meta, &model);
@@ -885,6 +890,7 @@ fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
         model.group_parameters(Focus::Interconnect),
     ];
     meta.design = model.neuro.clone();
+    meta.blocks = Some(model.config.blocks);
     let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(_) => Vec::new(),

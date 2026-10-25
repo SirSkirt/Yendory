@@ -1,7 +1,8 @@
 # Nova Neuro: feasibility review and implementation plan
 
-Status: **Neuro-Core implemented (Stages 1-3, review point 1).** Nova Bicameral stays the default
-and is not changed by any of this. Nova Messaging integration is out of scope (handled elsewhere).
+Status: **Stage 4 implemented: every planned network, in any combination** (section 14).
+Neuro-Core (Stages 1-3, review point 1) is unchanged. Nova Bicameral stays the default and is not
+changed by any of this. Nova Messaging integration is out of scope (handled elsewhere).
 What exists now is listed in section 12; the rest of this document is the approved plan.
 
 ## 1. What the engine already gives us
@@ -260,9 +261,9 @@ Messaging integration (the proposal's Stage 8) is left out as requested.
   the CPU or both, like Bicameral. On a software GPU every ablation's loss and gradients match
   the CPU's to float rounding (largest gradient difference about 1e-7), AdamW steps match for
   every focus, and a reading run accepts the same checkpoints (`tests/gpu_neuro.rs`).
-- **Not yet**: the relational network, experts,
-  consolidation, auxiliary objectives (planned with the relational network, where story labels
-  feed entity tracking), adaptive rounds, the full Neuro visualizer.
+- **Not yet**: auxiliary objectives (entity labels from generated stories, consolidation's
+  reconstruction loss, a load-balance term for the experts), top-k expert routing, adaptive
+  rounds. The relational network, experts and consolidation are in section 14.
 
 ## 13. Review Point 1: Bicameral vs Neuro-Core (measured)
 
@@ -310,3 +311,56 @@ Findings:
   Neuro names the right place a little more often (24 vs 16 of 160). Following new entities
   through a story is the open problem, the one the relational network is meant to address.
 - Neuro costs about 21% more training memory per token; speed on the CPU was about equal.
+
+## 14. Stage 4: every network, in any combination (0.5.3)
+
+The three remaining networks, each optional, and a brain of any combination of them, from one
+network alone to all of them. Design format version 2 (version 1 designs load unchanged).
+
+- **Relational network (entity slots)** (`n.rel.*`). Each token writes itself into `slots`
+  vectors of `width`: a learned address (softmax over the slots) times a learned per-channel
+  write gate gives the update strength, and a gated scan over `slots x width` channels keeps the
+  slots (`M_t = (1 - z_t) M_(t-1) + z_t v_t`), so position `t` holds only tokens up to `t` (a
+  test changes a later token and checks no earlier output moves). The slots are written once,
+  from the lower blocks' output; every round the bus queries them by content (scaled dot product,
+  softmax over the slots) for `hops` steps, each hop's query made from what the earlier hops
+  read. This is the causal, chunk-free form of section 3's adjustment 2: tokens can only read
+  slots built from text already read, and the generation cache keeps the slots as state.
+  Three new operations, `slot_scores`, `slot_read` and `outer` (CPU and GPU), whose gradients
+  are each other's values.
+- **Experts** (`n.ex*`): `count` SwiGLU networks on the bus and a soft router (softmax per
+  token and round). Built from existing operations. Top-k routing and a load-balance term are
+  later options.
+- **Consolidation** (`n.co.*`): bus -> hidden -> code -> hidden -> bus. With associative memory
+  present, associative memory is queried with the code (its query reads the code instead of the
+  bus). Trained by the next-token objective only for now; the reconstruction loss is a later
+  option (it needs the loss mask inside the network so padded GPU rows match the CPU).
+- **Any combination.** Every network can be left out, including the transformer: with no
+  transformer blocks the networks read the word embeddings directly (`blocks = 0`); with no
+  networks there is no bus or controller (the transformer alone). A design must have at least
+  one. A version 1 design without networks keeps its unused bus parameters, as it was saved.
+- **Ablations**: `no_relational`, `no_experts`, `no_consolidation` (evaluation only), measured
+  on the Brain page with the others.
+- **Presets**: "Every network" at 1.2M, 4M, 8M and 15M, each within 0.3% of the Bicameral and
+  Neuro-Core presets of the same size (working memory's width takes up the difference).
+- **Growth**: experts' and consolidation's hidden widths grow without changing the output
+  (exact); the relational slots, the number of experts and the code width are listed as not
+  offered, with the reason. Growing the bus or the width carries the new networks along. The
+  "Balanced" step never adds a transformer block to a brain built without one.
+- **Tests**: finite-difference gradients through every new tensor, and through eight single- or
+  partial-network designs; cached generation equals the full pass under every ablation and past
+  the context window; nothing reads later tokens; every single-network design learns a sequence;
+  checkpoints round-trip; on a software GPU every ablation's loss and gradients, and AdamW steps
+  for every focus, match the CPU to about 1e-7 for Neuro-Core, every network, and every network
+  without a transformer (`tests/gpu_neuro.rs`); every offered growth keeps the outputs.
+- **Studio**: the brain builder is one dropdown section per network, each with a switch, a plain
+  explanation (what it does, what it is good for) and its settings as dropdowns whose choices
+  carry short notes; the Engine's exact plan updates as you choose. The Brain page draws the
+  new networks (slots read, the router's choice of experts, the code) from measured values, and
+  every dropdown in Studio is now drawn by Studio itself (`js/dropdown.js`), the same on Windows
+  and Android, instead of the system's.
+
+Not measured yet: whether these networks help. The open question from review point 1 is
+following new names through a story (`where` with unseen names: 0 of 320 exact for both
+architectures); the relational network is built for it. The comparison of section 10 is the next
+step.

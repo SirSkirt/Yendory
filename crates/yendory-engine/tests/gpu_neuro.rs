@@ -1,6 +1,8 @@
 //! Nova Neuro trains on the GPU with the values the CPU computes: the same loss, the same
 //! gradient of every parameter (working memory's scan, associative memory's softmax over
-//! patterns, the controller's gates, the bus and the write-back) under every ablation, the same
+//! patterns, the relational slots, the experts, consolidation, the controller's gates, the bus
+//! and the write-back) under every ablation, for Neuro-Core, every network, and every network
+//! without a transformer, the same
 //! AdamW steps for every focus, and the same reading run. Run with `--features gpu`; a software
 //! GPU (lavapipe) is enough.
 #![cfg(feature = "gpu")]
@@ -24,8 +26,18 @@ fn gpu() -> Option<Arc<Gpu>> {
 }
 
 fn neuro(seed: u64) -> Bicameral {
-    let p = presets().into_iter().next().unwrap();
-    Bicameral::with_design(p.config, Some(p.design), seed)
+    design("neuro-core-1m", seed)
+}
+/// A preset by id; "networks-only" is the every-network design without transformer blocks.
+fn design(id: &str, seed: u64) -> Bicameral {
+    let base = if id == "networks-only" { "neuro-full-1m" } else { id };
+    let p = presets().into_iter().find(|p| p.id == base).unwrap();
+    let mut config = p.config;
+    if id == "networks-only" {
+        config.blocks = 0;
+        config.split = 0;
+    }
+    Bicameral::with_design(config, Some(p.design), seed)
 }
 
 /// Rows of different lengths (padded on the GPU), so the scan restarts at every sequence and
@@ -62,8 +74,8 @@ fn close(name: &str, gpu: &[f32], cpu: &[f32]) {
 }
 
 /// A few CPU steps first, so no gradient is trivially zero (the write-back starts small).
-fn warmed(seed: u64) -> Bicameral {
-    let mut model = neuro(seed);
+fn warmed(id: &str, seed: u64) -> Bicameral {
+    let mut model = design(id, seed);
     let rows = rows(&model);
     for _ in 0..3 {
         let (_, g) = batch_loss_and_gradients(&model, &rows, Ablation::default()).unwrap();
@@ -75,10 +87,20 @@ fn warmed(seed: u64) -> Bicameral {
 #[test]
 fn neuro_gradients_and_steps_match_the_cpu() {
     let Some(gpu) = gpu() else { return };
-    let model = warmed(3);
+    for id in ["neuro-core-1m", "neuro-full-1m", "networks-only"] {
+        println!("== {id}");
+        gradients_and_steps_match(&gpu, &warmed(id, 3));
+    }
+}
+
+fn gradients_and_steps_match(gpu: &Arc<Gpu>, model: &Bicameral) {
+    let model = model.clone();
     let rows = rows(&model);
     let ablations = [
         ("full", Ablation::default()),
+        ("no relational network", Ablation { no_relational: true, ..Ablation::default() }),
+        ("no experts", Ablation { no_experts: true, ..Ablation::default() }),
+        ("no consolidation", Ablation { no_consolidation: true, ..Ablation::default() }),
         ("no working memory", Ablation { no_memory: true, ..Ablation::default() }),
         ("no associative memory", Ablation { no_associative: true, ..Ablation::default() }),
         ("no controller", Ablation { no_controller: true, ..Ablation::default() }),
@@ -86,7 +108,7 @@ fn neuro_gradients_and_steps_match_the_cpu() {
         ("no write-back", Ablation { no_afferent: true, ..Ablation::default() }),
         ("no bus read", Ablation { no_efferent: true, ..Ablation::default() }),
     ];
-    let g = GpuModel::upload(&gpu, &model).unwrap();
+    let g = GpuModel::upload(gpu, &model).unwrap();
     for (name, abl) in ablations {
         let (cpu_loss, cpu_grads) = batch_loss_and_gradients(&model, &rows, abl).unwrap();
         let (gpu_loss, gpu_grads) = g.loss_and_gradients(&model, &rows, abl).unwrap();
@@ -102,7 +124,7 @@ fn neuro_gradients_and_steps_match_the_cpu() {
     // Every Foundation focus (language core, modules, communication, all): the same AdamW steps.
     for focus in [Focus::Joint, Focus::Left, Focus::Right, Focus::Interconnect] {
         let mut cpu = model.clone();
-        let mut on_gpu = GpuModel::upload(&gpu, &model).unwrap();
+        let mut on_gpu = GpuModel::upload(gpu, &model).unwrap();
         for _ in 0..2 {
             let (l, grads) = batch_loss_and_gradients(&cpu, &rows, Ablation::default()).unwrap();
             cpu.adam_step(&grads, 2e-3, focus).unwrap();

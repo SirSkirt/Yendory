@@ -77,6 +77,29 @@ enum Op {
         seq: usize,
         cols: usize,
     },
+    /// Per row: `out[s] = scale * dot(q, m[s])`, with `m` holding `slots` vectors of `width`
+    /// (Nova Neuro relational slots).
+    SlotScores {
+        q: usize,
+        m: usize,
+        slots: usize,
+        width: usize,
+        scale: f32,
+    },
+    /// Per row: `out = sum_s p[s] * m[s]`.
+    SlotRead {
+        p: usize,
+        m: usize,
+        slots: usize,
+        width: usize,
+    },
+    /// Per row: `out[s * width + j] = a[s] * b[j]`.
+    Outer {
+        a: usize,
+        b: usize,
+        slots: usize,
+        width: usize,
+    },
     /// Unfused cross-entropy, kept to test [`Op::HeadXent`] against.
     #[cfg(test)]
     Xent {
@@ -132,6 +155,64 @@ pub(crate) trait Graph {
     fn gate_col(&mut self, x: usize, g: usize, k: usize, gcols: usize, cols: usize) -> usize;
     /// minGRU scan over sequences of `seq` rows (Nova Neuro working memory).
     fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize;
+    /// Per row, `scale` times the dot product of `q` (`width`) with each of the row's `slots`
+    /// vectors in `m` (`slots * width`): `rows x slots` (Nova Neuro relational network).
+    fn slot_scores(&mut self, q: usize, m: usize, slots: usize, width: usize, scale: f32) -> usize;
+    /// Per row, the sum of the row's `slots` vectors in `m` weighted by `p` (`slots`): `rows x width`.
+    fn slot_read(&mut self, p: usize, m: usize, slots: usize, width: usize) -> usize;
+    /// Per row, the outer product of `a` (`slots`) and `b` (`width`): `rows x (slots * width)`.
+    fn outer(&mut self, a: usize, b: usize, slots: usize, width: usize) -> usize;
+}
+
+/// The values of [`Graph::slot_scores`] (also used by the generation cache).
+pub(crate) fn slot_scores_values(q: &[f32], m: &[f32], slots: usize, width: usize, scale: f32) -> Vec<f32> {
+    let rows = q.len() / width;
+    assert_eq!(q.len(), rows * width);
+    assert_eq!(m.len(), rows * slots * width);
+    let mut out = vec![0f32; rows * slots];
+    for r in 0..rows {
+        let qr = &q[r * width..(r + 1) * width];
+        for s in 0..slots {
+            let ms = &m[(r * slots + s) * width..(r * slots + s + 1) * width];
+            out[r * slots + s] = scale * qr.iter().zip(ms).map(|(a, b)| a * b).sum::<f32>();
+        }
+    }
+    out
+}
+/// The values of [`Graph::slot_read`].
+pub(crate) fn slot_read_values(p: &[f32], m: &[f32], slots: usize, width: usize) -> Vec<f32> {
+    let rows = p.len() / slots;
+    assert_eq!(p.len(), rows * slots);
+    assert_eq!(m.len(), rows * slots * width);
+    let mut out = vec![0f32; rows * width];
+    for r in 0..rows {
+        let o = &mut out[r * width..(r + 1) * width];
+        for s in 0..slots {
+            let w = p[r * slots + s];
+            let ms = &m[(r * slots + s) * width..(r * slots + s + 1) * width];
+            for (x, y) in o.iter_mut().zip(ms) {
+                *x += w * y;
+            }
+        }
+    }
+    out
+}
+/// The values of [`Graph::outer`] (times `scale`).
+pub(crate) fn outer_values(a: &[f32], b: &[f32], slots: usize, width: usize, scale: f32) -> Vec<f32> {
+    let rows = a.len() / slots;
+    assert_eq!(a.len(), rows * slots);
+    assert_eq!(b.len(), rows * width);
+    let mut out = vec![0f32; rows * slots * width];
+    for r in 0..rows {
+        for s in 0..slots {
+            let x = scale * a[r * slots + s];
+            let o = &mut out[(r * slots + s) * width..(r * slots + s + 1) * width];
+            for (y, bj) in o.iter_mut().zip(&b[r * width..(r + 1) * width]) {
+                *y = x * bj;
+            }
+        }
+    }
+    out
 }
 
 impl Graph for Tape<'_> {
@@ -180,6 +261,18 @@ impl Graph for Tape<'_> {
     }
     fn scan(&mut self, z: usize, c: usize, seq: usize, cols: usize) -> usize {
         Tape::scan(self, z, c, seq, cols)
+    }
+    fn slot_scores(&mut self, q: usize, m: usize, slots: usize, width: usize, scale: f32) -> usize {
+        let v = slot_scores_values(self.v(q), self.v(m), slots, width, scale);
+        self.node(v, Op::SlotScores { q, m, slots, width, scale })
+    }
+    fn slot_read(&mut self, p: usize, m: usize, slots: usize, width: usize) -> usize {
+        let v = slot_read_values(self.v(p), self.v(m), slots, width);
+        self.node(v, Op::SlotRead { p, m, slots, width })
+    }
+    fn outer(&mut self, a: usize, b: usize, slots: usize, width: usize) -> usize {
+        let v = outer_values(self.v(a), self.v(b), slots, width, 1.);
+        self.node(v, Op::Outer { a, b, slots, width })
     }
 }
 
@@ -695,6 +788,31 @@ impl<'a> Tape<'a> {
                     }
                     self.accum(x, &dx);
                     self.accum(g, &dg);
+                }
+                // The three slot operations' gradients are each other's values.
+                Op::SlotScores { q, m, slots, width, scale } => {
+                    let (qv, mv) = (self.v(q), self.v(m));
+                    let mut dq = slot_read_values(&upstream, mv, slots, width);
+                    for x in dq.iter_mut() {
+                        *x *= scale;
+                    }
+                    let dm = outer_values(&upstream, qv, slots, width, scale);
+                    self.accum(q, &dq);
+                    self.accum(m, &dm);
+                }
+                Op::SlotRead { p, m, slots, width } => {
+                    let (pv, mv) = (self.v(p), self.v(m));
+                    let dp = slot_scores_values(&upstream, mv, slots, width, 1.);
+                    let dm = outer_values(pv, &upstream, slots, width, 1.);
+                    self.accum(p, &dp);
+                    self.accum(m, &dm);
+                }
+                Op::Outer { a, b, slots, width } => {
+                    let (av, bv) = (self.v(a), self.v(b));
+                    let da = slot_scores_values(bv, &upstream, slots, width, 1.);
+                    let db = slot_read_values(av, &upstream, slots, width);
+                    self.accum(a, &da);
+                    self.accum(b, &db);
                 }
                 Op::Scan { z, c, seq, cols } => {
                     let m = &self.nodes[id].values;

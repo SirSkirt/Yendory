@@ -29,9 +29,13 @@ fn trained(mut m: Bicameral) -> Bicameral {
 
 fn models() -> Vec<(&'static str, Bicameral)> {
     let p = presets().into_iter().next().unwrap();
+    let full = presets().into_iter().find(|p| p.id == "neuro-full-1m").unwrap();
+    let no_blocks = yendory_engine::Config { blocks: 0, split: 0, ..full.config.clone() };
     vec![
         ("bicameral", trained(Bicameral::with_config(Config::default(), 3))),
         ("neuro", trained(Bicameral::with_design(p.config, Some(p.design), 3))),
+        ("neuro every network", trained(Bicameral::with_design(full.config, Some(full.design.clone()), 3))),
+        ("neuro networks only", trained(Bicameral::with_design(no_blocks, Some(full.design), 3))),
     ]
 }
 
@@ -72,16 +76,21 @@ fn every_offered_growth_preserves_the_network() {
         let c = compare_outputs(&m, &g2, &PROBES).unwrap();
         println!("{arch} twice: {} -> {} parameters, {c:?}", m.parameter_count(), g2.parameter_count());
         assert!(c.preserved(), "{arch}: {c:?}");
-        if arch == "neuro" {
+        if arch.starts_with("neuro") {
             assert!(not.iter().any(|n| n.part.contains("patterns")));
             assert!(not.iter().any(|n| n.part.contains("layers")));
+        }
+        if arch == "neuro networks only" {
+            let balanced = &options.iter().find(|o| o.id == "balanced").unwrap().growth;
+            assert_eq!(balanced.upper_blocks + balanced.lower_blocks, 0, "no transformer is added");
         }
     }
 }
 
 #[test]
 fn optimizer_state_kept_new_units_learn_and_checkpoints_round_trip() {
-    for (arch, m) in models() {
+    // Models with transformer blocks (the check reads block 0's weights).
+    for (arch, m) in models().into_iter().filter(|(_, m)| m.config.blocks > 0) {
         let g = m.grow(&Growth { ff: 32, heads: 1, upper_blocks: 1, ..Growth::default() }, 9).unwrap();
         // Existing weights and moments kept in place (block 0's first query row).
         let n0 = m.config.d;

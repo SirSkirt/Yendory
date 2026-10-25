@@ -20,8 +20,11 @@ const MAX_CONFIG_JSON: usize = 8192;
 
 /// Rejects configurations that would panic or allocate absurdly before any weights are read.
 pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
-    let dims = [c.d, c.heads, c.ff, c.blocks, c.window_chars, c.r1, c.r2, c.max_tokens];
+    // Zero transformer blocks is a valid Nova Neuro shape (its networks alone); Nova Bicameral
+    // needs at least one upper block (checked where the architecture is known).
+    let dims = [c.d, c.heads, c.ff, c.window_chars, c.r1, c.r2, c.max_tokens];
     if dims.iter().any(|&x| x == 0 || x > 1 << 16)
+        || c.blocks > 1 << 16
         || c.vocab == 0
         || c.vocab > super::MAX_VOCAB
         || c.loops == 0
@@ -29,7 +32,11 @@ pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
     {
         return Err("Invalid Nova-2 configuration dimensions".into());
     }
-    if c.d % c.heads != 0 || (c.d / c.heads) % 2 != 0 || c.split >= c.blocks {
+    if c.d % c.heads != 0
+        || (c.d / c.heads) % 2 != 0
+        || (c.blocks > 0 && c.split >= c.blocks)
+        || c.split > c.blocks
+    {
         return Err("Invalid Nova-2 configuration shape".into());
     }
     if !c.rope_base.is_finite() || c.rope_base <= 0. || !c.gate_bias.is_finite() {
@@ -160,7 +167,11 @@ impl Bicameral {
             h.design.validate(&h.config)?;
             (h.config, Some(h.design))
         } else {
-            (serde_json::from_slice::<Config>(json).map_err(|e| e.to_string())?, None)
+            let c = serde_json::from_slice::<Config>(json).map_err(|e| e.to_string())?;
+            if c.split >= c.blocks {
+                return Err("Invalid Nova-2 configuration shape".into());
+            }
+            (c, None)
         };
         validate_config(&config)?;
         let n = spec(&config, design.as_ref()).last().map(|s| s.range.end).unwrap_or(0);

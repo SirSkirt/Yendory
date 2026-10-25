@@ -49,8 +49,11 @@ enum K {
     GateColBack,
     Scan,
     ScanBack,
+    SlotScores,
+    SlotRead,
+    Outer,
 }
-const KERNELS: [(K, &str); 31] = [
+const KERNELS: [(K, &str); 34] = [
     (K::Fill, "fill"),
     (K::AddInto, "add_into"),
     (K::Binary, "binary"),
@@ -82,6 +85,9 @@ const KERNELS: [(K, &str); 31] = [
     (K::GateColBack, "gate_col_back"),
     (K::Scan, "scan"),
     (K::ScanBack, "scan_back"),
+    (K::SlotScores, "slot_scores"),
+    (K::SlotRead, "slot_read"),
+    (K::Outer, "outer"),
 ];
 fn kernel_name(k: K) -> &'static str {
     KERNELS.iter().find(|e| e.0 == k).map_or("?", |e| e.1)
@@ -675,6 +681,25 @@ enum Op {
         seq: usize,
         cols: usize,
     },
+    SlotScores {
+        q: usize,
+        m: usize,
+        slots: usize,
+        width: usize,
+        scale: f32,
+    },
+    SlotRead {
+        p: usize,
+        m: usize,
+        slots: usize,
+        width: usize,
+    },
+    Outer {
+        a: usize,
+        b: usize,
+        slots: usize,
+        width: usize,
+    },
 }
 
 /// Threads of the scan kernels: one per (sequence, column).
@@ -807,6 +832,15 @@ impl<'a> GpuGraph<'a> {
         let mut pp = [0u32; 16];
         pp[..params.len()].copy_from_slice(params);
         self.ops.push(Dispatch { k, f: ff, u, params: pp, groups });
+    }
+
+    /// One of the slot kernels into a new buffer of `n` values (f0, f1 -> f2).
+    #[allow(clippy::too_many_arguments)]
+    fn slot_kernel(&mut self, k: K, x: B, y: B, n: usize, slots: usize, width: usize, scale: f32) -> B {
+        let out = self.alloc(n);
+        let p = [n as u32, slots as u32, width as u32, bits(scale)];
+        self.dispatch(k, &[Some(x), Some(y), Some(out)], None, &p, groups(n));
+        out
     }
 
     fn fill(&mut self, b: B, offset: usize, n: usize, value: f32) {
@@ -1158,6 +1192,31 @@ impl<'a> GpuGraph<'a> {
                     self.accum(z, dz, true);
                     self.accum(c, dc, true);
                 }
+                // The three slot kernels are each other's gradients.
+                Op::SlotScores { q, m, slots, width, scale } => {
+                    let (qv, mv) = (self.at(q).0, self.at(m).0);
+                    let rows = n / slots;
+                    let dq = self.slot_kernel(K::SlotRead, up, mv, rows * width, slots, width, scale);
+                    let dm = self.slot_kernel(K::Outer, up, qv, rows * slots * width, slots, width, scale);
+                    self.accum(q, dq, true);
+                    self.accum(m, dm, true);
+                }
+                Op::SlotRead { p, m, slots, width } => {
+                    let (pv, mv) = (self.at(p).0, self.at(m).0);
+                    let rows = n / width;
+                    let dp = self.slot_kernel(K::SlotScores, up, mv, rows * slots, slots, width, 1.);
+                    let dm = self.slot_kernel(K::Outer, pv, up, rows * slots * width, slots, width, 1.);
+                    self.accum(p, dp, true);
+                    self.accum(m, dm, true);
+                }
+                Op::Outer { a, b, slots, width } => {
+                    let (av, bv) = (self.at(a).0, self.at(b).0);
+                    let rows = n / (slots * width);
+                    let da = self.slot_kernel(K::SlotScores, bv, up, rows * slots, slots, width, 1.);
+                    let db = self.slot_kernel(K::SlotRead, av, up, rows * width, slots, width, 1.);
+                    self.accum(a, da, true);
+                    self.accum(b, db, true);
+                }
             }
             self.release(up);
             if let Some(b) = self.nodes[id].buf.take() {
@@ -1370,6 +1429,27 @@ impl Graph for GpuGraph<'_> {
             groups(threads),
         );
         self.node(out, n, Op::Scan { z, c, seq, cols })
+    }
+    fn slot_scores(&mut self, q: usize, m: usize, slots: usize, width: usize, scale: f32) -> usize {
+        let rows = self.nodes[q].len / width;
+        assert_eq!(self.nodes[m].len, rows * slots * width);
+        let (qv, mv) = (self.at(q).0, self.at(m).0);
+        let out = self.slot_kernel(K::SlotScores, qv, mv, rows * slots, slots, width, scale);
+        self.node(out, rows * slots, Op::SlotScores { q, m, slots, width, scale })
+    }
+    fn slot_read(&mut self, p: usize, m: usize, slots: usize, width: usize) -> usize {
+        let rows = self.nodes[p].len / slots;
+        assert_eq!(self.nodes[m].len, rows * slots * width);
+        let (pv, mv) = (self.at(p).0, self.at(m).0);
+        let out = self.slot_kernel(K::SlotRead, pv, mv, rows * width, slots, width, 1.);
+        self.node(out, rows * width, Op::SlotRead { p, m, slots, width })
+    }
+    fn outer(&mut self, a: usize, b: usize, slots: usize, width: usize) -> usize {
+        let rows = self.nodes[a].len / slots;
+        assert_eq!(self.nodes[b].len, rows * width);
+        let (av, bv) = (self.at(a).0, self.at(b).0);
+        let out = self.slot_kernel(K::Outer, av, bv, rows * slots * width, slots, width, 1.);
+        self.node(out, rows * slots * width, Op::Outer { a, b, slots, width })
     }
 }
 

@@ -130,6 +130,12 @@ pub struct Ablation {
     pub no_controller: bool,
     /// Nova Neuro: one computation round instead of the model's rounds.
     pub one_round: bool,
+    /// Nova Neuro: the relational network's output is cut.
+    pub no_relational: bool,
+    /// Nova Neuro: the experts' output is cut.
+    pub no_experts: bool,
+    /// Nova Neuro: consolidation's output is cut (the associative memory still reads its code).
+    pub no_consolidation: bool,
     /// Training only: dropout on the transformer blocks' attention and feed-forward outputs.
     /// Never set when evaluating, measuring or generating.
     pub dropout: Option<Dropout>,
@@ -312,7 +318,11 @@ impl Bicameral {
     /// A new model: Nova Bicameral (`neuro` None) or Nova Neuro with the given design.
     pub fn with_design(config: Config, neuro: Option<NeuroSpec>, seed: u64) -> Self {
         assert!(config.d % config.heads == 0 && config.d / config.heads % 2 == 0);
-        assert!(config.split < config.blocks && config.loops > 0 && config.window_chars > 0);
+        assert!(config.loops > 0 && config.window_chars > 0);
+        match &neuro {
+            Some(n) => n.validate(&config).expect("a valid Nova Neuro design"),
+            None => assert!(config.split < config.blocks),
+        }
         let slots = spec(&config, neuro.as_ref());
         let n = slots.last().map(|x| x.range.end).unwrap_or(0);
         let mut weights = vec![0.; n];

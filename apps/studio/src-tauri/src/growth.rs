@@ -460,6 +460,7 @@ mod tests {
             read: Vec::new(),
             architecture: bicameral(),
             design: None,
+            blocks: None,
             growth: GrowthInfo { mode: GrowthMode::Manual, ..GrowthInfo::default() },
         };
         refresh_meta(&mut meta, &model);

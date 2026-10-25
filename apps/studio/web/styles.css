@@ -142,6 +142,46 @@ input:focus { border-bottom-color: var(--accent); outline: none; }
 .ledger tr.epoch-summary td { background: color-mix(in srgb, var(--accent) 7%, transparent); font-size: 13px; }
 .check-inline { display: inline-flex; gap: 6px; align-items: baseline; font-size: 14px; }
 
+/* Yendory dropdowns (js/dropdown.js): drawn by Studio, the same on every system */
+select.ydd-native { display: none !important; }
+.ydd { display: inline-flex; min-width: 0; max-width: 100%; position: relative; vertical-align: baseline; }
+.ydd[hidden] { display: none; }
+.ydd-button {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-width: 7em; max-width: 100%;
+  border: 0; border-bottom: 1.5px solid var(--rule-strong); border-radius: 0; background: transparent;
+  padding: 6px 2px; text-align: left; color: var(--ink); cursor: pointer;
+}
+.ydd-button:hover:not(:disabled), .ydd.open .ydd-button { border-bottom-color: var(--accent); }
+.ydd-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ydd-chevron {
+  flex: none; width: 7px; height: 7px; margin: 0 3px 3px 0;
+  border-right: 1.5px solid var(--ink-soft); border-bottom: 1.5px solid var(--ink-soft);
+  transform: rotate(45deg); transition: transform .12s ease;
+}
+.ydd.open .ydd-chevron { transform: translateY(3px) rotate(225deg); }
+.ydd-list {
+  position: fixed; z-index: 1000; overflow-y: auto; padding: 4px 0;
+  background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: 4px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent);
+  font: 14px/1.4 var(--sans); color: var(--ink);
+}
+.ydd-option { display: flex; flex-direction: column; gap: 1px; padding: 7px 14px 7px 26px; cursor: pointer; position: relative; }
+.ydd-option[aria-selected="true"]::before {
+  content: ""; position: absolute; left: 10px; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+}
+.ydd-option.active { background: var(--accent-soft); }
+.ydd-option[aria-disabled="true"] { opacity: .45; cursor: default; }
+.ydd-note { font-size: 12.5px; color: var(--ink-soft); }
+.ydd-group { padding: 8px 14px 3px; font: 600 11.5px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+.settings .ydd, .readings .ydd, .line-form .ydd { width: auto; }
+.settings label > .ydd, .readings .ydd { width: 100%; }
+.ydd-stage { max-width: 15em; font-size: 13.5px; }
+.ledger .ydd-button { padding: 3px 2px; }
+@media (pointer: coarse) { .ydd-option { padding-top: 11px; padding-bottom: 11px; } }
+.readings .ydd { margin-bottom: 8px; }
+.db-head .ydd-button { font-weight: 600; }
+.design-items .ydd { max-width: 9.5em; font-size: 13px; }
+
 /* Thinking tree: a trunk of decisions with the paths not taken branching off it */
 .think-tree { margin: 10px 0 24px; }
 .tt-root, .tt-leaf { display: inline-block; background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--accent); padding: 6px 12px; font-family: var(--mono); font-size: 13.5px; max-width: 100%; overflow-wrap: anywhere; }
@@ -211,6 +251,9 @@ table { border-collapse: collapse; width: 100%; }
   --brain-bridge: #8a8f5a; --brain-bridge-live: #3f7a3a;
   --neuro-memory: #2c6e5c; --neuro-memory-fill: #dfeee8;
   --neuro-control: #6a4a8c; --neuro-control-fill: #ebe3f2;
+  --neuro-relational: #a0522d; --neuro-relational-fill: #f4e4d8;
+  --neuro-experts: #3b6e8f; --neuro-experts-fill: #dde9f1;
+  --neuro-code: #7a6a1a; --neuro-code-fill: #efe9cc;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -220,6 +263,9 @@ table { border-collapse: collapse; width: 100%; }
     --brain-bridge: #b8bb86; --brain-bridge-live: #8fd18a;
     --neuro-memory: #82cdb6; --neuro-memory-fill: #162a24;
     --neuro-control: #c3a6e6; --neuro-control-fill: #261d30;
+    --neuro-relational: #e3a07a; --neuro-relational-fill: #2f2017;
+    --neuro-experts: #8fbfe0; --neuro-experts-fill: #172531;
+    --neuro-code: #d6c46e; --neuro-code-fill: #29250f;
   }
 }
 .plate-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
@@ -242,6 +288,7 @@ table { border-collapse: collapse; width: 100%; }
 .legend-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
 .legend-dot.language { background: var(--brain-left); } .legend-dot.association { background: var(--brain-right); } .legend-dot.bridge { background: var(--brain-bridge); }
 .legend-dot.n-memory { background: var(--neuro-memory); } .legend-dot.n-control { background: var(--neuro-control); }
+.legend-dot.n-relational { background: var(--neuro-relational); } .legend-dot.n-experts { background: var(--neuro-experts); } .legend-dot.n-code { background: var(--neuro-code); }
 /* Nova Neuro plate: one brain, its networks as regions; only the model's networks are drawn solid. */
 #hemisphereBrain[hidden], #neuroBrain[hidden], .brain-legend[hidden] { display: none; }
 #neuroBrain { width: 100%; height: auto; max-height: 470px; display: block; }
@@ -251,6 +298,13 @@ table { border-collapse: collapse; width: 100%; }
 #neuroBrain .n-region.assoc { fill: var(--brain-right-fill); stroke: var(--brain-right); }
 #neuroBrain .n-region.memory { fill: var(--neuro-memory-fill); stroke: var(--neuro-memory); }
 #neuroBrain .n-region.control { fill: var(--neuro-control-fill); stroke: var(--neuro-control); }
+#neuroBrain .n-region.relational { fill: var(--neuro-relational-fill); stroke: var(--neuro-relational); }
+#neuroBrain .n-region.experts { fill: var(--neuro-experts-fill); stroke: var(--neuro-experts); }
+#neuroBrain .n-region.consolidation { fill: var(--neuro-code-fill); stroke: var(--neuro-code); }
+#neuroBrain .n-label.relational { fill: var(--neuro-relational); } #neuroBrain .n-label.experts { fill: var(--neuro-experts); }
+#neuroBrain .n-label.consolidation { fill: var(--neuro-code); }
+#neuroBrain .n-fiber.relational { stroke: var(--neuro-relational); } #neuroBrain .n-fiber.experts { stroke: var(--neuro-experts); }
+#neuroBrain .n-fiber.consolidation { stroke: var(--neuro-code); }
 #neuroBrain .n-region.absent { fill: none; stroke: var(--ink-soft); stroke-dasharray: 5 5; opacity: .45; }
 #neuroBrain .n-label { font-family: var(--serif); font-style: italic; }
 #neuroBrain .n-label.core { fill: var(--brain-left); } #neuroBrain .n-label.assoc { fill: var(--brain-right); }
@@ -424,3 +478,43 @@ table { border-collapse: collapse; width: 100%; }
 .nb-bar { display: inline-block; width: 120px; height: 8px; background: color-mix(in srgb, var(--ink-soft) 15%, transparent); border-radius: 4px; overflow: hidden; vertical-align: middle; }
 .nb-bar i { display: block; height: 100%; background: var(--accent); }
 tr.nb-later td { color: var(--ink-soft); }
+/* Brain builder: one dropdown section per network */
+.nb-summary { font: 16px/1.5 var(--serif); margin: 6px 0 10px; }
+.nb-sections { display: flex; flex-direction: column; border-top: 1px solid var(--rule-strong); margin: 8px 0 14px; }
+.nb-section { border-bottom: 1px solid var(--rule); }
+.nb-row { display: flex; align-items: center; gap: 10px; }
+.nb-head {
+  flex: 1 1 auto; display: flex; align-items: center; gap: 12px; min-width: 0;
+  border: 0; border-radius: 0; background: none; padding: 10px 2px; text-align: left; color: var(--ink);
+}
+.nb-head:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.nb-chevron {
+  flex: none; width: 8px; height: 8px; margin: 0 2px;
+  border-right: 1.5px solid var(--ink-soft); border-bottom: 1.5px solid var(--ink-soft);
+  transform: rotate(-45deg); transition: transform .12s ease;
+}
+.nb-section.open .nb-chevron { transform: rotate(45deg); }
+.nb-title { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; min-width: 0; }
+.nb-title b { font: 600 16px var(--serif); }
+.nb-short { color: var(--ink-soft); font-size: 13.5px; }
+.nb-count { flex: none; color: var(--ink-soft); font-size: 13px; }
+.nb-section.off .nb-title b { color: var(--ink-soft); }
+.nb-body { padding: 0 4px 14px 50px; max-width: 80ch; }
+.nb-body p { margin: 4px 0 8px; }
+.nb-body .nb-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px 22px; margin-top: 10px; }
+.nb-field { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink-soft); }
+.nb-field > .ydd { width: 100%; }
+.nb-field .ydd-button { font-family: var(--mono); color: var(--ink); }
+.nb-hint { font-size: 12px; line-height: 1.35; }
+.nb-switch {
+  flex: none; width: 38px; height: 22px; padding: 0; border-radius: 11px; position: relative;
+  border: 1.5px solid var(--rule-strong); background: color-mix(in srgb, var(--ink-soft) 14%, transparent);
+}
+.nb-switch i {
+  position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--sheet); border: 1px solid var(--rule-strong); transition: left .12s ease;
+}
+.nb-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.nb-switch[aria-checked="true"] i { left: 18px; border-color: var(--accent); }
+.nb-switch-space { flex: none; width: 38px; }
+@media (max-width: 640px) { .nb-body { padding-left: 8px; } .nb-short { display: none; } }

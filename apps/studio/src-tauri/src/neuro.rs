@@ -2,7 +2,9 @@
 //! The Engine computes every number (`Bicameral::tensors_for`, `activation_floats_for`);
 //! nothing here is estimated by hand.
 use super::*;
-use yendory_engine::model::neuro::{self as engine_neuro, Associative, NeuroSpec, WorkingMemory};
+use yendory_engine::model::neuro::{
+    self as engine_neuro, Associative, Consolidation, Experts, NeuroSpec, Relational, WorkingMemory,
+};
 
 /// What the builder sends: the language core and every module's settings.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -21,6 +23,16 @@ pub struct NeuroInput {
     pub memory: Option<WorkingMemory>,
     #[serde(default)]
     pub associative: Option<Associative>,
+    #[serde(default)]
+    pub relational: Option<Relational>,
+    #[serde(default)]
+    pub experts: Option<Experts>,
+    #[serde(default)]
+    pub consolidation: Option<Consolidation>,
+    /// The language core's transformer blocks are used (off: the networks alone read the word
+    /// embeddings, and `blocks`, `heads`, `ff` and `lower` are ignored).
+    #[serde(default = "yes")]
+    pub transformer: bool,
 }
 
 impl NeuroInput {
@@ -36,17 +48,32 @@ impl NeuroInput {
             controller: p.design.controller,
             memory: p.design.memory.clone(),
             associative: p.design.associative.clone(),
+            relational: p.design.relational.clone(),
+            experts: p.design.experts.clone(),
+            consolidation: p.design.consolidation.clone(),
+            transformer: p.config.blocks > 0,
         }
     }
     /// The Engine configuration and design (vocabulary and context as chosen elsewhere).
     pub(crate) fn build(&self, vocab: usize, context: usize) -> Res<(Config, NeuroSpec)> {
+        // Without transformer blocks the head count only has to keep the configuration valid:
+        // heads of 32 values where the width allows (what growing by one head would add).
+        let heads = if self.transformer {
+            self.heads
+        } else if self.width.is_multiple_of(64) {
+            self.width / 32
+        } else if self.width.is_multiple_of(4) {
+            2
+        } else {
+            1
+        };
         let config = Config {
             vocab,
             d: self.width,
-            heads: self.heads,
+            heads,
             ff: self.ff,
-            blocks: self.blocks,
-            split: self.lower,
+            blocks: if self.transformer { self.blocks } else { 0 },
+            split: if self.transformer { self.lower } else { 0 },
             loops: self.rounds,
             max_tokens: context,
             window_chars: 1,
@@ -56,15 +83,20 @@ impl NeuroInput {
         };
         let per_head = config.d.checked_div(config.heads).unwrap_or(0);
         if per_head == 0 || per_head * config.heads != config.d || per_head & 1 == 1 {
-            return Err(
+            return Err(if self.transformer {
                 "The language core's width must divide into the heads, with an even width per head".into()
-            );
+            } else {
+                "Choose an even main width".into()
+            });
         }
         if !(1..=4).contains(&config.loops) {
             return Err("Choose 1 to 4 computation rounds".into());
         }
-        if config.split == 0 || config.split >= config.blocks {
-            return Err("Keep at least one lower and one upper transformer block".into());
+        if self.transformer && (config.blocks == 0 || config.split >= config.blocks) {
+            return Err(
+                "Keep at least one upper transformer block (lower blocks run once, upper blocks every round)"
+                    .into(),
+            );
         }
         Bicameral::check_config(&config)?;
         let design = NeuroSpec {
@@ -73,7 +105,13 @@ impl NeuroInput {
             memory: self.memory.clone(),
             associative: self.associative.clone(),
             controller: self.controller,
+            relational: self.relational.clone(),
+            experts: self.experts.clone(),
+            consolidation: self.consolidation.clone(),
         };
+        if !self.transformer && design.modules().is_empty() {
+            return Err("Choose at least one network: the language core or one of the others".into());
+        }
         design.validate(&config)?;
         Ok((config, design))
     }
@@ -155,24 +193,24 @@ fn offers() -> Vec<Offer> {
         ),
         o(
             "relational",
-            "Relational network (GNN, entity slots)",
+            "Relational network (entity slots)",
             "entities and how their relations change, from text already read",
-            "next stage",
-            false,
+            "available",
+            true,
         ),
         o(
             "experts",
             "Mixture of Experts",
             "specialised transformations chosen by a learned router",
-            "next stage",
-            false,
+            "available",
+            true,
         ),
         o(
             "consolidation",
             "Consolidation (autoencoder)",
-            "compressed codes for associative memory; consolidation measured without Study Mode",
-            "next stage",
-            false,
+            "compresses what is on the bus into a short code; associative memory is queried with it",
+            "available",
+            true,
         ),
         o(
             "gru",
@@ -293,5 +331,54 @@ pub fn create_neuro_model(
     match word_limit {
         Some(_) => set_limit(&app, &studio, &meta.id, word_limit),
         None => Ok(meta),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(id: &str) -> NeuroInput {
+        let p = engine_neuro::presets().into_iter().find(|p| p.id == id).unwrap();
+        NeuroInput::from_preset(&p)
+    }
+
+    #[test]
+    fn the_builder_makes_any_combination_of_networks() {
+        // Every preset, as the builder shows it, builds the preset's own design.
+        for p in engine_neuro::presets() {
+            let (config, design) =
+                NeuroInput::from_preset(&p).build(p.config.vocab, p.config.max_tokens).unwrap();
+            assert_eq!(design, p.design, "{}", p.id);
+            assert_eq!(config.blocks, p.config.blocks);
+        }
+        // One network alone, without the transformer.
+        let mut one = input("neuro-full-1m");
+        one.transformer = false;
+        one.memory = None;
+        one.associative = None;
+        one.experts = None;
+        one.consolidation = None;
+        let (config, design) = one.build(384, 256).unwrap();
+        assert_eq!((config.blocks, config.split), (0, 0));
+        assert_eq!(design.modules().len(), 1);
+        let p1 = plan(&one, None, 256);
+        assert!(p1.errors.is_empty(), "{:?}", p1.errors);
+        assert!(p1.parts.iter().any(|p| p.name == "relational network"));
+        assert!(!p1.parts.iter().any(|p| p.name == "transformer"));
+        // The transformer alone: no bus, no controller.
+        let mut core = input("neuro-full-1m");
+        core.memory = None;
+        core.associative = None;
+        core.relational = None;
+        core.experts = None;
+        core.consolidation = None;
+        let p2 = plan(&core, None, 256);
+        assert!(p2.errors.is_empty(), "{:?}", p2.errors);
+        assert!(!p2.parts.iter().any(|p| p.name == "communication bus"));
+        // Nothing at all is refused with a reason.
+        let mut none = core.clone();
+        none.transformer = false;
+        assert!(!plan(&none, None, 256).errors.is_empty());
     }
 }

@@ -34,6 +34,8 @@ pub struct KvCache {
     trace: Option<Trace>,
     /// Nova Neuro: the working memory's state per layer (belongs to this context only).
     memory: Vec<Vec<f32>>,
+    /// Nova Neuro: the relational network's slots (`slots x width`, this context only).
+    slots: Vec<f32>,
 }
 
 /// Attention weights of one transformer block execution for the newest token.
@@ -93,6 +95,15 @@ pub struct NeuroRound {
     /// The Executive Controller's hidden activations this round (empty without networks).
     #[serde(default)]
     pub controller: Vec<f32>,
+    /// Relational network: each hop's read weights over the slots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slot_reads: Vec<Vec<f32>>,
+    /// Experts: the router's weight for each expert.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub experts: Vec<f32>,
+    /// Consolidation: the compressed code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code: Vec<f32>,
 }
 
 /// Recalled associative patterns kept in a trace, per round.
@@ -111,6 +122,12 @@ pub struct NeuroTrace {
     /// Working memory: each layer's state after this token.
     #[serde(default)]
     pub memory_state: Vec<Vec<f32>>,
+    /// Relational network: how this token was written into each slot (address weight) and the
+    /// length of each slot after it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slot_write: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slot_norms: Vec<f32>,
 }
 impl KvCache {
     pub fn new(model: &Bicameral, abl: Ablation) -> Self {
@@ -129,6 +146,7 @@ impl KvCache {
             stats: CacheStats::default(),
             trace: None,
             memory: fresh_memory(model),
+            slots: fresh_slots(model),
         }
     }
     /// A cache that also records a [`Trace`] of every token's forward pass (the latest one is
@@ -189,6 +207,7 @@ impl KvCache {
         self.chars = self.before.clone();
         self.sequence = 0;
         self.memory = fresh_memory(model);
+        self.slots = fresh_slots(model);
         let mut last = Vec::new();
         for t in window {
             last = self.step(model, t);
@@ -291,6 +310,23 @@ impl KvCache {
         logits
     }
 }
+fn fresh_slots(model: &Bicameral) -> Vec<f32> {
+    match model.neuro.as_ref().and_then(|n| n.relational.as_ref()) {
+        Some(r) => vec![0.; r.slots * r.width],
+        None => Vec::new(),
+    }
+}
+fn softmax(v: &mut [f32]) {
+    let max = v.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut total = 0.;
+    for x in v.iter_mut() {
+        *x = (*x - max).exp();
+        total += *x;
+    }
+    for x in v.iter_mut() {
+        *x /= total;
+    }
+}
 fn fresh_memory(model: &Bicameral) -> Vec<Vec<f32>> {
     match model.neuro.as_ref().and_then(|n| n.memory.as_ref()) {
         Some(m) => vec![vec![0.; m.width]; m.layers],
@@ -370,79 +406,34 @@ impl KvCache {
             }
             out
         });
-        let modules = n.modules();
+        // Relational network: this token's write into the slots.
+        if let Some(r) = &n.relational {
+            let hn = norm(&h, model.val("n.rel.norm"));
+            let mut addr = affine(model, "n.rel.addr", Some("n.rel.addr_b"), &hn);
+            softmax(&mut addr);
+            let gate = sigmoid(&affine(model, "n.rel.gate", Some("n.rel.gate_b"), &hn));
+            let value = affine(model, "n.rel.val", None, &hn);
+            for s in 0..r.slots {
+                for j in 0..r.width {
+                    let z = addr[s] * gate[j];
+                    let x = &mut self.slots[s * r.width + j];
+                    *x = (1. - z) * *x + z * value[j];
+                }
+            }
+            nt.slot_write = addr;
+            nt.slot_norms = self.slots.chunks(r.width).map(l2).collect();
+        }
         let rounds = if self.abl.one_round { 1 } else { c.loops };
         for round in 0..rounds {
-            let hn = norm(&h, model.val("n.read_norm"));
-            let mut bus = affine(model, "n.read", None, &hn);
-            if self.abl.no_efferent {
-                bus.fill(0.);
-            }
-            if let Some(m) = &memory {
-                bus = add(&bus, m);
-            }
-            let bn = norm(&bus, model.val("n.bus_norm"));
-            let mut r = NeuroRound { bus_norm: l2(&bus), ..NeuroRound::default() };
-            if tracing {
-                r.bus = bus.clone();
-            }
-            let gates = if modules.is_empty() {
-                Vec::new()
-            } else if self.abl.no_controller {
-                vec![1.; modules.len()]
-            } else {
-                let hid = silu(&affine(model, "n.ctl1", Some("n.ctl1b"), &bn));
-                if tracing {
-                    r.controller = hid.clone();
+            if n.has_bus() {
+                let mut r = NeuroRound::default();
+                let delta = self.neuro_bus(model, &h, memory.as_deref(), &mut r, tracing);
+                if let Some((delta, gate)) = delta {
+                    trace.gates.push(GateTrace { injection_norm: l2(&delta), state_norm: l2(&h), gate });
+                    h = add(&h, &delta);
                 }
-                sigmoid(&affine(model, "n.ctl2", Some("n.ctl2b"), &hid))
-            };
-            let mut write: Option<Vec<f32>> = None;
-            for (gi, module) in modules.iter().enumerate() {
-                let out = match module {
-                    super::neuro::Module::Memory => memory.clone().expect("memory"),
-                    super::neuro::Module::Associative => {
-                        let an = norm(&bn, model.val("n.as_norm"));
-                        let q = affine(model, "n.as_q", None, &an);
-                        let mut p = affine(model, "n.as_keys", None, &q);
-                        let max = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                        let mut total = 0.;
-                        for v in p.iter_mut() {
-                            *v = (*v - max).exp();
-                            total += *v;
-                        }
-                        for v in p.iter_mut() {
-                            *v /= total;
-                        }
-                        if tracing {
-                            let mut top: Vec<(usize, f32)> = p.iter().copied().enumerate().collect();
-                            top.sort_by(|a, b| b.1.total_cmp(&a.1));
-                            r.patterns = top.into_iter().take(TRACE_PATTERNS).collect();
-                        }
-                        let mut out = affine(model, "n.as_vals", None, &p);
-                        if self.abl.no_associative || self.abl.no_right {
-                            out.fill(0.);
-                        }
-                        out
-                    }
-                };
-                r.outputs.push(l2(&out));
-                let gated: Vec<f32> = out.iter().map(|v| v * gates[gi]).collect();
-                write = Some(match write {
-                    Some(w) => add(&w, &gated),
-                    None => gated,
-                });
+                nt.rounds.push(r);
             }
-            r.gates = gates;
-            if let (Some(w), false) = (write, self.abl.no_afferent) {
-                r.write_norm = l2(&w);
-                let gate = sigmoid(&affine(model, "n.gate_w", Some("n.gate_b"), &hn));
-                let z = affine(model, "n.write", None, &w);
-                let delta: Vec<f32> = gate.iter().zip(&z).map(|(g, x)| g * x).collect();
-                trace.gates.push(GateTrace { injection_norm: l2(&delta), state_norm: l2(&h), gate });
-                h = add(&h, &delta);
-            }
-            nt.rounds.push(r);
             for i in c.split..c.blocks {
                 let mut heads = Vec::new();
                 h = block(
@@ -476,6 +467,142 @@ impl KvCache {
             self.trace = Some(trace);
         }
         logits
+    }
+
+    /// One round of the bus for the newest token (as `Bicameral::neuro_round`): returns the
+    /// write-back into the transformer state and its gate, if anything is written.
+    fn neuro_bus(
+        &self,
+        model: &Bicameral,
+        h: &[f32],
+        memory: Option<&[f32]>,
+        r: &mut NeuroRound,
+        tracing: bool,
+    ) -> Option<(Vec<f32>, Vec<f32>)> {
+        use super::neuro::Module;
+        let n = model.neuro.as_ref().expect("Nova Neuro");
+        let abl = self.abl;
+        let modules = n.modules();
+        let cut = |out: &mut Vec<f32>, off: bool| {
+            if off || abl.no_right {
+                out.fill(0.);
+            }
+        };
+        let hn = norm(h, model.val("n.read_norm"));
+        let mut bus = affine(model, "n.read", None, &hn);
+        if abl.no_efferent {
+            bus.fill(0.);
+        }
+        if let Some(m) = memory {
+            bus = add(&bus, m);
+        }
+        let bn = norm(&bus, model.val("n.bus_norm"));
+        r.bus_norm = l2(&bus);
+        if tracing {
+            r.bus = bus.clone();
+        }
+        let gates = if modules.is_empty() {
+            Vec::new()
+        } else if abl.no_controller {
+            vec![1.; modules.len()]
+        } else {
+            let hid = silu(&affine(model, "n.ctl1", Some("n.ctl1b"), &bn));
+            if tracing {
+                r.controller = hid.clone();
+            }
+            sigmoid(&affine(model, "n.ctl2", Some("n.ctl2b"), &hid))
+        };
+        let code = n.consolidation.as_ref().map(|_| {
+            let cn = norm(&bn, model.val("n.co.norm"));
+            let e = silu(&affine(model, "n.co.enc1", Some("n.co.enc1b"), &cn));
+            affine(model, "n.co.enc2", Some("n.co.enc2b"), &e)
+        });
+        if let (Some(c), true) = (&code, tracing) {
+            r.code = c.clone();
+        }
+        let mut write: Option<Vec<f32>> = None;
+        for (gi, module) in modules.iter().enumerate() {
+            let out = match module {
+                Module::Memory => memory.expect("memory").to_vec(),
+                Module::Associative => {
+                    let an = norm(code.as_deref().unwrap_or(&bn), model.val("n.as_norm"));
+                    let q = affine(model, "n.as_q", None, &an);
+                    let mut p = affine(model, "n.as_keys", None, &q);
+                    softmax(&mut p);
+                    if tracing {
+                        let mut top: Vec<(usize, f32)> = p.iter().copied().enumerate().collect();
+                        top.sort_by(|a, b| b.1.total_cmp(&a.1));
+                        r.patterns = top.into_iter().take(TRACE_PATTERNS).collect();
+                    }
+                    let mut out = affine(model, "n.as_vals", None, &p);
+                    cut(&mut out, abl.no_associative);
+                    out
+                }
+                Module::Relational => {
+                    let rel = n.relational.as_ref().unwrap();
+                    let (slots, width) = (rel.slots, rel.width);
+                    let scale = 1. / (width as f32).sqrt();
+                    let qn = norm(&bn, model.val("n.rel.qnorm"));
+                    let mut q = affine(model, "n.rel.q0", None, &qn);
+                    let mut total = vec![0f32; width];
+                    for hop in 0..rel.hops {
+                        if hop > 0 {
+                            q = affine(model, &format!("n.rel.hop{hop}"), None, &total);
+                        }
+                        let mut p = super::tape::slot_scores_values(&q, &self.slots, slots, width, scale);
+                        softmax(&mut p);
+                        let read = super::tape::slot_read_values(&p, &self.slots, slots, width);
+                        total = if hop == 0 { read } else { add(&total, &read) };
+                        r.slot_reads.push(p);
+                    }
+                    let mut out = affine(model, "n.rel.out", None, &total);
+                    cut(&mut out, abl.no_relational);
+                    out
+                }
+                Module::Experts => {
+                    let e = n.experts.as_ref().unwrap();
+                    let en = norm(&bn, model.val("n.ex.norm"));
+                    let mut route = affine(model, "n.ex.router", Some("n.ex.router_b"), &en);
+                    softmax(&mut route);
+                    let mut sum = vec![0f32; n.bus];
+                    for i in 0..e.count {
+                        let g = silu(&affine(model, &format!("n.ex{i}.gate"), None, &en));
+                        let u = affine(model, &format!("n.ex{i}.up"), None, &en);
+                        let hid: Vec<f32> = g.iter().zip(&u).map(|(a, b)| a * b).collect();
+                        let o = affine(model, &format!("n.ex{i}.down"), None, &hid);
+                        let o: Vec<f32> = o.iter().map(|x| x * route[i]).collect();
+                        sum = if i == 0 { o } else { add(&sum, &o) };
+                    }
+                    r.experts = route;
+                    cut(&mut sum, abl.no_experts);
+                    sum
+                }
+                Module::Consolidation => {
+                    let d1 =
+                        silu(&affine(model, "n.co.dec1", Some("n.co.dec1b"), code.as_ref().expect("code")));
+                    let mut out = affine(model, "n.co.dec2", None, &d1);
+                    cut(&mut out, abl.no_consolidation);
+                    out
+                }
+            };
+            r.outputs.push(l2(&out));
+            let gated: Vec<f32> = out.iter().map(|v| v * gates[gi]).collect();
+            write = Some(match write {
+                Some(w) => add(&w, &gated),
+                None => gated,
+            });
+        }
+        r.gates = gates;
+        match (write, abl.no_afferent) {
+            (Some(w), false) => {
+                r.write_norm = l2(&w);
+                let gate = sigmoid(&affine(model, "n.gate_w", Some("n.gate_b"), &hn));
+                let z = affine(model, "n.write", None, &w);
+                let delta: Vec<f32> = gate.iter().zip(&z).map(|(g, x)| g * x).collect();
+                Some((delta, gate))
+            }
+            _ => None,
+        }
     }
 }
 

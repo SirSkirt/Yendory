@@ -1087,6 +1087,49 @@ fn scan_back(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
     }
 }
 
+// Relational slots (Nova Neuro). Each row holds `slots` vectors of `width` in m. The three
+// kernels are each other's gradients (see the CPU tape).
+
+// f2[r * slots + s] = scale * dot(f0[r * width ..], f1[(r * slots + s) * width ..]), one thread
+// per (row, slot).   p: rows * slots, slots, width, scale bits
+@compute @workgroup_size(256)
+fn slot_scores(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    let w = p.a.z;
+    let r = i / p.a.y;
+    var acc = 0.0;
+    for (var j = 0u; j < w; j = j + 1u) { acc = acc + f0[r * w + j] * f1[i * w + j]; }
+    f2[i] = fl(p.a.w) * acc;
+}
+
+// f2[r * width + j] = scale * sum over s of f0[r * slots + s] * f1[(r * slots + s) * width + j],
+// one thread per (row, column).   p: rows * width, slots, width, scale bits
+@compute @workgroup_size(256)
+fn slot_read(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    let slots = p.a.y;
+    let w = p.a.z;
+    let r = i / w;
+    let j = i % w;
+    var acc = 0.0;
+    for (var s = 0u; s < slots; s = s + 1u) { acc = acc + f0[r * slots + s] * f1[(r * slots + s) * w + j]; }
+    f2[i] = fl(p.a.w) * acc;
+}
+
+// f2[(r * slots + s) * width + j] = scale * f0[r * slots + s] * f1[r * width + j], one thread
+// per element.   p: rows * slots * width, slots, width, scale bits
+@compute @workgroup_size(256)
+fn outer(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = id(wg, nwg, li);
+    if (i >= p.a.x) { return; }
+    let w = p.a.z;
+    let rs = i / w;
+    let r = rs / p.a.y;
+    f2[i] = fl(p.a.w) * f0[rs] * f1[r * w + i % w];
+}
+
 // ---- AdamW --------------------------------------------------------------------------------
 
 var<workgroup> part: array<f32, 256>;

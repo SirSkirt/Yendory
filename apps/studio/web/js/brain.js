@@ -99,10 +99,18 @@ window.Brain = (() => {
   const NEURO_REGIONS = {
     core: { cx: 405, cy: 180, rx: 116, ry: 88 },
     controller: { cx: 190, cy: 176, rx: 66, ry: 66 },
-    associative: { cx: 640, cy: 190, rx: 62, ry: 74 },
+    associative: { cx: 612, cy: 296, rx: 58, ry: 30 },
     memory: { cx: 380, cy: 318, rx: 118, ry: 32 },
+    relational: { cx: 590, cy: 98, rx: 52, ry: 30 },
+    experts: { cx: 668, cy: 186, rx: 46, ry: 50 },
+    consolidation: { cx: 196, cy: 300, rx: 56, ry: 28 },
   };
-  const NEURO_NAMES = { memory: "Working memory", associative: "Associative memory" };
+  const NEURO_NAMES = {
+    core: "Language core", memory: "Working memory", associative: "Associative memory",
+    relational: "Relational network", experts: "Experts", consolidation: "Consolidation",
+  };
+  // Network keys (as in the design) and their names in the Engine's trace.
+  const NEURO_MODULES = [["memory", "working memory"], ["associative", "associative memory"], ["relational", "relational network"], ["experts", "experts"], ["consolidation", "consolidation"]];
   function regionLocation(i, n, r) {
     const angle = i * 2.399963229728653;
     const radius = Math.sqrt((i + .5) / (n + .3)) * .9;
@@ -115,17 +123,19 @@ window.Brain = (() => {
     for (let i = 0; i < values.length; i += stride) out.push([i, values[i]]);
     return out;
   }
-  const neuroGroups = ["nBusDots", "nCoreDots", "nControlDots", "nAssocDots", "nMemoryDots"];
+  const neuroGroups = ["nBusDots", "nCoreDots", "nControlDots", "nAssocDots", "nMemoryDots", "nRelDots", "nExpertDots", "nCodeDots"];
 
   // Which networks the model has (from its design), drawn before anything is measured.
   function neuroSchematic(design) {
     const svg = $("neuroBrain");
-    const has = { core: true, controller: true, memory: !!design?.memory, associative: !!design?.associative };
+    const has = { core: design?.blocks !== 0, controller: true };
+    for (const [key] of NEURO_MODULES) has[key] = !!design?.[key];
+    has.controller = NEURO_MODULES.some(([key]) => has[key]);
     svg.querySelectorAll("[data-region]").forEach(e => e.classList.toggle("absent", !has[e.dataset.region]));
     svg.querySelectorAll("[data-label]").forEach(e => {
       const k = e.dataset.label;
       e.classList.toggle("absent", !has[k]);
-      e.textContent = has[k] ? NEURO_NAMES[k] : `${NEURO_NAMES[k]} (not in this model)`;
+      e.textContent = has[k] ? NEURO_NAMES[k] : `${NEURO_NAMES[k]} (not in this brain)`;
     });
     svg.querySelectorAll("[data-fiber]").forEach(f => {
       const k = f.dataset.fiber.split("-")[1];
@@ -141,7 +151,9 @@ window.Brain = (() => {
   // that stage, and the networks' activity in its round (round 1 for the lower blocks).
   function showNeuro(m, stageIndex, design) {
     const n = m.trace.neuro;
-    const has = neuroSchematic(design || { memory: n.modules.includes("working memory") ? {} : null, associative: n.modules.includes("associative memory") ? {} : null });
+    const inferred = { blocks: m.trace.stages.length ? undefined : 0 };
+    for (const [key, name] of NEURO_MODULES) inferred[key] = n.modules.includes(name) ? {} : null;
+    const has = neuroSchematic(design || inferred);
     const stages = m.trace.stages;
     const stage = stages[Math.min(stageIndex, stages.length - 1)];
     const roundIndex = Math.max(0, Math.min(n.rounds.length - 1, (stage?.round || 1) - 1));
@@ -189,6 +201,41 @@ window.Brain = (() => {
       });
     }
 
+    // Relational network: the slots read in this round (each hop's weights, summed), and the
+    // slots this token was written into.
+    if (has.relational && round?.slot_reads?.length) {
+      const slots = round.slot_reads[0].length;
+      const read = Array.from({ length: slots }, (_, i) => round.slot_reads.reduce((a, p) => a + p[i], 0));
+      const peak = Math.max(1e-9, ...read);
+      read.forEach((w, i) => {
+        const p = regionLocation(i, slots, R.relational);
+        const written = n.slot_write?.[i] ?? 0;
+        $("nRelDots").append(neuron(p.x, p.y, w / peak, colour("--neuro-relational"),
+          `Relational network · ${roundName} · slot ${i + 1} · read ${(100 * w / round.slot_reads.length).toFixed(1)}% on average over ${round.slot_reads.length} hop(s) · this token wrote ${(100 * written).toFixed(1)}% of itself here · slot size ${(n.slot_norms?.[i] ?? 0).toFixed(3)}`));
+      });
+    }
+
+    // Experts: the router's weight for each expert in this round.
+    if (has.experts && round?.experts?.length) {
+      const peak = Math.max(1e-9, ...round.experts);
+      round.experts.forEach((w, i) => {
+        const p = regionLocation(i, round.experts.length, R.experts);
+        $("nExpertDots").append(neuron(p.x, p.y, w / peak, colour("--neuro-experts"),
+          `Experts · ${roundName} · expert ${i + 1} · router weight ${(100 * w).toFixed(1)}%`));
+      });
+    }
+
+    // Consolidation: the compressed code in this round.
+    if (has.consolidation && round?.code?.length) {
+      const peak = Math.max(1e-7, ...round.code.map(Math.abs));
+      const shown = sample(round.code, 40);
+      shown.forEach(([i, v], k) => {
+        const p = regionLocation(k, shown.length, R.consolidation);
+        $("nCodeDots").append(neuron(p.x, p.y, Math.abs(v) / peak, colour("--neuro-code"),
+          `Consolidation · ${roundName} · code value ${i} · ${v.toFixed(6)}`));
+      });
+    }
+
     // Communication bus: the state the networks read this round, as dots along the ring.
     const bus = round?.bus || [];
     const busPeak = Math.max(1e-7, ...bus.map(Math.abs));
@@ -212,7 +259,7 @@ window.Brain = (() => {
       f.style.strokeWidth = (1.4 + 4 * v).toFixed(1);
       f.replaceChildren(Object.assign(document.createElementNS(svgNS, "title"), { textContent: detail }));
     };
-    for (const [key, name] of [["memory", "working memory"], ["associative", "associative memory"]]) {
+    for (const [key, name] of NEURO_MODULES) {
       if (!has[key]) continue;
       set(`gate-${key}`, gateOf(name), `Executive Controller → ${name} · gate ${(100 * gateOf(name)).toFixed(1)}% open (${roundName})`);
       set(`out-${key}`, outOf(name) / outPeak, `${name} → bus · gated output size ${outOf(name).toFixed(4)} (${roundName})`);

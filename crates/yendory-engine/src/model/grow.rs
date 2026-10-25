@@ -38,6 +38,9 @@ pub struct Growth {
     pub memory_width: usize,
     pub controller: usize,
     pub key: usize,
+    /// Nova Neuro: hidden units of every expert, and of consolidation's encoder and decoder.
+    pub expert_width: usize,
+    pub consolidation_hidden: usize,
 }
 
 impl Growth {
@@ -115,8 +118,21 @@ fn base(name: &str) -> &str {
 fn rule(name: &str) -> Rule {
     let b = base(name);
     let zero = |rows, cols| Rule { zero_new_rows: rows, zero_new_cols: cols, norm: false };
-    if matches!(b, "ln1" | "ln2" | "ln_f" | "c.n1" | "c.n2" | "n.read_norm" | "n.bus_norm" | "n.as_norm")
-        || (b.starts_with("n.wm") && b.ends_with(".norm"))
+    if matches!(
+        b,
+        "ln1"
+            | "ln2"
+            | "ln_f"
+            | "c.n1"
+            | "c.n2"
+            | "n.read_norm"
+            | "n.bus_norm"
+            | "n.as_norm"
+            | "n.rel.norm"
+            | "n.rel.qnorm"
+            | "n.ex.norm"
+            | "n.co.norm"
+    ) || (b.starts_with("n.wm") && b.ends_with(".norm"))
     {
         return Rule { norm: true, ..Rule::default() };
     }
@@ -136,6 +152,9 @@ fn rule(name: &str) -> Rule {
         "n.ctl2" => zero(false, true),
         // New key dimensions do not change the pattern scores until trained.
         "n.as_q" => zero(true, false),
+        // New hidden units of the experts and of consolidation pass nothing on until trained.
+        "n.co.enc2" | "n.co.dec2" => zero(false, true),
+        _ if b.starts_with("n.ex") && b.ends_with(".down") => zero(false, true),
         _ => Rule::default(),
     }
 }
@@ -158,8 +177,9 @@ impl Bicameral {
         };
         let design = match &self.neuro {
             None => {
-                if g.bus + g.memory_width + g.controller + g.key > 0 {
-                    return Err("A Bicameral model has no bus, working memory, controller or associative memory to grow".into());
+                if g.bus + g.memory_width + g.controller + g.key + g.expert_width + g.consolidation_hidden > 0
+                {
+                    return Err("A Bicameral model has no bus or Nova Neuro networks to grow".into());
                 }
                 config.r1 = c.r1 + g.dense1;
                 config.r2 = c.r2 + g.dense2;
@@ -170,7 +190,18 @@ impl Bicameral {
                     return Err("A Nova Neuro model has no Dense hemisphere; grow its modules instead".into());
                 }
                 let mut n = n.clone();
+                if g.bus > 0 && !n.has_bus() {
+                    return Err("This design has no communication bus to grow".into());
+                }
                 n.bus += g.bus;
+                if g.expert_width > 0 {
+                    let e = n.experts.as_mut().ok_or("This design has no experts to grow")?;
+                    e.width += g.expert_width;
+                }
+                if g.consolidation_hidden > 0 {
+                    let k = n.consolidation.as_mut().ok_or("This design has no consolidation to grow")?;
+                    k.hidden += g.consolidation_hidden;
+                }
                 if g.memory_width > 0 {
                     let m = n.memory.as_mut().ok_or("This design has no working memory to grow")?;
                     m.width += g.memory_width;
@@ -356,12 +387,48 @@ impl Bicameral {
                         Preservation::Exact,
                     ));
                 }
-                list.push((
-                    "bus",
-                    format!("Communication bus +25% ({} -> {})", n.bus, n.bus + quarter(n.bus, 8)),
-                    Growth { bus: quarter(n.bus, 8), ..Growth::default() },
-                    Preservation::NearExact,
-                ));
+                if n.has_bus() {
+                    list.push((
+                        "bus",
+                        format!("Communication bus +25% ({} -> {})", n.bus, n.bus + quarter(n.bus, 8)),
+                        Growth { bus: quarter(n.bus, 8), ..Growth::default() },
+                        Preservation::NearExact,
+                    ));
+                }
+                if let Some(e) = &n.experts {
+                    list.push((
+                        "experts",
+                        format!("Experts +25% ({} -> {} units each)", e.width, e.width + quarter(e.width, 8)),
+                        Growth { expert_width: quarter(e.width, 8), ..Growth::default() },
+                        Preservation::Exact,
+                    ));
+                    not.push(NotOffered {
+                        part: "More experts".into(),
+                        reason: "The router's softmax renormalises: a new expert takes weight from the others, so their outputs would change".into(),
+                    });
+                }
+                if let Some(k) = &n.consolidation {
+                    list.push((
+                        "consolidation",
+                        format!(
+                            "Consolidation +25% ({} -> {} hidden units)",
+                            k.hidden,
+                            k.hidden + quarter(k.hidden, 8)
+                        ),
+                        Growth { consolidation_hidden: quarter(k.hidden, 8), ..Growth::default() },
+                        Preservation::Exact,
+                    ));
+                    not.push(NotOffered {
+                        part: "Consolidation code".into(),
+                        reason: "The code is normalised before the associative memory reads it; a wider code would change that".into(),
+                    });
+                }
+                if n.relational.is_some() {
+                    not.push(NotOffered {
+                        part: "Relational slots".into(),
+                        reason: "Each token's write is a softmax over the slots, and each read is scaled by the slot width: a new slot or wider slots would change both".into(),
+                    });
+                }
                 if let Some(a) = &n.associative {
                     list.push((
                         "key",
@@ -384,13 +451,20 @@ impl Bicameral {
                 }
                 list.push((
                     "balanced",
-                    "Balanced: width +25%, feed-forward +25%, one more upper block, working memory and bus +25%".into(),
+                    if c.blocks > 0 {
+                        "Balanced: width +25%, feed-forward +25%, one more upper block, working memory, bus and the networks that can grow +25%".into()
+                    } else {
+                        // A design without transformer blocks stays without them.
+                        "Balanced: width +25%, working memory, bus and the networks that can grow +25%".into()
+                    },
                     Growth {
                         heads: (c.heads / 4).max(1),
-                        ff: quarter(c.ff, 16),
-                        upper_blocks: 1,
+                        ff: if c.blocks > 0 { quarter(c.ff, 16) } else { 0 },
+                        upper_blocks: usize::from(c.blocks > 0),
                         memory_width: n.memory.as_ref().map_or(0, |m| quarter(m.width, 8)),
-                        bus: quarter(n.bus, 8),
+                        bus: if n.has_bus() { quarter(n.bus, 8) } else { 0 },
+                        expert_width: n.experts.as_ref().map_or(0, |e| quarter(e.width, 8)),
+                        consolidation_hidden: n.consolidation.as_ref().map_or(0, |k| quarter(k.hidden, 8)),
                         ..Growth::default()
                     },
                     Preservation::NearExact,
@@ -402,8 +476,12 @@ impl Bicameral {
             .into_iter()
             .filter_map(|(id, label, growth, preservation)| {
                 let (config, design) = self.grown_shape(&growth).ok()?;
-                let after =
+                let after: usize =
                     Bicameral::tensors_for(&config, design.as_ref()).iter().map(|(_, r, c)| r * c).sum();
+                // A part the design does not use (feed-forward width without transformer blocks).
+                if after == before {
+                    return None;
+                }
                 Some(GrowthOption {
                     id: id.into(),
                     label,

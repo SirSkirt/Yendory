@@ -26,6 +26,12 @@ pub struct NeuroEffects {
     pub without_controller: Option<f32>,
     /// One computation round instead of the model's rounds (`None` with one round).
     pub one_round: Option<f32>,
+    #[serde(default)]
+    pub without_relational: Option<f32>,
+    #[serde(default)]
+    pub without_experts: Option<f32>,
+    #[serde(default)]
+    pub without_consolidation: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,7 +97,7 @@ impl Bicameral {
                 let effect = |on: bool, abl: Ablation| -> Result<Option<f32>, String> {
                     Ok(if on { Some(total_variation(&full, &ablated(abl)?)) } else { None })
                 };
-                let has_modules = n.memory.is_some() || n.associative.is_some();
+                let has_modules = !n.modules().is_empty();
                 Some(NeuroEffects {
                     without_memory: effect(
                         n.memory.is_some(),
@@ -108,6 +114,18 @@ impl Bicameral {
                     one_round: effect(
                         self.config.loops > 1,
                         Ablation { one_round: true, ..Ablation::default() },
+                    )?,
+                    without_relational: effect(
+                        n.relational.is_some(),
+                        Ablation { no_relational: true, ..Ablation::default() },
+                    )?,
+                    without_experts: effect(
+                        n.experts.is_some(),
+                        Ablation { no_experts: true, ..Ablation::default() },
+                    )?,
+                    without_consolidation: effect(
+                        n.consolidation.is_some(),
+                        Ablation { no_consolidation: true, ..Ablation::default() },
                     )?,
                 })
             }
