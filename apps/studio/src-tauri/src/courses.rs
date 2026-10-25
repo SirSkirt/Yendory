@@ -847,6 +847,7 @@ impl CourseHost for StudioHost<'_> {
     fn save(&mut self, model: &Bicameral, archive: &[Item], run: &CourseRun) -> Res<()> {
         refresh_meta(&mut self.meta, model);
         save_all(self.app, &self.meta, model, archive)?;
+        clear_checkpoints(self.app, &self.meta.id);
         if let Some(s) = &self.study {
             super::study::save_memory(self.app, &self.meta.id, &s.store)?;
         }
@@ -895,6 +896,7 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
         }
         Ok((a.meta.clone(), a.model.clone(), a.archive.clone()))
     })?;
+    no_waiting_checkpoints(&app, &meta.id)?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching".into());
     }
@@ -1020,7 +1022,11 @@ fn run_plan(
             break;
         }
         let best = load_best(app, &plan.id);
-        let opts = RunOptions { word_limit: meta.word_limit, ..RunOptions::default() };
+        let opts = RunOptions {
+            word_limit: meta.word_limit,
+            checkpoint_dir: checkpoints_dir(app, &meta.id).ok(),
+            ..RunOptions::default()
+        };
         let study = super::study::study_mode(app)
             .then(|| yendory_engine::memory::Studying::new(super::study::load_memory(app, &meta.id), now()));
         let rewards = super::rewards::rewards_for(app, &meta.id);

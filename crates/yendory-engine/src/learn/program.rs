@@ -285,6 +285,9 @@ pub struct RunOptions {
     pub word_limit: Option<usize>,
     /// General reading text for `CourseSettings::reading_share` (documents).
     pub reading: Option<std::sync::Arc<Vec<String>>>,
+    /// Where accepted epochs are written while lessons are taught (see
+    /// `SessionConfig::checkpoint_dir`).
+    pub checkpoint_dir: Option<std::path::PathBuf>,
 }
 
 pub struct RunResult {
@@ -393,6 +396,7 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         reading_share: s.reading_share,
         reading: opts.reading.clone(),
         blend: s.blend,
+        checkpoint_dir: opts.checkpoint_dir.clone(),
         train_earlier: s.train_earlier,
         recover_earlier: s.recover_earlier,
         ..SessionConfig::default()

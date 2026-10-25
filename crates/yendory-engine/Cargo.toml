@@ -1,6 +1,6 @@
 [package]
 name = "yendory-engine"
-version = "0.5.4"
+version = "0.5.5"
 description = "Yendory Engine: the Bicameral neural architecture (Transformer + Dense + interconnect), no ML frameworks"
 edition.workspace = true
 rust-version.workspace = true

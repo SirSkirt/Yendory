@@ -518,3 +518,8 @@ tr.nb-later td { color: var(--ink-soft); }
 .nb-switch[aria-checked="true"] i { left: 18px; border-color: var(--accent); }
 .nb-switch-space { flex: none; width: 38px; }
 @media (max-width: 640px) { .nb-body { padding-left: 8px; } .nb-short { display: none; } }
+
+/* Waiting checkpoints of an unfinished training session */
+.checkpoint-panel { border: 1.5px solid var(--warn); border-radius: 6px; padding: 8px 14px 4px; margin: 12px 0; background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.checkpoint-panel h4 { margin: 4px 0; }
+.checkpoint-panel td.mono { font-size: 12.5px; overflow-wrap: anywhere; }

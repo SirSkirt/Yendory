@@ -299,6 +299,7 @@ function onPlanEvent({ planId, event: e }) {
     else if (c.type === "group_scored") planLog(`After attempt ${c.attempt + 1}: ` + c.indices.map((i, k) => `lesson ${i + 1} ${percent(c.rates[k])}${c.passed[k] ? " (passed)" : ""}`).join(" · "));
     else if (c.type === "file_started") $("planNow").textContent = `Lesson ${c.index + 1} of ${c.files}: ${c.name} · ${stageName(e.stage)}${c.pass > 1 ? " · second try" : ""}`;
     else if (c.type === "attempt_started") { live.line = c.attempt === 0 ? "first attempt" : `retry ${c.attempt}${c.remedy ? ": " + c.remedy : ""}`; if (c.attempt) planLog(`${live.line}`); }
+    else if (c.type === "session" && c.event.type === "checkpoint") planLog(c.event.error ? `Checkpoint of epoch ${c.event.epoch} could not be written: ${c.event.error}` : `Accepted epoch ${c.event.epoch} written to the checkpoint folder (step ${fmt(c.event.step)}).`, c.event.error ? "warn" : undefined);
     else if (c.type === "diagnosed") planLog(`Not passed yet (${percent(c.diagnosis.heldout_rate)}): ${c.diagnosis.cause.replace("_", " ")}.`, "warn");
     else if (c.type === "session" && c.event.type === "batch") {
       const s = c.event;

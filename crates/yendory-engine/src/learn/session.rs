@@ -104,6 +104,11 @@ pub struct SessionConfig {
     /// Not saved with settings.
     #[serde(skip)]
     pub reading: Option<std::sync::Arc<Vec<String>>>,
+    /// Where each accepted epoch's model is written while the session runs (see
+    /// [`save_checkpoint`]), so a power cut loses at most the epoch in progress. `None`: kept in
+    /// memory only until the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_dir: Option<std::path::PathBuf>,
     /// Weight blending (0 = off): each epoch also judges, as one more candidate, the model this
     /// share of the way from the epoch's starting model to its most promising candidate (the
     /// most held-out answers, then the lowest held-out loss). No extra training steps.
@@ -204,6 +209,7 @@ impl Default for SessionConfig {
             recover_earlier: false,
             earlier_answers_net: false,
             train_earlier: false,
+            checkpoint_dir: None,
         }
     }
 }
@@ -523,6 +529,13 @@ pub enum Event {
     },
     Candidate(CandidateRecord),
     Epoch(EpochRecord),
+    /// An accepted epoch's model written to the checkpoint folder (or why it could not be).
+    Checkpoint {
+        epoch: u32,
+        step: u64,
+        file: String,
+        error: Option<String>,
+    },
     /// Rewards (Stage 1): what the ledger recorded at the session start or end.
     Rewarded {
         /// "start" or "end".
@@ -649,6 +662,68 @@ pub(super) fn batch_loss_and_gradients_loss(
     // Forward passes only: the same mean as the training loss, without gradients.
     super::batch_loss(model, rows, abl)
 }
+
+/// Accepted checkpoints kept in a checkpoint folder (the newest).
+pub const CHECKPOINTS_KEPT: usize = 3;
+
+/// Writes `model` as `accepted-step-<step>-epoch-<epoch>.nnova2` in `dir` (atomically: a
+/// temporary file renamed into place, so a power cut leaves either the old files or the new
+/// one), keeps the newest [`CHECKPOINTS_KEPT`] of them and a README saying how to recover.
+pub fn save_checkpoint(
+    dir: &std::path::Path,
+    model: &Bicameral,
+    epoch: u32,
+) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let readme = dir.join("README.txt");
+    if !readme.exists() {
+        let _ = std::fs::write(&readme, CHECKPOINT_README);
+    }
+    let path = dir.join(format!("accepted-step-{:09}-epoch-{epoch:02}.nnova2", model.step));
+    let tmp = dir.join(".writing.tmp");
+    let bytes = model.to_bytes()?;
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut saved = checkpoint_files(dir);
+    while saved.len() > CHECKPOINTS_KEPT {
+        let _ = std::fs::remove_file(saved.remove(0));
+    }
+    Ok(path)
+}
+
+/// The accepted checkpoints in `dir`, oldest first (by training step).
+pub fn checkpoint_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .map(|r| {
+            r.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("accepted-step-") && n.ends_with(".nnova2"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
+}
+
+const CHECKPOINT_README: &str = "Accepted checkpoints of the training session in progress\n\
+\n\
+Yendory writes the model here each time an epoch is accepted, and saves the model itself\n\
+(model.nnova2 in the folder above) when the session ends. Once the model is saved, these files\n\
+are removed: anything in this folder is newer than model.nnova2.\n\
+\n\
+After a power cut or crash during training, either:\n\
+\n\
+A. Open Yendory Studio and the model, then press Restore (newest) on the Models page. The old\n\
+model file is kept as model-before-restore.nnova2.\n\
+\n\
+B. By hand, with Studio closed: copy the newest file here (the highest step number) to the\n\
+folder above, rename it to model.nnova2 (replacing the old one; keep a copy if you like), then\n\
+delete this checkpoints folder. Studio does not start new training while checkpoints wait here.\n\
+\n\
+Nova Neuro models use the same file name (model.nnova2); the file's header says which kind it is.\n";
 
 fn correct_set(r: &Report) -> Vec<bool> {
     r.outcomes.iter().map(|o| o.correct).collect()
@@ -1328,6 +1403,13 @@ pub fn teach_rewarded(
             sample_replies,
         };
         observer(&Event::Epoch(record.clone()));
+        if let (Some(dir), true) = (&cfg.checkpoint_dir, record.selected.is_some()) {
+            let (file, error) = match save_checkpoint(dir, &accepted, epoch) {
+                Ok(path) => (path.display().to_string(), None),
+                Err(e) => (String::new(), Some(e)),
+            };
+            observer(&Event::Checkpoint { epoch, step: accepted.step, file, error });
+        }
         epochs.push(record);
         if stale >= cfg.patience {
             break;

@@ -674,6 +674,20 @@ passes on its third remediation with these defaults: course grade 0 -> 0.24 -> 0
 (Dense lesson 7/7, Transformer lesson 5/5, exam 100%). With both settings off it still fails, as
 before; the remediation test runs with them off, and a second test checks the defaults pass.
 
+### Checkpoints while teaching (0.5.5)
+
+A session keeps its accepted model in memory and Studio saves it (`model.nnova2`) when the
+session ends; a power cut used to lose the whole session. Now every accepted epoch is also
+written to `checkpoints/` in the model's folder (`SessionConfig::checkpoint_dir`,
+`session::save_checkpoint`): `accepted-step-<step>-epoch-<epoch>.nnova2`, written to a temporary
+file and renamed into place, the newest three kept, with a README on recovering. When the model
+itself is saved (the end of a session in the Classroom, any save of a course run) the folder is
+removed, so whatever is in it is newer than the model. Studio's Models page lists waiting
+checkpoints with **Restore** (the current model file is kept as `model-before-restore.nnova2`)
+and **Discard**; teaching does not start while checkpoints wait, so a new session's checkpoints
+never mix with an unfinished one's. By hand: copy the newest file up a folder, rename it to
+`model.nnova2` and delete `checkpoints/`.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a

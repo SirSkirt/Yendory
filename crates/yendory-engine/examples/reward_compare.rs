@@ -196,7 +196,7 @@ fn main() {
         let stop = AtomicBool::new(false);
         let events = RefCell::new(Vec::new());
         let mut run = CourseRun::new(prep, false, seed + ci as u64);
-        let opts = RunOptions { word_limit: Some(7500), reading: reading.clone() };
+        let opts = RunOptions { word_limit: Some(7500), reading: reading.clone(), checkpoint_dir: None };
         let mut host = Host { stop: &stop, events: &events, rewards: rewards.take() };
         let r = run_course(&model, &archive, prep, &mut run, None, &opts, &mut host, &stop).unwrap();
         rewards = host.rewards.take();

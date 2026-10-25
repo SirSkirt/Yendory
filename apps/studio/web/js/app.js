@@ -59,6 +59,7 @@ function showActive(meta) {
   if (!meta) return;
   $("activeName").textContent = meta.name;
   refreshSaved();
+  refreshCheckpoints();
   $("activeStep").textContent = fmt(meta.step);
   $("activeWords").textContent = fmt(meta.words);
   const neuroModel = meta.architecture === "neuro";
@@ -396,6 +397,39 @@ function renderLessons() {
       lessonsList = await invoke("remove_lesson", { index: i }); renderLessons();
     }, "Remove lesson") }, "remove")))));
 }
+// Accepted checkpoints of a training session that did not finish (power cut, crash): restore
+// the newest, or discard them. Shown only when there are some.
+function renderCheckpoints(list) {
+  const box = $("checkpointPanel");
+  if (!list.length) { box.replaceChildren(); box.hidden = true; return; }
+  box.hidden = false;
+  const when = t => t ? new Date(t * 1000).toLocaleString() : "—";
+  const restore = c => safe(async () => {
+    if (!await askYes(`Restore the checkpoint of epoch ${c.epoch} (step ${fmt(c.step)}) as ${active.name}? The current model file is kept as model-before-restore.nnova2 in the model's folder.`)) return;
+    showActive(await invoke("restore_checkpoint", { name: c.name }));
+    log("INFO", `Restored the checkpoint of epoch ${c.epoch} (step ${fmt(c.step)}).`);
+  }, "Restore checkpoint");
+  const discard = el("button", { type: "button", class: "quiet" }, "Discard checkpoints");
+  discard.addEventListener("click", safe(async () => {
+    if (!await askYes("Discard these checkpoints? The model keeps its last saved state; the progress in them is lost.")) return;
+    await invoke("discard_checkpoints");
+    refreshCheckpoints();
+  }, "Discard checkpoints"));
+  box.replaceChildren(
+    el("h4", {}, "Unfinished training: checkpoints waiting"),
+    el("p", { class: "note warn" }, `A training session of this model did not finish (Studio was closed or the power went out), but it saved accepted epochs. The model itself is still at step ${fmt(active.step)}. Restore the newest checkpoint to continue from there. Teaching stays locked until you restore or discard them.`),
+    el("table", { class: "ledger compact" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Checkpoint"), el("th", { class: "num" }, "Step"), el("th", { class: "num" }, "Epoch"), el("th", {}, "Saved"), el("th", { class: "num" }, "Size"), el("th", {}, ""))),
+      el("tbody", {}, ...list.map((c, i) => {
+        const b = el("button", { type: "button", class: i === 0 ? "primary" : "" }, i === 0 ? "Restore (newest)" : "Restore");
+        b.addEventListener("click", restore(c));
+        return el("tr", {}, el("td", { class: "mono" }, c.name), el("td", { class: "num" }, fmt(c.step)), el("td", { class: "num" }, c.epoch),
+          el("td", {}, when(c.saved)), el("td", { class: "num" }, bytes(c.bytes)), el("td", {}, b));
+      }))),
+    el("div", { class: "actions" }, discard));
+}
+function refreshCheckpoints() { invoke("model_checkpoints").then(renderCheckpoints).catch(() => renderCheckpoints([])); }
+
 // The open model's saved earlier lessons (its rehearsal archive).
 function renderSaved(list) {
   $("savedCount").textContent = list.length ? `${list.length} lesson${list.length === 1 ? "" : "s"}` : "none";
@@ -557,7 +591,10 @@ function onTeachEvent(e) {
       `Not passed (held-out ${(100 * d.heldout_rate).toFixed(0)}%, training questions ${(100 * d.train_rate).toFixed(0)}%) → diagnosis: ${cause}. Next: ${d.remedy}`))));
   } else if (e.type === "session") {
     const s = e.event;
-    if (s.type === "started") {
+    if (s.type === "checkpoint") {
+      if (s.error) log("WARN", `Checkpoint of epoch ${s.epoch} could not be written: ${s.error}`);
+      else log("INFO", `Accepted epoch ${s.epoch} written to the checkpoint folder (step ${fmt(s.step)}); the model itself is saved when the session ends.`);
+    } else if (s.type === "started") {
       $("progressLine").textContent = `Baseline: held-out loss ${s.baseline.heldout_loss.toFixed(4)}, exact ${scoreCell(s.baseline)}; ${fmt(s.train_units)} units to learn, ${fmt(s.heldout_units)} held out, ${fmt(s.new_words)} new word units.`;
     } else if (s.type === "batch") {
       progress.epoch = s.epoch;

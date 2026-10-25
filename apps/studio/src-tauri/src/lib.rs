@@ -129,6 +129,30 @@ fn models_dir(app: &AppHandle) -> Res<PathBuf> {
     Ok(dir)
 }
 
+/// Accepted checkpoints of a training session that has not finished (see
+/// `yendory_engine::learn::session::save_checkpoint`).
+fn checkpoints_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
+    Ok(model_dir(app, id)?.join("checkpoints"))
+}
+
+/// The model was saved: its checkpoints are older, so they go.
+fn clear_checkpoints(app: &AppHandle, id: &str) {
+    if let Ok(dir) = checkpoints_dir(app, id) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Training must not start while checkpoints of an unfinished session wait to be restored or
+/// discarded (a new session's checkpoints would mix with them).
+fn no_waiting_checkpoints(app: &AppHandle, id: &str) -> Res<()> {
+    let dir = checkpoints_dir(app, id)?;
+    if yendory_engine::learn::session::checkpoint_files(&dir).is_empty() {
+        Ok(())
+    } else {
+        Err("This model has checkpoints from a training session that did not finish. Restore the newest or discard them first (§ 1 Models).".into())
+    }
+}
+
 fn model_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("Invalid model id".into());
@@ -911,6 +935,98 @@ fn rename_model(app: AppHandle, studio: State<Studio>, id: String, name: String)
     Ok(meta)
 }
 
+/// An accepted checkpoint waiting in the open model's checkpoint folder.
+#[derive(Serialize)]
+struct CheckpointView {
+    name: String,
+    step: u64,
+    epoch: u32,
+    bytes: u64,
+    /// Seconds since 1970 when it was written.
+    saved: u64,
+}
+
+fn checkpoint_views(app: &AppHandle, id: &str) -> Res<Vec<CheckpointView>> {
+    let dir = checkpoints_dir(app, id)?;
+    let mut out = Vec::new();
+    for path in yendory_engine::learn::session::checkpoint_files(&dir).into_iter().rev() {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        // accepted-step-<step>-epoch-<epoch>.nnova2
+        let parts: Vec<&str> = name.trim_end_matches(".nnova2").split('-').collect();
+        let number = |key: &str| {
+            parts
+                .iter()
+                .position(|p| *p == key)
+                .and_then(|i| parts.get(i + 1))
+                .and_then(|v| v.parse::<u64>().ok())
+        };
+        let meta = std::fs::metadata(&path).ok();
+        out.push(CheckpointView {
+            step: number("step").unwrap_or(0),
+            epoch: number("epoch").unwrap_or(0) as u32,
+            bytes: meta.as_ref().map_or(0, |m| m.len()),
+            saved: meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs()),
+            name,
+        });
+    }
+    Ok(out)
+}
+
+/// Checkpoints of the open model's unfinished training session, newest first (empty when the
+/// last session ended normally).
+#[tauri::command]
+fn model_checkpoints(app: AppHandle, studio: State<Studio>) -> Res<Vec<CheckpointView>> {
+    let id = with_active(&studio, |a| Ok(a.meta.id.clone()))?;
+    checkpoint_views(&app, &id)
+}
+
+/// Makes a waiting checkpoint the open model: the current model file is kept as
+/// `model-before-restore.nnova2`, the checkpoint becomes `model.nnova2`, and the checkpoint
+/// folder is cleared.
+#[tauri::command]
+fn restore_checkpoint(app: AppHandle, studio: State<Studio>, name: String) -> Res<Meta> {
+    not_teaching(&studio)?;
+    let (mut meta, archive, current) =
+        with_active(&studio, |a| Ok((a.meta.clone(), a.archive.clone(), a.model.clone())))?;
+    let dir = checkpoints_dir(&app, &meta.id)?;
+    let path = yendory_engine::learn::session::checkpoint_files(&dir)
+        .into_iter()
+        .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(name.as_str()))
+        .ok_or("That checkpoint is no longer there")?;
+    let model = Bicameral::load(&path).map_err(|e| format!("The checkpoint cannot be read: {e}"))?;
+    if model.architecture() != current.architecture() {
+        return Err("That checkpoint belongs to a model of another architecture".into());
+    }
+    let model_path = model_dir(&app, &meta.id)?;
+    write_atomic(&model_path.join("model-before-restore.nnova2"), &current.to_bytes()?)?;
+    refresh_meta(&mut meta, &model);
+    save_all(&app, &meta, &model, &archive)?;
+    clear_checkpoints(&app, &meta.id);
+    append_history(
+        &app,
+        &meta.id,
+        serde_json::json!({"type": "checkpoint_restored", "time": now(), "file": name, "step": model.step}),
+    );
+    if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
+        a.model = model;
+        a.meta = meta.clone();
+    }
+    Ok(meta)
+}
+
+/// Removes the open model's waiting checkpoints (the model keeps its last saved state).
+#[tauri::command]
+fn discard_checkpoints(app: AppHandle, studio: State<Studio>) -> Res<()> {
+    not_teaching(&studio)?;
+    let id = with_active(&studio, |a| Ok(a.meta.id.clone()))?;
+    clear_checkpoints(&app, &id);
+    append_history(&app, &id, serde_json::json!({"type": "checkpoints_discarded", "time": now()}));
+    Ok(())
+}
+
 #[tauri::command]
 fn delete_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<()> {
     not_teaching(&studio)?;
@@ -1302,6 +1418,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     }
     let (meta, model, archive) =
         with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
+    no_waiting_checkpoints(&app, &meta.id)?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching".into());
     }
@@ -1325,6 +1442,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         education: education_stage(options.education.as_deref())?,
         train_earlier: options.train_earlier,
         recover_earlier: options.recover_earlier,
+        checkpoint_dir: Some(checkpoints_dir(&app, &meta.id)?),
         ..SessionConfig::default()
     };
     append_history(
@@ -1366,6 +1484,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             let mut m = saved_for_hook.lock().unwrap();
             refresh_meta(&mut m, model);
             save_all(&app, &m, model, archive)?;
+            clear_checkpoints(&app, &m.id);
             if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == m.id) {
                 a.model = model.clone();
                 a.archive = archive.to_vec();
@@ -1628,6 +1747,9 @@ pub fn run() {
             status,
             saved_lessons,
             forget_saved_lesson,
+            model_checkpoints,
+            restore_checkpoint,
+            discard_checkpoints,
             growth::growth_view,
             growth::set_growth_mode,
             growth::expand_model,
