@@ -270,6 +270,8 @@
       <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
       <label class="check"><input type="checkbox" id="optTrainEarlier" checked> Train the saved earlier lessons together with the lessons taught together (they are still guarded: a checkpoint is accepted only when they are not worse)</label>
       <label class="check"><input type="checkbox" id="optRecoverEarlier" checked> When an epoch is rejected only because earlier lessons slipped, keep training from it without saving it, so the next epochs can win them back</label>
+      <label class="check"><input type="checkbox" id="optBackoff" checked> If the first epochs only make the model worse (answers or earlier lessons lost), halve the learning rate and try again (up to 3 times)</label>
+      <label class="check"><input type="checkbox" id="optOverrideFirst"> Override checkpoint acceptance on the first epoch: accept its best candidate even if the safeguards reject it, and protect what that model knows from then on (for a model the safeguards keep refusing to move)</label>
       <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses more held-out answers the model already gives than it gains (net safeguard; it beat the stricter "lose none" rule on two seeds, see docs/STATUS.md)</label>
       <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
       <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
@@ -277,6 +279,7 @@
 <p class="note reward-status" data-reward-status>Rewards: —</p>
 <p class="note warn" id="readFirstTeach" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
     <div class="actions">
+      <label class="check" id="resumeBox" hidden><input type="checkbox" id="optContinue" checked> <span id="resumeText">Continue the interrupted run</span></label>
       <button type="button" id="teach" class="primary">Teach</button>
       <button type="button" id="stopTeach" disabled>Stop</button>
       <span class="note" id="teachNote">A lesson passes only when the pass mark is reached; improvements below it are kept and reported as progress. Foundation training takes about four times as long as Joint-only.</span>
@@ -423,6 +426,8 @@
         <label class="check"><input type="checkbox" id="cRehearsal"> Rehearse earlier lessons</label>
         <label class="check"><input type="checkbox" id="cTrainEarlier"> Train the saved earlier lessons together with the lessons taught together (still guarded)</label>
         <label class="check"><input type="checkbox" id="cRecoverEarlier"> Keep training through epochs rejected only because earlier lessons slipped, without saving them</label>
+        <label class="check"><input type="checkbox" id="cBackoff"> If a lesson's first epochs only make the model worse, halve the learning rate (up to 3 times)</label>
+        <label class="check"><input type="checkbox" id="cOverrideFirst"> Override checkpoint acceptance on each lesson session's first epoch (accept its best candidate even if the safeguards reject it)</label>
         <label class="check"><input type="checkbox" id="cProtect"> Never accept a step that loses an answer the model already gives</label>
         <label class="check"><input type="checkbox" id="cRequeue"> A lesson not passed after its retries moves once to the end of the course (then it is recorded as unresolved)</label>
       </div>

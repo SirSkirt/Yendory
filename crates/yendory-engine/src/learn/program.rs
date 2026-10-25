@@ -399,6 +399,8 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         checkpoint_dir: opts.checkpoint_dir.clone(),
         train_earlier: s.train_earlier,
         recover_earlier: s.recover_earlier,
+        backoff: s.backoff,
+        override_first_epoch: s.override_first_epoch,
         ..SessionConfig::default()
     }
 }

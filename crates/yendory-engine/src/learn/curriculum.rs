@@ -246,6 +246,12 @@ pub struct CourseSettings {
     /// Keep training through epochs rejected only for earlier lessons, without saving them
     /// (see `SessionConfig::recover_earlier`).
     pub recover_earlier: bool,
+    /// Halve the learning rate when the first epochs of a lesson only make the model worse
+    /// (see `SessionConfig::backoff`).
+    pub backoff: bool,
+    /// Accept each lesson session's first epoch even if the safeguards reject it (see
+    /// `SessionConfig::override_first_epoch`).
+    pub override_first_epoch: bool,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -268,6 +274,8 @@ impl Default for CourseSettings {
             blend: 0.,
             train_earlier: true,
             recover_earlier: true,
+            backoff: true,
+            override_first_epoch: false,
         }
     }
 }

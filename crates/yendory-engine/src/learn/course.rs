@@ -535,6 +535,8 @@ pub fn teach_course_together(
     let mut parsed: Vec<Option<Vec<Item>>> = vec![None; files.len()];
     let mut queue = Queue::new(files.len());
     let mut stopped = false;
+    // An interrupted session (`resume_epochs`) is continued by the run's first session only.
+    let mut session_cfg = cfg.clone();
     let retries = cfg.retry.retries.min(3);
     let marked: Vec<usize> =
         (0..files.len()).filter(|&i| together.get(i).copied().unwrap_or(false)).collect();
@@ -629,7 +631,7 @@ pub fn teach_course_together(
                 &mut archive,
                 &group,
                 retries,
-                cfg,
+                &session_cfg,
                 &mut records,
                 &mut stopped,
                 rewards.as_deref_mut(),
@@ -637,6 +639,8 @@ pub fn teach_course_together(
                 on_learned,
                 stop,
             )?;
+            session_cfg.resume_epochs = 0;
+            session_cfg.resume_scale = None;
             if current.step != before {
                 queue.changed();
             }
@@ -755,7 +759,7 @@ pub fn teach_course_together(
                         &taught,
                         index,
                         retries,
-                        cfg,
+                        &session_cfg,
                         &mut record,
                         &mut stopped,
                         &mut queue,
@@ -764,6 +768,8 @@ pub fn teach_course_together(
                         on_learned,
                         stop,
                     )?;
+                    session_cfg.resume_epochs = 0;
+                    session_cfg.resume_scale = None;
                     if !stopped {
                         record.own_after = own_rate(&current, &items).ok();
                         record.with_memory =
@@ -852,6 +858,9 @@ pub(super) fn teach_lesson(
                 return Ok(());
             }
         };
+        // An interrupted session is continued by the first attempt only.
+        plan.cfg.resume_epochs = 0;
+        plan.cfg.resume_scale = None;
         record.epochs_run += r.epochs.len();
         if record.baseline.is_none() {
             record.baseline = Some(r.baseline.clone());
@@ -979,6 +988,8 @@ pub(super) fn teach_group(
     // samples up to `eval_limit` per kind; for a group that sample would hide lessons, and the
     // total would not follow the lessons chosen).
     let cfg = &SessionConfig { eval_limit: None, ..cfg.clone() };
+    // An interrupted session is continued by the first attempt only.
+    let fresh = SessionConfig { resume_epochs: 0, resume_scale: None, ..cfg.clone() };
     let mut practice: Option<Vec<Item>> = None;
     let mut passed = vec![false; lessons.len()];
     for attempt in 0..=retries {
@@ -1001,7 +1012,7 @@ pub(super) fn teach_group(
             &all,
             practice.as_deref(),
             &others,
-            cfg,
+            if attempt == 0 { cfg } else { &fresh },
             rewards.as_deref_mut(),
             &mut forward,
             stop,

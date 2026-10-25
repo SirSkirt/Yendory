@@ -688,6 +688,28 @@ and **Discard**; teaching does not start while checkpoints wait, so a new sessio
 never mix with an unfinished one's. By hand: copy the newest file up a folder, rename it to
 `model.nnova2` and delete `checkpoints/`.
 
+### Continuing, backing off and overriding (0.5.6)
+
+- **Continuing an interrupted run.** Each checkpoint is saved with where its session was
+  (`session::CheckpointInfo` beside it as `.json`: epoch, epochs, the learning rate set and the
+  rate of the epoch's last batch, the back-off share, batch size). Restoring a checkpoint in
+  Studio keeps that, and the next Classroom run offers (ticked) to continue it: the session runs
+  the remaining epochs (`SessionConfig::resume_epochs`, `resume_scale`) with exactly the learning
+  rates the interrupted one would have used (`tests/checkpoints.rs` compares every batch). A new
+  session on an already-taught model otherwise starts again at the full rate; for a model taught
+  down to a small rate (0.0000934 of 0.0003 at epoch 34 in the owner's run), the full rate lost
+  130-210 held-out answers per epoch and every epoch was rejected.
+- **Back-off** (`SessionConfig::backoff`, on by default for the Classroom and courses): while no
+  epoch of a session has been accepted, two epochs in a row whose candidates all made the model
+  worse (lost answers or earlier lessons) halve the learning rate, at most three times; the
+  flat-epoch count starts again after each. Test: a taught model trained at 0.05 had no epoch
+  accepted in six; with back-off the rate halved after epochs 2 and 4 and epochs 5 and 6 were
+  accepted.
+- **First-epoch override** (`SessionConfig::override_first_epoch`, off by default): the first
+  epoch's best candidate (most held-out answers, then lowest held-out loss) is accepted even when
+  the safeguards reject it, and the earlier-lesson guards are measured from it afterwards. The
+  epoch is marked overridden; later epochs are judged normally.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a

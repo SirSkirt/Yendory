@@ -102,6 +102,10 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         earlier_answers_net: false,
         train_earlier: false,
         checkpoint_dir: None,
+        resume_epochs: 0,
+        resume_scale: None,
+        backoff: false,
+        override_first_epoch: false,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);

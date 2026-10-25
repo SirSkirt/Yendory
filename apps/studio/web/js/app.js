@@ -60,6 +60,7 @@ function showActive(meta) {
   $("activeName").textContent = meta.name;
   refreshSaved();
   refreshCheckpoints();
+  showResume(meta.resume);
   $("activeStep").textContent = fmt(meta.step);
   $("activeWords").textContent = fmt(meta.words);
   const neuroModel = meta.architecture === "neuro";
@@ -397,6 +398,15 @@ function renderLessons() {
       lessonsList = await invoke("remove_lesson", { index: i }); renderLessons();
     }, "Remove lesson") }, "remove")))));
 }
+// A restored checkpoint's interrupted run, which the next Classroom run continues (its epochs,
+// learning rate and schedule) unless unticked.
+function showResume(r) {
+  $("resumeBox").hidden = !r;
+  if (!r) return;
+  const rate = r.learning_rate_now.toPrecision(2);
+  $("resumeText").textContent = `Continue the interrupted run from epoch ${r.epoch + 1} of ${r.epochs}, at its eased-off learning rate (about ${rate}, set ${r.learning_rate}) instead of starting again at full speed. The run's epochs, learning rate and batch size are used for this.`;
+}
+
 // Accepted checkpoints of a training session that did not finish (power cut, crash): restore
 // the newest, or discard them. Shown only when there are some.
 function renderCheckpoints(list) {
@@ -417,13 +427,14 @@ function renderCheckpoints(list) {
   }, "Discard checkpoints"));
   box.replaceChildren(
     el("h4", {}, "Unfinished training: checkpoints waiting"),
-    el("p", { class: "note warn" }, `A training session of this model did not finish (Studio was closed or the power went out), but it saved accepted epochs. The model itself is still at step ${fmt(active.step)}. Restore the newest checkpoint to continue from there. Teaching stays locked until you restore or discard them.`),
+    el("p", { class: "note warn" }, `A training session of this model did not finish (Studio was closed or the power went out), but it saved accepted epochs. The model itself is still at step ${fmt(active.step)}. Restore the newest checkpoint to continue from there: the next Classroom run then offers to continue that run where it left off (its epoch and eased-off learning rate). Teaching stays locked until you restore or discard them.`),
     el("table", { class: "ledger compact" },
-      el("thead", {}, el("tr", {}, el("th", {}, "Checkpoint"), el("th", { class: "num" }, "Step"), el("th", { class: "num" }, "Epoch"), el("th", {}, "Saved"), el("th", { class: "num" }, "Size"), el("th", {}, ""))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Checkpoint"), el("th", { class: "num" }, "Step"), el("th", { class: "num" }, "Epoch"), el("th", {}, "Learning rate"), el("th", {}, "Saved"), el("th", { class: "num" }, "Size"), el("th", {}, ""))),
       el("tbody", {}, ...list.map((c, i) => {
         const b = el("button", { type: "button", class: i === 0 ? "primary" : "" }, i === 0 ? "Restore (newest)" : "Restore");
         b.addEventListener("click", restore(c));
-        return el("tr", {}, el("td", { class: "mono" }, c.name), el("td", { class: "num" }, fmt(c.step)), el("td", { class: "num" }, c.epoch),
+        const lr = c.info ? `${c.info.learning_rate_now.toPrecision(2)} (set ${c.info.learning_rate})` : "—";
+        return el("tr", {}, el("td", { class: "mono" }, c.name), el("td", { class: "num" }, fmt(c.step)), el("td", { class: "num" }, c.info ? `${c.epoch} of ${c.info.epochs}` : c.epoch), el("td", { class: "num" }, lr),
           el("td", {}, when(c.saved)), el("td", { class: "num" }, bytes(c.bytes)), el("td", {}, b));
       }))),
     el("div", { class: "actions" }, discard));
@@ -515,6 +526,9 @@ $("teach").addEventListener("click", safe(async () => {
     together: lessonsList.map(isTogether),
     trainEarlier: $("optTrainEarlier").checked,
     recoverEarlier: $("optRecoverEarlier").checked,
+    backoff: $("optBackoff").checked,
+    overrideFirstEpoch: $("optOverrideFirst").checked,
+    continueRun: $("optContinue").checked,
   };
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
@@ -554,6 +568,7 @@ function learningText(r) {
 }
 // What an epoch decided: accepted, kept training through a flat epoch, or restored.
 function epochDecision(ep) {
+  if (ep.selected && ep.overridden) return `accepted ${ep.selected} by the first-epoch override (the safeguards had rejected it)`;
   if (ep.selected) return `accepted ${ep.selected}`;
   const flat = ep.flat_epochs ? ` (flat epoch ${ep.flat_epochs})` : "";
   if (ep.continued) return `not accepted yet; training continues from ${ep.continued}${flat}`;
@@ -591,7 +606,10 @@ function onTeachEvent(e) {
       `Not passed (held-out ${(100 * d.heldout_rate).toFixed(0)}%, training questions ${(100 * d.train_rate).toFixed(0)}%) → diagnosis: ${cause}. Next: ${d.remedy}`))));
   } else if (e.type === "session") {
     const s = e.event;
-    if (s.type === "checkpoint") {
+    if (s.type === "learning_rate_lowered") {
+      log("INFO", `Epoch ${s.epoch}: ${s.reason} (now ${Math.round(100 * s.scale)}% of the scheduled rate).`);
+      $("candidateTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 7, class: "note warn" }, `Learning rate halved after epoch ${s.epoch}: ${s.reason}; now ${Math.round(100 * s.scale)}% of the scheduled rate.`)));
+    } else if (s.type === "checkpoint") {
       if (s.error) log("WARN", `Checkpoint of epoch ${s.epoch} could not be written: ${s.error}`);
       else log("INFO", `Accepted epoch ${s.epoch} written to the checkpoint folder (step ${fmt(s.step)}); the model itself is saved when the session ends.`);
     } else if (s.type === "started") {

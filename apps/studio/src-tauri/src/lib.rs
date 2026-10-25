@@ -98,6 +98,9 @@ pub struct Meta {
     /// Transformer blocks (0: a Nova Neuro brain of other networks only; unknown in older files).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocks: Option<usize>,
+    /// A restored checkpoint's interrupted Classroom run, which the next run can continue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume: Option<yendory_engine::learn::session::CheckpointInfo>,
     /// Network growth: the setting, the original size and every growth (docs/GROWTH.md).
     #[serde(default)]
     growth: growth::GrowthInfo,
@@ -241,6 +244,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         architecture: bicameral(),
         design: None,
         blocks: None,
+        resume: None,
         growth: Default::default(),
     };
     refresh_meta(&mut meta, &model);
@@ -941,6 +945,8 @@ struct CheckpointView {
     name: String,
     step: u64,
     epoch: u32,
+    /// Where the session was (epochs, learning rate), when recorded.
+    info: Option<yendory_engine::learn::session::CheckpointInfo>,
     bytes: u64,
     /// Seconds since 1970 when it was written.
     saved: u64,
@@ -961,7 +967,9 @@ fn checkpoint_views(app: &AppHandle, id: &str) -> Res<Vec<CheckpointView>> {
                 .and_then(|v| v.parse::<u64>().ok())
         };
         let meta = std::fs::metadata(&path).ok();
+        let info = yendory_engine::learn::session::checkpoint_info(&path);
         out.push(CheckpointView {
+            info,
             step: number("step").unwrap_or(0),
             epoch: number("epoch").unwrap_or(0) as u32,
             bytes: meta.as_ref().map_or(0, |m| m.len()),
@@ -997,12 +1005,14 @@ fn restore_checkpoint(app: AppHandle, studio: State<Studio>, name: String) -> Re
         .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(name.as_str()))
         .ok_or("That checkpoint is no longer there")?;
     let model = Bicameral::load(&path).map_err(|e| format!("The checkpoint cannot be read: {e}"))?;
+    let info = yendory_engine::learn::session::checkpoint_info(&path);
     if model.architecture() != current.architecture() {
         return Err("That checkpoint belongs to a model of another architecture".into());
     }
     let model_path = model_dir(&app, &meta.id)?;
     write_atomic(&model_path.join("model-before-restore.nnova2"), &current.to_bytes()?)?;
     refresh_meta(&mut meta, &model);
+    meta.resume = info.filter(|i| i.epoch < i.epochs);
     save_all(&app, &meta, &model, &archive)?;
     clear_checkpoints(&app, &meta.id);
     append_history(
@@ -1292,6 +1302,16 @@ struct TeachOptions {
     /// Keep training through epochs rejected only for earlier lessons, without saving them.
     #[serde(default = "yes")]
     recover_earlier: bool,
+    /// Halve the learning rate when the first epochs only make the model worse.
+    #[serde(default = "yes")]
+    backoff: bool,
+    /// Accept the first epoch even if the safeguards reject it.
+    #[serde(default)]
+    override_first_epoch: bool,
+    /// Continue the interrupted run a restored checkpoint came from (its epochs, learning rate
+    /// and schedule), when there is one.
+    #[serde(default = "yes")]
+    continue_run: bool,
 }
 
 /// One saved earlier lesson in the model's rehearsal archive.
@@ -1443,7 +1463,35 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         train_earlier: options.train_earlier,
         recover_earlier: options.recover_earlier,
         checkpoint_dir: Some(checkpoints_dir(&app, &meta.id)?),
+        backoff: options.backoff,
+        override_first_epoch: options.override_first_epoch,
         ..SessionConfig::default()
+    };
+    // Continuing a restored checkpoint's interrupted run: its schedule, not a new one.
+    let mut cfg = cfg;
+    if let (true, Some(r)) = (options.continue_run, meta.resume.as_ref()) {
+        if r.epoch < r.epochs {
+            cfg.epochs = r.epochs;
+            cfg.learning_rate = r.learning_rate;
+            cfg.batch_size = r.batch_size;
+            cfg.resume_epochs = r.epoch;
+            cfg.resume_scale = Some(r.lr_scale);
+        }
+    }
+    // The resume information is used (or passed over) by this run either way.
+    let meta = if meta.resume.is_some() {
+        let mut m = meta;
+        m.resume = None;
+        write_atomic(
+            &model_dir(&app, &m.id)?.join("meta.json"),
+            &serde_json::to_vec_pretty(&m).map_err(|e| e.to_string())?,
+        )?;
+        if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == m.id) {
+            a.meta.resume = None;
+        }
+        m
+    } else {
+        meta
     };
     append_history(
         &app,

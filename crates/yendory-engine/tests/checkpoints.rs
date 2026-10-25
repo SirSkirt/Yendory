@@ -55,3 +55,124 @@ fn accepted_epochs_are_written_and_the_newest_is_the_final_model() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+use yendory_engine::learn::session::{checkpoint_info, SessionResult, BACKOFF_EPOCHS};
+
+fn lesson() -> Vec<yendory_engine::learn::lessons::Item> {
+    let file = builtin_courses().remove(0).lessons.remove(0);
+    parse_lesson(&file.text, &file.name).unwrap()
+}
+
+fn run(model: &Bicameral, cfg: &SessionConfig, events: &mut Vec<Event>) -> SessionResult {
+    teach(model, &lesson(), &[], cfg, &mut |e| events.push(e.clone()), &AtomicBool::new(false)).unwrap()
+}
+
+fn batch_rates(events: &[Event]) -> Vec<(u32, usize, f32)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Batch { epoch, batch, learning_rate, .. } => Some((*epoch, *batch, *learning_rate)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A session continued from a checkpoint runs the remaining epochs with the interrupted
+/// session's learning rates, not a new schedule from the full rate.
+#[test]
+fn a_continued_session_keeps_the_interrupted_schedule() {
+    let dir = std::env::temp_dir().join(format!("yendory-resume-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cfg = SessionConfig {
+        epochs: 6,
+        patience: 6,
+        foundation: false,
+        learning_rate: 3e-3,
+        checkpoint_dir: Some(dir.clone()),
+        ..SessionConfig::default()
+    };
+    let model = Bicameral::with_config(Config::default(), 7);
+    let mut full = Vec::new();
+    run(&model, &cfg, &mut full);
+    // The checkpoint of epoch 4 (the newest three are 4, 5 and 6) and where the session was.
+    let files = checkpoint_files(&dir);
+    let at4 = files.iter().find(|f| f.to_string_lossy().ends_with("epoch-04.nnova2")).unwrap();
+    let info = checkpoint_info(at4).unwrap();
+    assert_eq!((info.epoch, info.epochs, info.lr_scale), (4, 6, 1.));
+    let resumed_model = Bicameral::load(at4).unwrap();
+    let cfg2 = SessionConfig {
+        resume_epochs: info.epoch,
+        resume_scale: Some(info.lr_scale),
+        checkpoint_dir: None,
+        ..cfg
+    };
+    let mut rest = Vec::new();
+    let r = run(&resumed_model, &cfg2, &mut rest);
+    assert_eq!(r.epochs.first().unwrap().epoch, 5, "it continues with epoch 5");
+    assert_eq!(r.epochs.len(), 2);
+    let (a, b) = (batch_rates(&full), batch_rates(&rest));
+    let later: Vec<_> = a.into_iter().filter(|(e, _, _)| *e > 4).collect();
+    assert_eq!(later, b, "the same learning rate at every batch of epochs 5 and 6");
+    let last4 = batch_rates(&full).into_iter().rfind(|(e, _, _)| *e == 4).unwrap().2;
+    assert!((info.learning_rate_now - last4).abs() < 1e-9, "{} vs {last4}", info.learning_rate_now);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A well-taught model and steps far too large: every epoch makes it worse. With back-off the
+/// learning rate halves after two such epochs; with the first-epoch override, epoch 1 is
+/// accepted anyway and the session continues from it.
+#[test]
+fn backoff_halves_the_rate_and_the_override_accepts_the_first_epoch() {
+    let base = SessionConfig {
+        epochs: 6,
+        patience: 6,
+        foundation: false,
+        learning_rate: 3e-3,
+        ..SessionConfig::default()
+    };
+    let taught = run(&Bicameral::with_config(Config::default(), 7), &base, &mut Vec::new()).model;
+    let harsh = SessionConfig { epochs: 6, patience: 8, learning_rate: 0.05, seed: 3, ..base.clone() };
+
+    // Without back-off: nothing is accepted and the rate follows the schedule.
+    let mut plain = Vec::new();
+    let r0 = run(&taught, &harsh, &mut plain);
+    println!(
+        "no back-off: accepted {:?}",
+        r0.epochs.iter().map(|e| e.selected.is_some()).collect::<Vec<_>>()
+    );
+    assert!(!r0.learned, "steps this large make every candidate worse");
+
+    let mut backed = Vec::new();
+    let r1 = run(&taught, &SessionConfig { backoff: true, ..harsh.clone() }, &mut backed);
+    let lowered: Vec<(u32, f32)> = backed
+        .iter()
+        .filter_map(|e| {
+            if let Event::LearningRateLowered { epoch, scale, .. } = e {
+                Some((*epoch, *scale))
+            } else {
+                None
+            }
+        })
+        .collect();
+    println!(
+        "back-off: lowered {lowered:?}, accepted {:?}",
+        r1.epochs.iter().map(|e| e.selected.is_some()).collect::<Vec<_>>()
+    );
+    assert_eq!(lowered.first(), Some(&(BACKOFF_EPOCHS, 0.5)), "halved after {BACKOFF_EPOCHS} worse epochs");
+    // The next epoch runs at half the scheduled rate at every batch.
+    let (a, b) = (batch_rates(&plain), batch_rates(&backed));
+    let next = BACKOFF_EPOCHS + 1;
+    for ((e1, b1, l1), (e2, b2, l2)) in a.iter().zip(&b).filter(|((e, _, _), _)| *e == next) {
+        assert_eq!((e1, b1), (e2, b2));
+        assert!((l2 - 0.5 * l1).abs() < 1e-9, "{l2} vs half of {l1}");
+    }
+
+    // The override: epoch 1's best candidate is accepted although the safeguards reject it.
+    let r2 = run(&taught, &SessionConfig { override_first_epoch: true, ..harsh }, &mut Vec::new());
+    let first = &r2.epochs[0];
+    assert!(first.overridden && first.selected.is_some(), "{first:?}");
+    let chosen = first.candidates.iter().find(|c| c.selected).unwrap();
+    assert!(!chosen.eligible, "it was accepted despite the safeguards");
+    assert!(r2.learned);
+    assert!(r2.epochs[1..].iter().all(|e| !e.overridden), "only the first epoch");
+}

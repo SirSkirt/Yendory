@@ -109,6 +109,26 @@ pub struct SessionConfig {
     /// memory only until the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint_dir: Option<std::path::PathBuf>,
+    /// Epochs of this session already done before an interruption: the session runs the
+    /// remaining epochs with the learning rate where the interrupted one was (continuing its
+    /// schedule instead of starting again at the full rate). 0: a new session.
+    #[serde(default)]
+    pub resume_epochs: u32,
+    /// With `resume_epochs`: the share of the scheduled learning rate the interrupted session
+    /// had reached by backing off (see `backoff`). `None`: the full scheduled rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_scale: Option<f32>,
+    /// Off by default here; on by default for courses and the Classroom. While no epoch has been
+    /// accepted in this session, [`BACKOFF_EPOCHS`] epochs in a row whose candidates were worse
+    /// than the accepted model (they lost answers or earlier lessons) halve the learning rate,
+    /// up to [`BACKOFF_TIMES`] times; the flat-epoch count starts again after each.
+    #[serde(default)]
+    pub backoff: bool,
+    /// The first epoch's best candidate (most held-out answers, then lowest held-out loss) is
+    /// accepted even when the safeguards reject it, and the earlier-lesson guards are measured
+    /// from it afterwards. For continuing from a model the safeguards keep refusing to move.
+    #[serde(default)]
+    pub override_first_epoch: bool,
     /// Weight blending (0 = off): each epoch also judges, as one more candidate, the model this
     /// share of the way from the epoch's starting model to its most promising candidate (the
     /// most held-out answers, then the lowest held-out loss). No extra training steps.
@@ -210,6 +230,10 @@ impl Default for SessionConfig {
             earlier_answers_net: false,
             train_earlier: false,
             checkpoint_dir: None,
+            resume_epochs: 0,
+            resume_scale: None,
+            backoff: false,
+            override_first_epoch: false,
         }
     }
 }
@@ -507,6 +531,9 @@ pub struct EpochRecord {
     pub flat_epochs: u32,
     /// A few held-out replies of the accepted model (prompt, expected, reply).
     pub sample_replies: Vec<(String, String, String)>,
+    /// The selected candidate was accepted by `override_first_epoch` despite the safeguards.
+    #[serde(default)]
+    pub overridden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -529,6 +556,12 @@ pub enum Event {
     },
     Candidate(CandidateRecord),
     Epoch(EpochRecord),
+    /// The learning rate was halved (`backoff`): `scale` is the share of the set rate now used.
+    LearningRateLowered {
+        epoch: u32,
+        scale: f32,
+        reason: String,
+    },
     /// An accepted epoch's model written to the checkpoint folder (or why it could not be).
     Checkpoint {
         epoch: u32,
@@ -663,17 +696,44 @@ pub(super) fn batch_loss_and_gradients_loss(
     super::batch_loss(model, rows, abl)
 }
 
+/// Flat epochs (with worse candidates, before any acceptance) before the learning rate halves.
+pub const BACKOFF_EPOCHS: u32 = 2;
+/// The learning rate halves at most this many times in a session.
+pub const BACKOFF_TIMES: u32 = 3;
+
 /// Accepted checkpoints kept in a checkpoint folder (the newest).
 pub const CHECKPOINTS_KEPT: usize = 3;
 
 /// Writes `model` as `accepted-step-<step>-epoch-<epoch>.nnova2` in `dir` (atomically: a
 /// temporary file renamed into place, so a power cut leaves either the old files or the new
 /// one), keeps the newest [`CHECKPOINTS_KEPT`] of them and a README saying how to recover.
+/// Where a session was when a checkpoint was written (saved beside it as `<name>.json`), so an
+/// interrupted session can be continued with the same learning-rate schedule.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CheckpointInfo {
+    pub epoch: u32,
+    pub epochs: u32,
+    /// The learning rate the session was given (its peak).
+    pub learning_rate: f32,
+    /// The learning rate of the epoch's last batch, and the back-off share in force.
+    pub learning_rate_now: f32,
+    pub lr_scale: f32,
+    pub batch_size: usize,
+    /// Training units of the session (to recognise the same lessons).
+    pub train_units: usize,
+}
+
+/// The information saved beside a checkpoint file, if any.
+pub fn checkpoint_info(path: &std::path::Path) -> Option<CheckpointInfo> {
+    serde_json::from_slice(&std::fs::read(path.with_extension("json")).ok()?).ok()
+}
+
 pub fn save_checkpoint(
     dir: &std::path::Path,
     model: &Bicameral,
-    epoch: u32,
+    info: &CheckpointInfo,
 ) -> Result<std::path::PathBuf, String> {
+    let epoch = info.epoch;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let readme = dir.join("README.txt");
     if !readme.exists() {
@@ -683,10 +743,15 @@ pub fn save_checkpoint(
     let tmp = dir.join(".writing.tmp");
     let bytes = model.to_bytes()?;
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // The information first: a checkpoint file never appears without it.
+    let json = serde_json::to_vec_pretty(info).map_err(|e| e.to_string())?;
+    std::fs::write(path.with_extension("json"), json).map_err(|e| format!("{}: {e}", path.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut saved = checkpoint_files(dir);
     while saved.len() > CHECKPOINTS_KEPT {
-        let _ = std::fs::remove_file(saved.remove(0));
+        let old = saved.remove(0);
+        let _ = std::fs::remove_file(old.with_extension("json"));
+        let _ = std::fs::remove_file(old);
     }
     Ok(path)
 }
@@ -763,6 +828,9 @@ struct Judge<'a> {
     epoch: u32,
     baseline: &'a Score,
     base_panel_correct: &'a [bool],
+    /// `override_first_epoch` in the session's first epoch: the best candidate so far, whatever
+    /// the safeguards say.
+    fallback: Option<&'a std::cell::RefCell<Option<Best>>>,
 }
 
 impl Judge<'_> {
@@ -911,6 +979,17 @@ impl Judge<'_> {
         };
         observer(&Event::Candidate(record.clone()));
         records.push(record);
+        if let Some(f) = self.fallback {
+            let mut f = f.borrow_mut();
+            let better = s.heldout_loss.is_finite()
+                && f.as_ref().map_or(true, |(_, _, b, _, _)| {
+                    s.exact_correct > b.exact_correct
+                        || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
+                });
+            if better {
+                *f = Some((ci, cand.clone(), s.clone(), now_correct.clone(), report.clone()));
+            }
+        }
         let better_than_plateau = plateau.as_ref().map_or(true, |(_, _, b, _, _)| {
             s.exact_correct > b.exact_correct
                 || (s.exact_correct == b.exact_correct && s.heldout_loss < b.heldout_loss)
@@ -1112,8 +1191,18 @@ pub fn teach_rewarded(
     let mut epochs = Vec::new();
     let mut stale = 0;
     let mut stopped = false;
+    // The earlier-lesson guards' reference (the session start, or an overridden first epoch).
+    let mut guard_baseline = baseline.clone();
+    let mut base_panel_correct = base_panel_correct;
+    // Back-off: the share of the scheduled learning rate used, and how often it was halved.
+    let mut lr_scale =
+        if cfg.resume_epochs > 0 { cfg.resume_scale.unwrap_or(1.).clamp(1e-3, 1.) } else { 1. };
+    let mut backoffs = (-lr_scale.log2()).round().max(0.) as u32;
+    let first_epoch = cfg.resume_epochs.min(cfg.epochs.saturating_sub(1)) + 1;
 
-    'epochs: for epoch in 1..=cfg.epochs {
+    'epochs: for epoch in first_epoch..=cfg.epochs {
+        let overriding = cfg.override_first_epoch && epoch == first_epoch;
+        let fallback: std::cell::RefCell<Option<Best>> = std::cell::RefCell::new(None);
         // One batch plan per epoch, shared by every candidate.
         let mut plan_rng = Rng::new(cfg.seed.wrapping_mul(0x9E37_79B9).wrapping_add(epoch as u64));
         // Stage 2: copies of each unit by emphasis (same total), rehearsal by emphasis.
@@ -1226,7 +1315,7 @@ pub fn teach_rewarded(
                         return Ok(true);
                     }
                     let step = (epoch as u64 - 1) * batches_per_epoch as u64 + b as u64;
-                    let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1);
+                    let lr = lr_schedule(step, cfg.learning_rate, warmup, total_steps, 0.1) * lr_scale;
                     // Dropout masks depend on the epoch and batch, so every candidate of an
                     // epoch sees the same ones.
                     let abl = if cfg.dropout > 0. {
@@ -1256,8 +1345,13 @@ pub fn teach_rewarded(
                 let train_loss = (losses / plan.len().max(1) as f64) as f32;
                 if let Some(p) = pending.take() {
                     let (cand, scored) = p.scoring.join().map_err(|_| "Scoring a candidate failed")?;
-                    let j =
-                        Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                    let j = Judge {
+                        cfg,
+                        epoch,
+                        baseline: &guard_baseline,
+                        base_panel_correct: &base_panel_correct,
+                        fallback: overriding.then_some(&fallback),
+                    };
                     j.judge(
                         p.ci,
                         focus_name(p.focus),
@@ -1282,8 +1376,13 @@ pub fn teach_rewarded(
                     pending = Some(Pending { ci, focus, train_loss, scoring });
                 } else {
                     let scored = score(&cand, probes, dense)?;
-                    let j =
-                        Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                    let j = Judge {
+                        cfg,
+                        epoch,
+                        baseline: &guard_baseline,
+                        base_panel_correct: &base_panel_correct,
+                        fallback: overriding.then_some(&fallback),
+                    };
                     j.judge(
                         ci,
                         focus_name(focus),
@@ -1302,7 +1401,13 @@ pub fn teach_rewarded(
             }
             if let Some(p) = pending.take() {
                 let (cand, scored) = p.scoring.join().map_err(|_| "Scoring a candidate failed")?;
-                let j = Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+                let j = Judge {
+                    cfg,
+                    epoch,
+                    baseline: &guard_baseline,
+                    base_panel_correct: &base_panel_correct,
+                    fallback: overriding.then_some(&fallback),
+                };
                 j.judge(
                     p.ci,
                     focus_name(p.focus),
@@ -1330,7 +1435,13 @@ pub fn teach_rewarded(
             let blended = working.blend_toward(&cand, cfg.blend)?;
             let scored = score(&blended, &probes, dense)?;
             let label = format!("blend:{}", records[pci].focus);
-            let j = Judge { cfg, epoch, baseline: &baseline, base_panel_correct: &base_panel_correct };
+            let j = Judge {
+                cfg,
+                epoch,
+                baseline: &guard_baseline,
+                base_panel_correct: &base_panel_correct,
+                fallback: overriding.then_some(&fallback),
+            };
             j.judge(
                 records.len(),
                 &label,
@@ -1347,6 +1458,15 @@ pub fn teach_rewarded(
             );
         }
 
+        // Override (first epoch): its best candidate is accepted despite the safeguards.
+        let mut overridden = false;
+        if best.is_none() {
+            if let Some(fb) = fallback.borrow_mut().take() {
+                records[fb.0].reasons.push("accepted anyway: first-epoch override".into());
+                best = Some(fb);
+                overridden = true;
+            }
+        }
         let (mut continued, mut restored) = (None, false);
         if best.is_none() {
             match plateau.take() {
@@ -1390,6 +1510,12 @@ pub fn teach_rewarded(
                     .collect()
             })
             .unwrap_or_default();
+        if overridden {
+            // The guards now protect what the overridden model knows.
+            guard_baseline.retention_loss = accepted_score.retention_loss;
+            guard_baseline.panel_correct = accepted_score.panel_correct;
+            base_panel_correct = correct_set(&evaluate(&accepted, &probes.panel_items, Ablation::default())?);
+        }
         stale = if selected.is_some() { 0 } else { stale + 1 };
         let record = EpochRecord {
             epoch,
@@ -1401,10 +1527,53 @@ pub fn teach_rewarded(
             restored,
             flat_epochs: stale,
             sample_replies,
+            overridden,
         };
         observer(&Event::Epoch(record.clone()));
+        // Back-off: no epoch accepted yet and the last epochs' candidates were worse than the
+        // accepted model: smaller steps.
+        let worse = |r: &CandidateRecord| {
+            r.rejections.iter().any(|x| {
+                matches!(
+                    x,
+                    Rejection::AnswersLost | Rejection::EarlierLessonsLoss | Rejection::EarlierAnswersLost
+                )
+            })
+        };
+        if cfg.backoff
+            && !learned
+            && stale >= BACKOFF_EPOCHS
+            && backoffs < BACKOFF_TIMES
+            && record.candidates.iter().all(worse)
+        {
+            lr_scale *= 0.5;
+            backoffs += 1;
+            stale = 0;
+            observer(&Event::LearningRateLowered {
+                epoch,
+                scale: lr_scale,
+                reason: format!(
+                    "{BACKOFF_EPOCHS} epochs in a row made the model worse (answers or earlier lessons lost): steps are halved"
+                ),
+            });
+        }
         if let (Some(dir), true) = (&cfg.checkpoint_dir, record.selected.is_some()) {
-            let (file, error) = match save_checkpoint(dir, &accepted, epoch) {
+            let info = CheckpointInfo {
+                epoch,
+                epochs: cfg.epochs,
+                learning_rate: cfg.learning_rate,
+                learning_rate_now: lr_schedule(
+                    epoch as u64 * batches_per_epoch as u64 - 1,
+                    cfg.learning_rate,
+                    warmup,
+                    total_steps,
+                    0.1,
+                ) * lr_scale,
+                lr_scale,
+                batch_size: cfg.batch_size,
+                train_units: train.len(),
+            };
+            let (file, error) = match save_checkpoint(dir, &accepted, &info) {
                 Ok(path) => (path.display().to_string(), None),
                 Err(e) => (String::new(), Some(e)),
             };

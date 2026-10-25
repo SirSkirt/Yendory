@@ -461,6 +461,7 @@ mod tests {
             architecture: bicameral(),
             design: None,
             blocks: None,
+            resume: None,
             growth: GrowthInfo { mode: GrowthMode::Manual, ..GrowthInfo::default() },
         };
         refresh_meta(&mut meta, &model);
