@@ -792,6 +792,7 @@ struct StudioHost<'a> {
     study: Option<yendory_engine::memory::Studying>,
     /// The model's reward ledger (taken by the run, given back when it ends).
     rewards: Option<yendory_engine::learn::reward::Rewards>,
+    throttle: BatchThrottle,
 }
 impl StudioHost<'_> {
     fn emit(&self, event: &ProgramEvent) {
@@ -800,6 +801,16 @@ impl StudioHost<'_> {
 }
 impl CourseHost for StudioHost<'_> {
     fn event(&mut self, e: &ProgramEvent) {
+        if let ProgramEvent::Lesson {
+            event: CourseEvent::Session { event: Event::Batch { batch, batches, .. }, .. },
+            ..
+        }
+        | ProgramEvent::Remediation { event: Event::Batch { batch, batches, .. }, .. } = e
+        {
+            if !self.throttle.pass(*batch, *batches) {
+                return;
+            }
+        }
         self.emit(e);
         let batch = matches!(
             e,
@@ -1013,7 +1024,14 @@ fn run_plan(
         let study = super::study::study_mode(app)
             .then(|| yendory_engine::memory::Studying::new(super::study::load_memory(app, &meta.id), now()));
         let rewards = super::rewards::rewards_for(app, &meta.id);
-        let mut host = StudioHost { app, plan: plan.clone(), meta: meta.clone(), study, rewards };
+        let mut host = StudioHost {
+            app,
+            plan: plan.clone(),
+            meta: meta.clone(),
+            study,
+            rewards,
+            throttle: BatchThrottle::default(),
+        };
         let result = run_course(&model, &archive, &prep, &mut run, best, &opts, &mut host, stop);
         meta = host.meta;
         match result {

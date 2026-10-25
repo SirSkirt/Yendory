@@ -143,16 +143,38 @@ class TaskCard {
     this.container = container;
     this.data = { title: "", subtitle: "", status: "", footer: "", steps: [] };
   }
-  set(data) { this.data = { ...this.data, ...data, steps: data.steps ?? this.data.steps }; this.render(); }
+  set(data) {
+    if (data.steps) this.index = null;
+    this.data = { ...this.data, ...data, steps: data.steps ?? this.data.steps };
+    this.container.hidden = false; // shown at once (callers check it), drawn on the next update
+    this.schedule();
+  }
   step(id, patch) {
-    const s = this.data.steps.find(x => x.id === id);
-    if (s) Object.assign(s, patch); else this.data.steps.push({ id, ...patch });
-    this.render();
+    let s = this.index?.get(id);
+    if (!s) {
+      s = this.data.steps.find(x => x.id === id);
+      if (!s) { s = { id }; this.data.steps.push(s); }
+      (this.index ??= new Map()).set(id, s);
+    }
+    Object.assign(s, patch);
+    this.schedule();
+  }
+  // Changes are drawn together, at most about ten times a second: a group of 151 lessons
+  // updates every lesson for every batch, and redrawing the card each time fell so far behind
+  // that the page stopped answering (Stop included).
+  schedule() {
+    if (this.pending) return;
+    this.pending = setTimeout(() => { this.pending = null; this.render(); }, 100);
   }
   steps() { return this.data.steps; }
-  hide() { this.container.hidden = true; }
+  hide() {
+    if (this.pending) { clearTimeout(this.pending); this.pending = null; }
+    this.container.hidden = true;
+  }
   render() {
+    if (this.pending) { clearTimeout(this.pending); this.pending = null; }
     const d = this.data;
+    this.index = new Map(d.steps.map(s => [s.id, s]));
     this.container.hidden = false;
     const icon = s => el("span", { class: "tc-icon " + (s.state || "waiting"), "aria-hidden": "true" },
       s.state === "done" ? "✓" : s.state === "failed" ? "✕" : s.state === "skipped" ? "–" : "");

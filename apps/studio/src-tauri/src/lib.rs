@@ -1243,6 +1243,24 @@ fn education_stage(name: Option<&str>) -> Res<Option<EducationStage>> {
         Some(other) => return Err(format!("Unknown education stage {other}")),
     })
 }
+/// Batch progress sent to the page at most a few times a second (training runs several batches
+/// a second; a page redrawing a group's lessons for each one fell behind and stopped answering).
+/// The first and last batch of an epoch always pass, so progress never looks stuck.
+#[derive(Default)]
+pub(crate) struct BatchThrottle(Option<std::time::Instant>);
+impl BatchThrottle {
+    pub(crate) fn pass(&mut self, batch: usize, batches: usize) -> bool {
+        let now = std::time::Instant::now();
+        let due = self.0.is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_millis(250));
+        if due || batch <= 1 || batch >= batches {
+            self.0 = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 fn yes() -> bool {
     true
 }
@@ -1319,7 +1337,13 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         let studio = app.state::<Studio>();
         let id = meta.id.clone();
         let mut meta_now = meta.clone();
+        let mut throttle = BatchThrottle::default();
         let mut observer = |e: &CourseEvent| {
+            if let CourseEvent::Session { event: Event::Batch { batch, batches, .. }, .. } = e {
+                if !throttle.pass(*batch, *batches) {
+                    return;
+                }
+            }
             let _ = app.emit("teach-event", e);
             match e {
                 CourseEvent::Session { event: Event::Batch { .. }, .. } => {}
