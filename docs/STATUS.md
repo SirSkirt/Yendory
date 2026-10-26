@@ -81,6 +81,10 @@ Rewards, in the app: a practice session graded automatically (reasons shown, unc
 rule decides), certain grades accepted, a partial teacher grade (40%) and note given, trained
 (accepted); the § 8 Rewards page shows the ledger (credit, concepts, the session, questions with
 their emphasis and reasons, the audit log with withheld credit and reasons).
+§ 12 Chat (0.5.7): the page was checked in a browser with a stand-in backend (layout at desktop
+and phone widths, light and dark; streaming text; attachments; settings; the chat menu). Prompt
+building, conversion to the model's alphabet and file attachments are unit-tested in Studio, and
+sampling in the Engine; the page has not yet been used in the installed app.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

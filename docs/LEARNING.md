@@ -1022,3 +1022,33 @@ exactly the reply the model gives (tested), and every value is measured:
 Studio shows the tree below the brain scan; any step can be opened in the brain scan, which then
 measures the exact forward pass that made that decision (`Bicameral::measure_ids`).
 
+
+## Conversation replies and Studio's Chat (`learn::sampling`)
+
+Exams, grading and teaching always take the most likely token (greedy). A conversation may
+instead **sample**: `Sampling { temperature, top_k, top_p, repetition_penalty, seed }` decides
+which of the tokens the model itself proposes is written next. The default is greedy, and a
+greedy reply is token for token the exam reply (`tests/sampling.rs`).
+
+- **Temperature** above 0 draws the next token in proportion to its probability raised to
+  1/temperature (computed from logarithms, so small probabilities do not underflow).
+- **Top-k** keeps the k most likely tokens; **top-p** keeps the most likely tokens whose
+  probabilities add up to p (always at least one).
+- **Repetition penalty** divides the probability of every token already in the reply (greedy
+  replies too).
+- The **seed** makes a sampled reply reproducible: the same seed, settings and prompt give the
+  same reply. Studio records the seed of every reply.
+
+`reply_with` generates through the KV cache (`Bicameral::generate_cached_with`, the same loop
+as greedy generation) and hands every token's text to a callback as it is written; the callback
+can stop the reply.
+
+Studio's **§ 12 Chat** keeps conversations per model in `models/<id>/chats/<chat>.json`. The
+prompt is written the way the model was taught turns: the chat's context text, Study Mode
+memories (when on), earlier turns as `U: …` / `N: …` lines (newest kept first; "as many as fit",
+"the last few" or "none"), the text of attached files, and the message. Room for the longest
+reply is kept, and what does not fit is left out (oldest turns first; attached text is cut and
+the cut is recorded with the reply). Text the model's alphabet cannot write (emoji, other
+alphabets) is converted where it can be (typographic quotes, accents) and otherwise left out,
+with the count shown. Images are stored with the chat as data for networks that can see them;
+no current network reads them, and Studio says so.

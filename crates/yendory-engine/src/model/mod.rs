@@ -13,7 +13,9 @@ mod tape;
 mod think;
 pub use crate::tokenizer::TokenId;
 use crate::tokenizer::Tokenizer;
-pub use cache::{CacheStats, GateTrace, KvCache, NeuroRound, NeuroTrace, StageTrace, Trace, TRACE_PATTERNS};
+pub use cache::{
+    argmax, CacheStats, GateTrace, KvCache, NeuroRound, NeuroTrace, StageTrace, Trace, TRACE_PATTERNS,
+};
 pub use grow::{compare_outputs, Growth, GrowthOption, NotOffered, OutputComparison, Preservation};
 pub use measure::{AblationEffects, Measurements, NeuroEffects};
 pub use neuro::NeuroSpec;

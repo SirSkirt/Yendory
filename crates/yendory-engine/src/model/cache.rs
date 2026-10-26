@@ -829,6 +829,20 @@ impl Bicameral {
         max_tokens: usize,
         abl: Ablation,
     ) -> Result<Vec<TokenId>, String> {
+        self.generate_cached_with(ids, max_tokens, abl, |probs, _| argmax(probs), |_| true)
+    }
+    /// Generation from token ids with `choose` picking each next token from the model's
+    /// probabilities (it also sees the tokens generated so far) and `each` called with every
+    /// token as it is produced; `each` returning false stops the reply after that token. Stops
+    /// after a newline token or `max_tokens` tokens. Generated ids are kept as emitted.
+    pub fn generate_cached_with(
+        &self,
+        ids: &[TokenId],
+        max_tokens: usize,
+        abl: Ablation,
+        mut choose: impl FnMut(&[f32], &[TokenId]) -> TokenId,
+        mut each: impl FnMut(TokenId) -> bool,
+    ) -> Result<Vec<TokenId>, String> {
         let mut cache = KvCache::new(self, abl);
         let mut probs = Vec::new();
         for &id in ids {
@@ -839,15 +853,20 @@ impl Bicameral {
         }
         let mut output = Vec::new();
         for _ in 0..max_tokens {
-            let next = probs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0 as TokenId;
+            let next = choose(&probs, &output);
             output.push(next);
-            if next == b'\n' as TokenId {
+            if !each(next) || next == b'\n' as TokenId {
                 break;
             }
             probs = self.predict_cached(&mut cache, next)?;
         }
         Ok(output)
     }
+}
+
+/// The most likely token (the last of equally likely ones, as generation always chose).
+pub fn argmax(probs: &[f32]) -> TokenId {
+    probs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map_or(0, |x| x.0) as TokenId
 }
 #[cfg(test)]
 mod tests {

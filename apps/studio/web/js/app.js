@@ -56,6 +56,7 @@ function showActive(meta) {
     ? el("span", {}, "Open: ", el("b", {}, meta.name), ` · step ${fmt(meta.step)}`)
     : "No model open");
   $("activeEntry").hidden = !meta;
+  window.showChat?.(meta);
   if (!meta) return;
   $("activeName").textContent = meta.name;
   refreshSaved();

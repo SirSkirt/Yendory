@@ -20,6 +20,7 @@ use yendory_engine::{
     size_presets, Ablation, Bicameral, Config, Focus, Measurements, ThinkOptions, ThinkingTree, TokenId,
 };
 
+mod chat;
 mod courses;
 mod designer;
 mod growth;
@@ -124,6 +125,9 @@ struct Studio {
     stop: Arc<AtomicBool>,
     downloading: AtomicBool,
     cancel_download: Arc<AtomicBool>,
+    /// A chat reply is being written (one at a time), and the request to stop it.
+    chatting: AtomicBool,
+    chat_stop: Arc<AtomicBool>,
 }
 
 fn models_dir(app: &AppHandle) -> Res<PathBuf> {
@@ -1793,6 +1797,20 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            chat::chats,
+            chat::chat_open,
+            chat::chat_new,
+            chat::chat_rename,
+            chat::chat_pin,
+            chat::chat_delete,
+            chat::chat_settings,
+            chat::chat_attach,
+            chat::chat_attach_paths,
+            chat::chat_measure,
+            chat::chat_send,
+            chat::chat_regenerate,
+            chat::chat_stop,
+            chat::chat_export,
             saved_lessons,
             forget_saved_lesson,
             model_checkpoints,
