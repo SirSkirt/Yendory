@@ -407,6 +407,74 @@ fn held_out_checks_fit_the_budget_or_run_on_the_cpu() {
         }
         let got = got.unwrap().unwrap();
         assert!((got - cpu).abs() <= 1e-4 * cpu.max(1.), "{label}: {got} vs {cpu}");
+        // Each row's own loss, as the CPU gives it.
+        let per_cpu = yendory_engine::learn::row_losses(&start, &rows, Ablation::default()).unwrap();
+        set_device(Device::Gpu(yendory_engine::gpu::Api::Auto));
+        let per_gpu =
+            Trainer::new(&start).gpu_row_losses(&start, &rows, Ablation::default()).unwrap().unwrap();
+        set_device(Device::Cpu);
+        let _ = yendory_engine::learn::take_device_notice();
+        assert_eq!(per_gpu.len(), rows.len());
+        for (g, c) in per_gpu.iter().zip(&per_cpu) {
+            assert!((g - c).abs() <= 1e-4 * c.max(1.), "{label}: row loss {g} vs {c}");
+        }
     }
     memory::set_memory_settings(MemorySettings::default());
+}
+
+/// Conversation practice trains on the GPU, scores its practice pool there, and reports every
+/// measure at every check.
+#[test]
+fn conversation_practice_runs_on_the_gpu() {
+    use std::sync::atomic::AtomicBool;
+    use yendory_engine::learn::conversation::{
+        converse, parse_dialogue, ConversationConfig, ConversationSet,
+    };
+    let _lock = GLOBALS.lock().unwrap();
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    if yendory_engine::learn::gpu_name().is_err() {
+        println!("no GPU available; skipped");
+        return;
+    }
+    memory::set_memory_settings(MemorySettings::default());
+    let model = Bicameral::with_config(
+        Config {
+            d: 16,
+            heads: 2,
+            ff: 24,
+            blocks: 2,
+            split: 1,
+            r1: 12,
+            r2: 10,
+            max_tokens: 256,
+            ..Config::default()
+        },
+        3,
+    );
+    let dialogues = (0..160)
+        .map(|i| {
+            parse_dialogue(&format!(
+                "Ann: Do you like the color number {i}?\nBen: Yes, I like it.\nAnn: Why?\nBen: Because it is bright.\nAnn: Is number {i} your favourite?\nBen: Yes, number {i} is."
+            ))
+            .unwrap()
+        })
+        .collect();
+    let sets = [ConversationSet { name: "x".into(), dialogues, nova: None, hold_out: true }];
+    let cfg = ConversationConfig {
+        tokens: 20_000,
+        batch_size: 8,
+        learning_rate: 3e-3,
+        evaluations: 4,
+        pool_size: 64,
+        context_tests: 1,
+        ..ConversationConfig::default()
+    };
+    set_device(Device::Gpu(yendory_engine::gpu::Api::Auto));
+    let r = converse(&model, &sets, &[], &[], &cfg, &mut |_| {}, &mut |_| Ok(()), &AtomicBool::new(false));
+    set_device(Device::Cpu);
+    let r = r.unwrap();
+    println!("checks: {}", r.checks.len());
+    assert!(!r.checks.is_empty());
+    assert!(r.checks.iter().all(|c| c.context.is_some() && c.stage_losses.len() == 3));
+    assert!(r.best_loss <= r.baseline_loss);
 }

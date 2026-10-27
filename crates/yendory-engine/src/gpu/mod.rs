@@ -2153,6 +2153,34 @@ impl GpuModel {
         result
     }
 
+    /// Each row's own mean loss (its weighted loss divided by max(its total weight, 1), as
+    /// `Bicameral::loss` gives it), computed `chunk` rows at a time.
+    pub fn row_losses(
+        &self,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        chunk: usize,
+    ) -> Result<Vec<f32>, String> {
+        let mut out = Vec::with_capacity(rows.len());
+        self.with_pool(|pool| {
+            for part in rows.chunks(chunk.max(1)) {
+                let t = part.iter().map(|r| r.ids.len()).max().unwrap_or(1);
+                let (mut g, losses, n) = self.record(pool, model, part, abl, Some(1.), false, false)?;
+                self.run(&mut g);
+                let per_token = self.gpu.read(self.buffer(&g, losses), n)?;
+                g.finish();
+                for (k, r) in part.iter().enumerate() {
+                    let sum: f64 = per_token[k * t..(k + 1) * t].iter().map(|&x| x as f64).sum();
+                    let weight: f64 = r.mask.iter().map(|&m| m as f64).sum();
+                    out.push((sum / weight.max(1.)) as f32);
+                }
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
     /// Replaces the weights on the GPU with the model's (hybrid training: the CPU takes the
     /// optimizer step).
     pub fn set_weights(&mut self, model: &Bicameral) -> Result<(), String> {

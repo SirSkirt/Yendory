@@ -688,36 +688,6 @@ fn spread(len: usize, n: usize) -> Vec<usize> {
     (0..n).map(|i| i * len / n).collect()
 }
 
-/// Each row's own loss (rows in parallel threads).
-fn row_losses(model: &Bicameral, rows: &[Row]) -> Result<Vec<f32>, String> {
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    let threads = super::cpu_threads().max(1).min(rows.len());
-    let chunk = rows.len().div_ceil(threads);
-    let parts: Vec<Result<Vec<f32>, String>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = rows
-            .chunks(chunk)
-            .map(|part| {
-                scope.spawn(move || {
-                    part.iter()
-                        .map(|r| model.loss(&r.ids, &r.targets, &r.mask, Ablation::default()))
-                        .collect()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err("A scoring thread failed".into())))
-            .collect()
-    });
-    let mut out = Vec::with_capacity(rows.len());
-    for p in parts {
-        out.extend(p?);
-    }
-    Ok(out)
-}
-
 /// Greedy replies to many prompts (in parallel threads).
 fn replies(model: &Bicameral, prompts: &[String], max_tokens: usize) -> Vec<String> {
     if prompts.is_empty() {
@@ -801,7 +771,6 @@ fn other_name(word: &str, own: &str) -> bool {
 /// What is fixed for a whole run: the held-out material and the tests.
 struct Fixed<'a> {
     cfg: &'a ConversationConfig,
-    train: &'a [Practice<'a>],
     /// Held-out rows per stage.
     probes: Vec<Vec<Row>>,
     listening: (Vec<Row>, Vec<Row>),
@@ -827,8 +796,6 @@ struct Measured {
     context: Option<ContextScore>,
     reply_checks: Option<ReplyChecks>,
     samples: Vec<Sample>,
-    /// The practice pool measured again on this checkpoint, with the stage it was measured for.
-    pool: Option<(usize, Vec<(usize, f32)>)>,
 }
 
 /// Losses measured on the GPU before the rest of a check runs on a CPU thread.
@@ -888,9 +855,8 @@ impl Fixed<'_> {
         Some(out)
     }
 
-    /// Measures a checkpoint. `gpu` holds the losses when the GPU measured them; `pool` is the
-    /// practice pool to measure again (with the stage's window).
-    #[allow(clippy::too_many_arguments)]
+    /// Measures a checkpoint (the answers Nova writes: Classroom, context tests, reply checks,
+    /// samples). `gpu` holds the losses when the GPU measured them.
     fn measure(
         &self,
         model: Bicameral,
@@ -898,7 +864,6 @@ impl Fixed<'_> {
         tokens: u64,
         train_loss: f32,
         gpu: Option<GpuPart>,
-        pool: Option<(Vec<usize>, Window, usize)>,
     ) -> Result<Measured, String> {
         let GpuPart { stage_losses, listening, reading } = match gpu {
             Some(g) => g,
@@ -916,12 +881,6 @@ impl Fixed<'_> {
                 original: original.clone(),
             })
             .collect();
-        let pool = match pool {
-            Some((ids, window, stage)) => {
-                Some((stage, measure_pool(&model, self.cfg, self.train, &ids, window)?))
-            }
-            None => None,
-        };
         Ok(Measured {
             model,
             step,
@@ -934,13 +893,14 @@ impl Fixed<'_> {
             context,
             reply_checks,
             samples,
-            pool,
         })
     }
 }
 
-/// Nova's loss on each pool conversation (its first window of the stage).
+/// Nova's loss on each pool conversation (its first window of the stage): on the GPU when
+/// training is there (the trainer's weights, synced to `model`), else on the CPU.
 fn measure_pool(
+    trainer: Option<&super::Trainer>,
     model: &Bicameral,
     cfg: &ConversationConfig,
     train: &[Practice<'_>],
@@ -955,7 +915,11 @@ fn measure_pool(
             keep.push(i);
         }
     }
-    Ok(keep.into_iter().zip(row_losses(model, &rows)?).collect())
+    let losses = match trainer.and_then(|t| t.gpu_row_losses(model, &rows, Ablation::default())) {
+        Some(l) => l?,
+        None => super::row_losses(model, &rows, Ablation::default())?,
+    };
+    Ok(keep.into_iter().zip(losses).collect())
 }
 
 /// The practice pool: conversations drawn by how hard Nova finds them.
@@ -1238,7 +1202,6 @@ pub fn converse(
         .collect();
     let fixed = Fixed {
         cfg,
-        train: &train,
         probes,
         listening: listen,
         guard: spread(questions.len(), cfg.guard_questions).into_iter().map(|i| questions[i]).collect(),
@@ -1247,7 +1210,7 @@ pub fn converse(
         check_prompts,
         samples,
     };
-    let baseline = fixed.measure(current.clone(), 0, 0, 0., None, None)?;
+    let baseline = fixed.measure(current.clone(), 0, 0, 0., None)?;
     let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
     let baseline_loss = mean(&baseline.stage_losses);
     let baseline_right: Vec<bool> = baseline.classroom.clone();
@@ -1292,7 +1255,12 @@ pub fn converse(
         backoffs: 0,
         lr_scale: 1.,
     };
-    let new_pool = |model: &Bicameral, stage: usize, rng: &mut Rng| -> Result<Option<Pool>, String> {
+    // Nova's loss on a new pool of conversations for a stage: on the GPU when training is there.
+    let new_pool = |trainer: &super::Trainer,
+                    model: &Bicameral,
+                    stage: usize,
+                    rng: &mut Rng|
+     -> Result<Option<Pool>, String> {
         if !cfg.targeted {
             return Ok(None);
         }
@@ -1300,9 +1268,10 @@ pub fn converse(
         let mut ids: Vec<usize> = (0..n).map(|_| rng.below(train.len())).collect();
         ids.sort_unstable();
         ids.dedup();
-        Ok(Some(Pool::new(measure_pool(model, cfg, &train, &ids, windows[stage])?, cfg)))
+        Ok(Some(Pool::new(measure_pool(Some(trainer), model, cfg, &train, &ids, windows[stage])?, cfg)))
     };
-    let mut pool = new_pool(&current, curriculum.stage, &mut rng)?;
+    let mut trainer = super::Trainer::new(&current);
+    let mut pool = new_pool(&trainer, &current, curriculum.stage, &mut rng)?;
 
     let mut best: Option<(Bicameral, ConversationCheck)> = None;
     let mut best_loss = baseline_loss;
@@ -1320,7 +1289,7 @@ pub fn converse(
     let mut judge = |m: Measured,
                      curriculum: &mut Curriculum,
                      pool: &mut Option<Pool>,
-                     rng: &mut Rng,
+                     rebuild: &mut Option<usize>,
                      observer: &mut dyn FnMut(&ConversationEvent)|
      -> Result<bool, String> {
         let loss = mean(&m.stage_losses);
@@ -1381,11 +1350,6 @@ pub fn converse(
         }
         observer(&ConversationEvent::Checked(c.clone()));
         checks.push(c);
-        if let (Some(p), Some((stage, measured))) = (pool.as_mut(), m.pool) {
-            if stage == curriculum.stage {
-                *p = Pool::new(measured, cfg);
-            }
-        }
         let mut end = false;
         if cfg.curriculum {
             match curriculum.decide(m.stage_losses[curriculum.stage], cfg) {
@@ -1403,7 +1367,9 @@ pub fn converse(
                         backoffs: 0,
                         lr_scale: 1.,
                     };
-                    *pool = new_pool(&m.model, next, rng)?;
+                    // The next stage's pool is measured by the training loop (on the GPU).
+                    *pool = None;
+                    *rebuild = Some(next);
                     observer(&ConversationEvent::Stage {
                         stage: next,
                         name: STAGES[next].0.into(),
@@ -1422,22 +1388,32 @@ pub fn converse(
         Ok(end || (last && misses >= cfg.patience.max(1)))
     };
 
-    let mut trainer = super::Trainer::new(&current);
     std::thread::scope(|scope| -> Result<(), String> {
         let mut pending: Option<std::thread::ScopedJoinHandle<'_, Result<Measured, String>>> = None;
         let join = |h: std::thread::ScopedJoinHandle<'_, Result<Measured, String>>| {
             h.join().map_err(|_| "A conversation check failed".to_string())?
         };
+        // A check fell due while the previous one was still being measured on the CPU: training
+        // carries on, and the check starts as soon as that one is judged (the GPU never waits).
+        let mut due = false;
+        let mut rebuild: Option<usize> = None;
         for step in 0..steps {
             if stop.load(Ordering::Acquire) {
                 stopped = true;
                 break;
             }
-            if pending.as_ref().is_some_and(|h| h.is_finished())
-                && judge(join(pending.take().unwrap())?, &mut curriculum, &mut pool, &mut rng, observer)?
-            {
-                early_stop = true;
-                break;
+            let mut check_now = false;
+            if pending.as_ref().is_some_and(|h| h.is_finished()) {
+                if judge(join(pending.take().unwrap())?, &mut curriculum, &mut pool, &mut rebuild, observer)?
+                {
+                    early_stop = true;
+                    break;
+                }
+                check_now = std::mem::take(&mut due);
+            }
+            if let Some(stage) = rebuild.take() {
+                trainer.sync(&mut current)?;
+                pool = new_pool(&trainer, &current, stage, &mut rng)?;
             }
             let stage = curriculum.stage;
             let mut rows = Vec::with_capacity(cfg.batch_size);
@@ -1493,57 +1469,76 @@ pub fn converse(
                 stage,
             });
             if (step + 1) % eval_every == 0 || step + 1 == steps {
-                if let Some(h) = pending.take() {
-                    if judge(join(h)?, &mut curriculum, &mut pool, &mut rng, observer)? {
-                        early_stop = true;
-                        break;
-                    }
+                if pending.is_some() {
+                    due = true;
+                } else {
+                    check_now = true;
                 }
-                trainer.sync(&mut current)?;
-                let train_loss = (since / since_n.max(1) as f64) as f32;
-                (since, since_n) = (0., 0);
-                let snapshot = current.clone();
-                let refresh = pool.as_ref().map(|p| {
-                    (p.next_ids(train.len(), &mut rng), windows[curriculum.stage], curriculum.stage)
-                });
-                if trainer.on_gpu() {
-                    // The losses on the GPU; the Classroom check, tests, replies and the pool on
-                    // a CPU thread while the GPU keeps training.
-                    let gpu = |rows: &[Row]| {
-                        trainer
-                            .gpu_loss(&current, rows, Ablation::default())
-                            .unwrap_or_else(|| batch_loss(&current, rows, Ablation::default()))
-                    };
-                    let stage_losses = fixed.probes.iter().map(|r| gpu(r)).collect::<Result<Vec<_>, _>>()?;
-                    let listening = if fixed.listening.0.is_empty() {
-                        None
-                    } else {
-                        Some(gpu(&fixed.listening.1)? - gpu(&fixed.listening.0)?)
-                    };
-                    let reading = if fixed.reading_probes.is_empty() {
-                        None
-                    } else {
-                        Some(gpu(&fixed.reading_probes)?)
-                    };
-                    let part = GpuPart { stage_losses, listening, reading };
-                    let fixed = &fixed;
-                    pending = Some(scope.spawn(move || {
-                        fixed.measure(snapshot, step + 1, tokens, train_loss, Some(part), refresh)
-                    }));
-                } else if judge(
-                    fixed.measure(snapshot, step + 1, tokens, train_loss, None, refresh)?,
-                    &mut curriculum,
-                    &mut pool,
-                    &mut rng,
-                    observer,
-                )? {
-                    early_stop = true;
-                    break;
-                }
+            }
+            if !check_now {
+                continue;
+            }
+            trainer.sync(&mut current)?;
+            let train_loss = (since / since_n.max(1) as f64) as f32;
+            (since, since_n) = (0., 0);
+            // The practice pool is measured again now (on the GPU when training is there): a
+            // share of the learned conversations make way for new ones.
+            if let Some(p) = pool.as_mut() {
+                let ids = p.next_ids(train.len(), &mut rng);
+                *p = Pool::new(
+                    measure_pool(Some(&trainer), &current, cfg, &train, &ids, windows[curriculum.stage])?,
+                    cfg,
+                );
+            }
+            let snapshot = current.clone();
+            if trainer.on_gpu() {
+                // The losses on the GPU; the answers Nova writes (Classroom, context tests,
+                // replies) on a CPU thread while the GPU keeps training.
+                let gpu = |rows: &[Row]| {
+                    trainer
+                        .gpu_loss(&current, rows, Ablation::default())
+                        .unwrap_or_else(|| batch_loss(&current, rows, Ablation::default()))
+                };
+                let stage_losses = fixed.probes.iter().map(|r| gpu(r)).collect::<Result<Vec<_>, _>>()?;
+                let listening = if fixed.listening.0.is_empty() {
+                    None
+                } else {
+                    Some(gpu(&fixed.listening.1)? - gpu(&fixed.listening.0)?)
+                };
+                let reading =
+                    if fixed.reading_probes.is_empty() { None } else { Some(gpu(&fixed.reading_probes)?) };
+                let part = GpuPart { stage_losses, listening, reading };
+                let fixed = &fixed;
+                pending = Some(
+                    scope.spawn(move || fixed.measure(snapshot, step + 1, tokens, train_loss, Some(part))),
+                );
+            } else if judge(
+                fixed.measure(snapshot, step + 1, tokens, train_loss, None)?,
+                &mut curriculum,
+                &mut pool,
+                &mut rebuild,
+                observer,
+            )? {
+                early_stop = true;
+                break;
             }
         }
         if let Some(h) = pending.take() {
-            if judge(join(h)?, &mut curriculum, &mut pool, &mut rng, observer)? && !stopped {
+            if judge(join(h)?, &mut curriculum, &mut pool, &mut rebuild, observer)? && !stopped {
+                early_stop = true;
+            }
+        }
+        // The last check fell due while another was being measured: it runs now.
+        if due && !stopped && !early_stop {
+            trainer.sync(&mut current)?;
+            let train_loss = (since / since_n.max(1) as f64) as f32;
+            if judge(
+                fixed.measure(current.clone(), steps, tokens, train_loss, None)?,
+                &mut curriculum,
+                &mut pool,
+                &mut rebuild,
+                observer,
+            )? {
                 early_stop = true;
             }
         }

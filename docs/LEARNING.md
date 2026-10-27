@@ -1139,6 +1139,11 @@ same measures either way.
   - **Listening measure**: for held-out replies that use earlier turns, the loss with only the
     turn they answer minus the loss with the whole conversation before them (nats per token;
     higher means Nova uses the conversation more).
+- **Speed.** With GPU training, every loss in a check (the held-out conversations, listening,
+  read text) and the practice pool's per-conversation losses are computed on the GPU; the
+  answers Nova writes (Classroom questions, context tests, reply checks, samples) are written on
+  a CPU thread while the GPU keeps training. Training never waits for that thread: a check that
+  falls due while the last one is still being written starts as soon as it is judged.
 - **Reply checks** (`reply_checks`). Nova replies in the middle of 24 held-out conversations, and
   the replies are counted for: empty, repeating (the same three words twice, or its previous
   reply again), echoing the other person, on topic (a topic word of the last two turns, or a
