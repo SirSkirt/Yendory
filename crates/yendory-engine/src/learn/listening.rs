@@ -427,6 +427,22 @@ pub struct ContextScore {
     pub skills: Vec<(Skill, usize, usize)>,
     /// A few answers, for reading.
     pub examples: Vec<(String, String, bool)>,
+    /// One pair of each skill in full: both conversations and both answers.
+    #[serde(default)]
+    pub pairs: Vec<PairExample>,
+}
+
+/// A context test as Nova answered it: the two conversations, her answers and whether each was
+/// right.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PairExample {
+    pub skill: Skill,
+    pub a: String,
+    pub a_reply: String,
+    pub a_right: bool,
+    pub b: String,
+    pub b_reply: String,
+    pub b_right: bool,
 }
 
 /// Scores replies to the tests (`replies[i]` answers `tests[i / 2]`, version a then b).
@@ -451,6 +467,17 @@ pub fn score(tests: &[ContextTest], replies: &[String]) -> ContextScore {
         }
         if s.examples.len() < 4 && i % (tests.len() / 4).max(1) == 0 {
             s.examples.push((t.a.prompt(), ra.clone(), a));
+        }
+        if !s.pairs.iter().any(|p| p.skill == t.skill) {
+            s.pairs.push(PairExample {
+                skill: t.skill,
+                a: t.a.prompt(),
+                a_reply: ra.clone(),
+                a_right: a,
+                b: t.b.prompt(),
+                b_reply: rb.clone(),
+                b_right: b,
+            });
         }
     }
     s.skills = per.into_iter().map(|(k, (p, t))| (k, p, t)).collect();
@@ -487,6 +514,7 @@ mod tests {
             replies.push(t.a.answer.clone()); // the same answer to both: never passes (except "unsure")
         }
         let s = score(&tests, &replies);
+        assert_eq!(s.pairs.len(), Skill::ALL.len(), "one example pair of each skill");
         let unsure_pairs = tests.iter().filter(|t| t.skill == Skill::Uncertainty).count();
         assert_eq!(s.passed, unsure_pairs, "a fixed answer passes only where the right answer is the same");
         let right: Vec<String> =

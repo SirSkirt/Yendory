@@ -676,3 +676,14 @@ tr.nb-later td { color: var(--ink-soft); }
 .conv-teach .check { align-items: flex-start; }
 .conv-checks { margin-bottom: 4px; }
 .nowrap { white-space: nowrap; }
+
+.conv-samples summary { cursor: pointer; font-size: 13px; color: var(--accent); margin: 4px 0; }
+.conv-transcript { border-left: 2px solid var(--rule-strong); padding: 2px 0 2px 8px; margin: 6px 0 10px; font-size: 13px; max-height: 320px; overflow-y: auto; min-width: 280px; }
+.conv-turn { display: grid; grid-template-columns: 4.6em 1fr; gap: 6px; padding: 1px 0; }
+.conv-who { font: 600 11px/1.9 var(--mono); color: var(--ink-soft); text-transform: uppercase; }
+.conv-turn.nova .conv-who { color: var(--accent); }
+.conv-turn.reply { background: var(--accent-soft); border-radius: 4px; padding: 2px 4px; margin-top: 2px; }
+.conv-turn.original { color: var(--ink-soft); }
+.conv-pair { margin: 6px 0 12px; }
+.conv-pair-skill { font-weight: 600; font-size: 13px; }
+.conv-pair-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }

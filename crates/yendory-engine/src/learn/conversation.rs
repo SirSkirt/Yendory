@@ -1210,11 +1210,20 @@ pub fn converse(
             break;
         }
     }
+    // Samples show Nova following a conversation: her reply deep in a held-out conversation
+    // (the latest of her first five replies whose conversation so far fits with room for the
+    // reply), with at least three turns before it.
+    let fits = |prompt: &str| {
+        current.tokenizer.encode(prompt).is_ok_and(|t| t.len() + 48 <= current.config.max_tokens)
+    };
     let samples: Vec<(String, String)> = held
         .iter()
-        .filter(|p| p.nova == p.dialogue.pair().1)
-        .filter_map(|p| p.prompt_at(cfg, 0))
-        .filter(|(p, ..)| p.len() < 400)
+        .filter_map(|p| {
+            (1..5)
+                .rev()
+                .filter_map(|n| p.prompt_at(cfg, n))
+                .find(|(prompt, _, before)| before.len() >= 3 && fits(prompt))
+        })
         .map(|(p, o, _)| (p, o))
         .take(3)
         .collect();
@@ -1817,6 +1826,11 @@ mod tests {
             assert_eq!(c.stage_losses.len(), 3);
             assert!(c.context.is_some() && c.reply_checks.is_some() && c.reading_loss.is_some());
             assert!(c.samples.iter().all(|s| s.prompt.ends_with("N: ")));
+            assert!(
+                !c.samples.is_empty() && c.samples.iter().all(|s| s.prompt.lines().count() >= 4),
+                "samples show a conversation: {:?}",
+                c.samples
+            );
         }
         let stopped =
             converse(&m, &sets, &[], &[], &cfg, &mut |_| {}, &mut |_| Ok(()), &AtomicBool::new(true))

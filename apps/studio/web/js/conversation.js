@@ -95,11 +95,35 @@
   }
 
   // ---- a run ---------------------------------------------------------------------------------
+  // A conversation as Nova read it ("U: ..." / "N: ..." lines), one turn per line, then her
+  // reply and (for held-out conversations) what the person really said.
+  function transcript(prompt, reply, extra) {
+    const turns = prompt.split("\n").filter(l => l.trim() && l !== "N: ");
+    return el("div", { class: "conv-transcript" },
+      ...turns.map(l => {
+        const nova = l.startsWith("N: ");
+        return el("div", { class: "conv-turn" + (nova ? " nova" : "") }, el("span", { class: "conv-who" }, nova ? "Nova" : "Them"), l.replace(/^[UN]: /, ""));
+      }),
+      el("div", { class: "conv-turn nova reply" }, el("span", { class: "conv-who" }, "Nova now"), reply || "(empty reply)"),
+      extra || "");
+  }
   function sampleView(samples) {
-    return el("div", { class: "conv-samples" }, ...samples.map(s => el("div", { class: "conv-sample" },
-      el("div", { class: "mono note" }, s.prompt.replace(/\n/g, " ⏎ ")),
-      el("div", {}, el("b", {}, "Nova: "), s.reply || "(empty)"),
-      el("div", { class: "note" }, "In the conversation: ", s.original))));
+    if (!samples.length) return "";
+    return el("details", { class: "conv-samples" },
+      el("summary", {}, `${samples.length} held-out conversation(s): Nova's reply after the whole conversation so far`),
+      ...samples.map(s => transcript(s.prompt, s.reply,
+        el("div", { class: "conv-turn original" }, el("span", { class: "conv-who" }, "Real reply"), s.original))));
+  }
+  function pairsView(c) {
+    if (!c?.pairs?.length) return "";
+    const mark = ok => el("span", { class: ok ? "ok" : "bad" }, ok ? " ✓" : " ✗");
+    return el("details", { class: "conv-samples" },
+      el("summary", {}, "Context tests: one pair of each kind, in full"),
+      ...c.pairs.map(p => el("div", { class: "conv-pair" },
+        el("div", { class: "conv-pair-skill" }, SKILL[p.skill] || p.skill, p.a_right && p.b_right ? el("span", { class: "ok" }, " · passed") : el("span", { class: "warn" }, " · not passed")),
+        el("div", { class: "conv-pair-sides" },
+          transcript(p.a, p.a_reply, mark(p.a_right)),
+          transcript(p.b, p.b_reply, mark(p.b_right))))));
   }
   const STAGE = ["short exchanges", "a few turns", "whole conversations"];
   const SKILL = { names: "names", locations: "locations", changing_facts: "changing facts", corrections: "corrections", references: "references", follow_ups: "follow-ups", uncertainty: "uncertainty" };
@@ -151,7 +175,7 @@
           e.classroom_total ? el("div", { class: "note" }, `−${e.classroom_lost} +${e.classroom_gained}`) : ""),
         el("td", { class: "num" }, e.reading_loss != null ? e.reading_loss.toFixed(3) : "—"),
         el("td", { class: e.accepted ? "ok" : "" }, e.accepted ? "kept" : `not kept: ${e.reason}`),
-        el("td", {}, checksView(e.reply_checks), sampleView(e.samples))));
+        el("td", {}, checksView(e.reply_checks), sampleView(e.samples), pairsView(e.context))));
     } else if (e.type === "stage") {
       log("INFO", `Conversation: now ${e.name}. ${e.reason}`);
       $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 9, class: e.mastered ? "ok" : "warn" }, `→ ${e.name}: ${e.reason}`)));
