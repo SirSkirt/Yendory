@@ -42,6 +42,22 @@ const MAX_CHECKPOINT_BYTES: usize = if usize::BITS >= 64 { 12_200_000_000u64 as 
 
 type Res<T> = Result<T, String>;
 
+/// A token count as people read it: 160M, 2.5M, 400K.
+pub(crate) fn tokens_text(n: u64) -> String {
+    let short = |x: f64, unit: &str| {
+        if (x - x.round()).abs() < 0.05 {
+            format!("{:.0}{unit}", x.round())
+        } else {
+            format!("{x:.1}{unit}")
+        }
+    };
+    match n {
+        n if n >= 1_000_000 => short(n as f64 / 1e6, "M"),
+        n if n >= 1_000 => short(n as f64 / 1e3, "K"),
+        n => n.to_string(),
+    }
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -1820,6 +1836,7 @@ pub fn run() {
             conversation::conversation_sources,
             conversation::conversation_material,
             conversation::converse,
+            courses::add_plan_step,
             saved_lessons,
             forget_saved_lesson,
             model_checkpoints,
@@ -1945,6 +1962,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_counts_read_as_people_say_them() {
+        assert_eq!(tokens_text(160_000_000), "160M");
+        assert_eq!(tokens_text(2_500_000), "2.5M");
+        assert_eq!(tokens_text(2_000_000), "2M");
+        assert_eq!(tokens_text(400_000), "400K");
+        assert_eq!(tokens_text(999), "999");
+    }
 
     #[test]
     fn zip_courses_unpack_txt_files_only() {

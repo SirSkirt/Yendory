@@ -5254,7 +5254,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "yendory-engine"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -5266,7 +5266,7 @@ dependencies = [
 
 [[package]]
 name = "yendory-studio"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "serde",
  "serde_json",

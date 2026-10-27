@@ -867,13 +867,13 @@ function onDownload(e) {
 
 let readStart = 0;
 let readParts = [];
-$("read").addEventListener("click", safe(async () => {
-  if (!active) throw new Error("Open or create a model first");
+// The Reading page's settings, as the backend (and a plan's reading step) takes them.
+function readingOptions() {
   const parts = chosen();
-  if (!parts.length) throw new Error("Tick the corpora to read (download one, generate practice or use a text file first)");
+  if (!parts.length) throw new Error("Tick the corpora to read on § 2 Reading (download one, generate practice or use a text file first)");
   const stages = {};
   for (const sel of document.querySelectorAll("#stageMap select")) stages[sel.dataset.cat] = sel.value;
-  const options = {
+  return {
     parts: parts.map(c => ({ corpusId: c.id, share: mix[c.id].share })),
     tokens: Number($("readTokens").value),
     batchSize: Number($("readBatch").value),
@@ -884,6 +884,12 @@ $("read").addEventListener("click", safe(async () => {
     mode: $("readMode").value,
     stages,
   };
+}
+window.readingOptions = readingOptions;
+$("read").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open or create a model first");
+  const options = readingOptions();
+  const parts = chosen();
   readParts = parts;
   $("evalTable").tBodies[0].replaceChildren();
   $("readEntry").hidden = false;

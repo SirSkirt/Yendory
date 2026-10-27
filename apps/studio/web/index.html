@@ -344,7 +344,26 @@
       <label>Classroom answers a checkpoint may lose (%) <input type="number" id="convDrop" min="0" max="100" step="0.5" value="2"></label>
       <label class="check wide"><input type="checkbox" id="convBoth" checked> Practise each conversation as both people</label>
       <label class="check wide"><input type="checkbox" id="convSituations"> Put the situation in front of a conversation when the dataset has one (context only, never trained)</label>
+      <label>Read text mixed in (%) <input type="number" id="convReading" min="0" max="50" value="10"></label>
+      <label>Its held-out loss may rise (%) <input type="number" id="convReadingRise" min="0" max="100" step="0.5" value="2"></label>
     </div>
+    <p class="note" id="convReadingNote">—</p>
+
+    <h4>How Nova is taught</h4>
+    <p class="note">Each part can be switched off, so a run can show what it changes. Every check reports the same measures either way.</p>
+    <div class="settings conv-teach">
+      <label class="check wide"><input type="checkbox" id="convCurriculum" checked> <b>Easy to hard:</b> short exchanges, then a few turns, then whole conversations. A stage is left only when it is mastered <i>and</i> no longer improving; a plateau before mastery means stuck, not ready, and the learning rate is halved (twice at most).</label>
+      <label>Mastered at a held-out loss of at most <input type="number" id="convMastery" min="0.1" max="10" step="0.1" value="2"></label>
+      <label>…or this much lower than when the stage began (%) <input type="number" id="convMasteryGain" min="0" max="90" value="10"></label>
+      <label>Earlier stages revisited (% of conversations) <input type="number" id="convReview" min="0" max="50" value="15"></label>
+      <label class="check wide"><input type="checkbox" id="convAdvanceStuck"> When still stuck, move on to the next stage (marked as not mastered) instead of stopping the run there</label>
+      <label class="check wide"><input type="checkbox" id="convTargeted" checked> <b>Practise what Nova finds hard:</b> conversations are drawn by Nova's own loss on them, at most 3 times and at least ¼ as often as an average one, so what she already handles is kept up</label>
+      <label>Weight of replies that use earlier turns <input type="number" id="convContextWeight" min="1" max="10" step="0.5" value="2"></label>
+      <label>Listening practice (% of rows) <input type="number" id="convListening" min="0" max="50" value="10"></label>
+      <label>Context tests per kind <input type="number" id="convTests" min="0" max="50" value="12"></label>
+      <label class="check wide"><input type="checkbox" id="convReplyChecks" checked> <b>Check Nova's replies</b> in the middle of held-out conversations: empty, repeating, echoing, on topic, asking, its own name, an assistant's voice (measured, never trained on)</label>
+    </div>
+    <p class="note">The <b>context tests</b> are pairs of conversations that differ in one earlier fact: a name, where someone went, a fact that changed, a correction, who "she" is, a follow-up, or something never said ("I do not know" is right). A pair passes only when Nova's answer follows the fact in both. They use names, places and things the listening practice never uses, and are never trained on, so they measure whether listening generalises.</p>
     <p class="note" id="convNote">—</p>
     <div class="actions">
       <button type="button" id="converse" class="primary">Practise conversations</button>
@@ -356,7 +375,7 @@
       <div class="meter"><div id="convBar"></div></div>
       <p class="mono" id="convLine">—</p>
       <table class="ledger compact" id="convChecks">
-        <thead><tr><th class="num">Tokens</th><th class="num">Train loss</th><th class="num" title="Loss of Nova's lines in held-out conversations">Held-out loss</th><th class="num">Classroom</th><th>Decision</th><th>Nova's replies in held-out conversations</th></tr></thead>
+        <thead><tr><th class="num">Tokens</th><th>Stage</th><th class="num" title="Loss of Nova's lines in held-out conversations: the mean, then short exchanges · a few turns · whole conversations">Held-out loss</th><th class="num" title="How much the earlier turns lower the loss of replies that use them (higher: she listens more)">Listening</th><th class="num" title="Context-test pairs passed (both versions right)">Context</th><th class="num" title="Held-out Classroom questions right; lost (right before practice, wrong now) and gained">Classroom</th><th class="num" title="Held-out loss on text the model read">Reading</th><th>Decision</th><th>Nova's replies</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -503,7 +522,7 @@
   <!-- § 7 Planner -->
   <section class="page" id="page-planner" hidden>
     <h2><span class="sec">§ 7</span> Planner</h2>
-    <p class="lede">A plan teaches saved courses to one model, in order and unattended. Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
+    <p class="lede">A plan trains one model unattended, in order: reading (§ 2), saved courses (§ 3, § 6) and conversation practice (§ 4). Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
     <div class="actions"><button type="button" id="newPlan" class="primary">New plan for the open model…</button></div>
     <table class="ledger" id="planList">
       <thead><tr><th>Plan</th><th>Model</th><th class="num">Courses passed</th><th>Status</th><th></th></tr></thead>
@@ -514,10 +533,15 @@
       <h3 id="planTitle">—</h3>
       <p id="planMessage"></p>
       <table class="ledger compact" id="planCourses">
-        <thead><tr><th>#</th><th>Course</th><th class="num">Required</th><th class="num">Grade</th><th>State</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Step</th><th class="num">Required</th><th class="num">Grade</th><th>State</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="line-form"><select id="planAddCourse"></select><button type="button" id="planAdd">Add course</button></div>
+      <div class="line-form">
+        <button type="button" id="planAddReading">Add Reading (the § 2 settings)</button>
+        <button type="button" id="planAddConversation">Add Conversation practice (the § 4 settings)</button>
+        <span class="note">A plan can read, then teach courses, then practise conversation: each step is taken in order, with the settings it was added with.</span>
+      </div>
       <p class="note reward-status" data-reward-status>Rewards: —</p>
       <p class="note warn" id="readFirstPlan" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
       <div class="actions">
@@ -534,7 +558,7 @@
         <p class="mono" id="planLine">—</p>
         <div id="planLog" class="plan-log"></div>
       </div>
-      <h4>Course reports</h4>
+      <h4>Reports</h4>
       <div id="planResults"><p class="empty">No course finished yet.</p></div>
     </div>
   </section>

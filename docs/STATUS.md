@@ -90,6 +90,15 @@ both sides; names; cut at turns; a run keeps only better checkpoints; stop), the
 extraction and contradiction flag in the Engine, the dataset conversions in Studio. The page and
 the chat marks were checked in a browser with a stand-in backend; a real practice run on a
 taught model has not been done yet, so how much it helps Nova talk is not measured.
+Conversation teaching (0.5.9): the curriculum's decisions (mastery and plateau, stuck and
+back-off, stop or move on), the practice pool (floor, cap, recency, retiring learned ones), the
+stage windows and the weight of replies that use earlier turns, the listening rows, the reply
+checks, the context tests (pairs differ in one fact; graded by meaning; practice and tests share
+no names, places or things) and a full run reporting every measure are tested in the Engine; on
+the step-15000 checkpoint every candidate that lost Classroom answers it had was refused.
+Studio's page, the Planner's reading and conversation steps and the new measures were checked in
+a browser with a stand-in backend. A real run on a taught model has not been done yet: whether
+these teaching methods help Nova more than plain practice is not measured.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

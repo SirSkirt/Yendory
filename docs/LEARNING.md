@@ -1079,19 +1079,77 @@ from what it has read, been taught and said itself.
 - **Its own name.** Nova's speaker's name, wherever it appears (whole words), becomes
   `own_name` (the model's name by default), so Nova does not learn to call itself by every name
   in the dataset; the other speaker keeps theirs.
-- **Checks.** About one dialogue in ten is held out (stable hash, as everywhere). A checkpoint is
-  accepted when the loss of Nova's lines in the held-out conversations improves by at least
-  `min_loss_improvement`, and it still answers the sampled held-out Classroom questions: at most
-  `guard_drop` (2%) of the correct answers the model had before practice may be lost (200
-  questions by default, spread over the model's taught lessons). Each check also shows Nova's
-  greedy reply to three held-out conversations next to what the person said.
-- **Earlier lessons.** `earlier_share` (20%) of the training rows are units the model was taught
-  in the Classroom.
+- **Checks.** About one dialogue in ten is held out (stable hash, as everywhere). The held-out
+  loss of Nova's lines is measured at three lengths (short exchanges, a few turns, whole
+  conversations; the curriculum's stages) and their mean decides: a checkpoint is accepted when
+  it improves by at least `min_loss_improvement` **and** keeps what the model knew (below).
+  Each check also shows Nova's greedy reply to three held-out conversations next to what the
+  person said.
+- **Protecting what it knew.** *Classroom:* up to 200 held-out Classroom questions are answered
+  before practice; a checkpoint may get at most `guard_drop` (2%) of the answers that were
+  right wrong, each answer counted on its own, so new right answers never make up for lost
+  ones. *Reading:* up to 3,000 documents of the text the model read (when still on the device)
+  are rehearsed (`reading_share`, 10% of rows) and their held-out loss may rise at most
+  `reading_rise` (2%) above where it started. *Lessons:* `earlier_share` (20%) of the rows are
+  units the model was taught. Every accepted checkpoint is saved to the model at once, so an
+  interruption loses at most one check's work. Evaluation material is never trained on.
 - **The teacher's chats.** Replies marked **consistent** in § 13 Chat are trained as Nova's
   lines of that chat (the rest of the chat is context); replies marked **contradicts itself** and
   unmarked ones never are. Chats are not held out (they are few, and not a test). The mark is
   about consistency with what Nova said before and whether it gave its own reason, not about
   agreement: training on agreement would make it an assistant by another route.
+
+### How Nova is taught (0.5.9)
+
+Each part can be switched off in § 4, so a run can show what it changes; every check reports the
+same measures either way.
+
+- **Easy to hard** (`curriculum`). Three stages: short exchanges (windows of two turns), a few
+  turns (six), whole conversations. Leaving a stage needs **both** mastery and a plateau: the
+  stage's held-out loss is at most `competency_loss` (2.0) or `competency_gain` (10%) below where
+  the stage began, *and* it has not improved for `stage_patience` (3) checks. A plateau before
+  mastery means stuck, not ready: the learning rate is halved (at most `stuck_backoffs`, 2,
+  times per stage); if Nova is still stuck the run stops there with the reason (or, with
+  `advance_when_stuck`, moves on and records the stage as not mastered). Earlier stages are
+  revisited: `review_share` (15%) of conversation rows come from them. Length is not the only
+  measure of difficulty: within a stage, targeted practice decides what is practised.
+- **Targeted practice** (`targeted`). A pool of `pool_size` (4,096) conversations is measured
+  on the current model; each is drawn in proportion to Nova's loss on it relative to the
+  median, between `target_floor` (¼: what she handles is kept up) and `target_cap` (3×: hard
+  conversations cannot take over). A conversation just drawn is drawn half as often until the
+  pool is measured again at the next check (spaced repetition), when up to a quarter of the
+  learned ones (below half the median loss) make way for new conversations. This is the
+  Classroom's reward-weighted schedule adapted to conversations, where no single reply is
+  "right": difficulty is Nova's own loss.
+- **Listening** (`context_weight`, `context_practice`, `context_tests`).
+  - A reply that uses a topic word from before the turn it answers (a name, a place, a fact from
+    earlier) weighs `context_weight` (2×) in training.
+  - Generated listening practice (`learn::listening::context_practice`, 10% of rows) teaches the
+    skills directly: names, locations, changing facts, corrections, references, follow-ups and
+    uncertainty, with short filler exchanges between the fact and the question.
+  - **Context-sensitivity tests** (`learn::listening::context_tests`, 12 pairs per skill) are
+    run at every check. Each pair is two conversations that differ in one earlier fact and end
+    with the same question ("Daniel went to the kitchen / hallway. … Where is Daniel?"). A pair
+    passes only when Nova's answer follows the fact in both; a reply is graded by whether it
+    says the expected word and not the other version's, never by exact wording. For
+    uncertainty (asked about someone never mentioned) any "I do not know" is right and a guess
+    is wrong. The tests use names, places, things, pets and colours that the practice never
+    uses, and are never trained on, so they measure whether the skill generalises. Also
+    reported: how many pairs' answers changed with the fact at all.
+  - **Listening measure**: for held-out replies that use earlier turns, the loss with only the
+    turn they answer minus the loss with the whole conversation before them (nats per token;
+    higher means Nova uses the conversation more).
+- **Reply checks** (`reply_checks`). Nova replies in the middle of 24 held-out conversations, and
+  the replies are counted for: empty, repeating (the same three words twice, or its previous
+  reply again), echoing the other person, on topic (a topic word of the last two turns, or a
+  short reply), asking something, calling itself another name ("I am Ben"), and an assistant's
+  voice. They describe the replies; none is required of a checkpoint, and none is trained on.
+
+**In a plan.** The Planner (§ 7) runs Reading, courses and Conversation practice in one plan,
+in order (for example: read 160M tokens, teach 200 lessons, then practise conversation). A
+reading or conversation step keeps the § 2 or § 4 settings it was added with. A step that is
+stopped runs again from the model's best checkpoint on Resume; a conversation step that stops
+because Nova is stuck stops the plan with the reason, and Start runs it again.
 
 **Memory of what Nova said.** With Study Mode on, a chat (setting on by default) remembers Nova's
 first-person statements from each finished reply (`memory::self_statements`, origin `said`):

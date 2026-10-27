@@ -193,16 +193,20 @@ function showPlan(p) {
   const fixed = p.position + (p.run || ["failed", "needs_attention"].includes(p.status) || (lastRun && lastRun.phase !== "passed") ? 1 : 0);
   const body = $("planCourses").tBodies[0];
   body.replaceChildren();
-  if (!p.courses.length) body.append(el("tr", {}, el("td", { colspan: 6, class: "empty" }, "Add saved courses in the order they should be taught.")));
+  if (!p.courses.length) body.append(el("tr", {}, el("td", { colspan: 6, class: "empty" }, "Add reading, saved courses and conversation practice in the order they should happen.")));
   const ids = p.courses.map(c => c.id);
   p.courses.forEach((c, i) => {
     const movable = i >= fixed && !planRunning;
     const move = (d) => { const a = [...ids]; [a[i], a[i + d]] = [a[i + d], a[i]]; return setCourses(a); };
     const cls = { passed: "ok", failed: "bad", current: "", pending: "", missing: "bad" }[c.state];
+    const step = c.kind && c.kind !== "course";
     body.append(el("tr", { class: c.state === "current" ? "current-row" : null },
-      el("td", { class: "num" }, i + 1), el("td", {}, c.name, c.lessons ? el("div", { class: "note" },
-        c.together >= 2 ? `${c.lessons} lessons, ${c.together === c.lessons ? "all" : c.together} taught together` : `${c.lessons} lessons, taught one at a time`) : ""),
-      el("td", { class: "num" }, percent(c.required)), el("td", { class: "num" }, c.state === "pending" ? "—" : percent(c.grade)),
+      el("td", { class: "num" }, i + 1), el("td", {}, step ? el("span", { class: "plan-kind " + c.kind }, c.kind === "reading" ? "Reading" : "Conversation") : "",
+        step ? " " + c.name.replace(/^(Reading|Conversation): /, "") : c.name,
+        c.lessons ? el("div", { class: "note" },
+        c.together >= 2 ? `${c.lessons} lessons, ${c.together === c.lessons ? "all" : c.together} taught together` : `${c.lessons} lessons, taught one at a time`) : "",
+        c.summary ? el("div", { class: "note" }, c.summary) : ""),
+      el("td", { class: "num" }, step ? "—" : percent(c.required)), el("td", { class: "num" }, step || c.state === "pending" ? "—" : percent(c.grade)),
       el("td", {}, el("span", { class: cls }, c.state)),
       el("td", {}, movable && i > fixed ? el("button", { class: "quiet", onclick: safe(() => move(-1), "Move") }, "↑") : "",
         movable && i < ids.length - 1 ? el("button", { class: "quiet", onclick: safe(() => move(1), "Move") }, "↓") : "",
@@ -222,10 +226,13 @@ function showPlan(p) {
 
 function updatePlanButtons() {
   const busy = teaching || planRunning;
-  $("planStart").disabled = busy || !plan || ["finished", "failed"].includes(plan.status);
+  const onStep = plan && plan.courses[plan.position] && plan.courses[plan.position].kind !== "course";
+  $("planStart").disabled = busy || !plan || plan.status === "finished" || (plan.status === "failed" && !onStep);
   $("planStart").textContent = plan && (plan.status === "stopped" || plan.run) ? "Resume" : "Start";
   $("planStop").disabled = !(planRunning || (teaching && plan?.status === "running"));
   $("planAdd").disabled = planRunning;
+  $("planAddReading").disabled = planRunning;
+  $("planAddConversation").disabled = planRunning;
   $("planDelete").disabled = planRunning;
   $("newPlan").disabled = planRunning;
 }
@@ -270,9 +277,19 @@ function runReport(entry) {
   return box;
 }
 
+function stepReport(r) {
+  return el("details", { class: "report" },
+    el("summary", {}, el("b", {}, r.label), " — ", el("span", { class: r.accepted ? "ok" : "warn" }, r.accepted ? "kept the best checkpoint" : r.stopped ? "stopped" : "unchanged"),
+      ` · held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)} · ${fmt(r.tokens)} tokens`,
+      r.finished ? el("span", { class: "note" }, ` · ${when(r.finished)}`) : ""),
+    r.note ? el("p", { class: "warn note" }, r.note) : "",
+    el("p", { class: "note" }, `Model step ${fmt(r.startedStep)} → ${fmt(r.endStep)}. The full record is in § 12 Library${r.kind === "conversation" ? " and on § 4 Conversation" : ""}.`));
+}
+
 function renderResults(p) {
   const box = $("planResults");
-  const items = [...p.results].reverse().map(runReport);
+  const items = [...p.results.map(r => ({ t: r.finished, v: runReport(r) })), ...(p.stepResults || []).map(r => ({ t: r.finished, v: stepReport(r) }))]
+    .sort((a, b) => b.t - a.t).map(x => x.v);
   if (p.run && p.status !== "failed") {
     const r = p.run;
     if (r.grades.length || r.pretest) items.unshift(runReport({ name: r.name + " (in progress)", phase: r.phase, overridden: r.overridden, pretest: r.pretest, grades: r.grades, remediation: r.remediation, lessons: [], finished: 0 }));
@@ -342,6 +359,39 @@ $("planAdd").addEventListener("click", safe(async () => {
   if (!id) throw new Error("Create a course first");
   await setCourses([...plan.courses.map(c => c.id), id]);
 }, "Add course"));
+$("planAddReading").addEventListener("click", safe(async () => {
+  showPlan(await invoke("add_plan_step", { id: plan.id, kind: "reading", options: window.readingOptions() }));
+  say("Reading added to the plan with the § 2 settings.");
+}, "Add reading"));
+$("planAddConversation").addEventListener("click", safe(async () => {
+  showPlan(await invoke("add_plan_step", { id: plan.id, kind: "conversation", options: await window.conversationOptions() }));
+  say("Conversation practice added to the plan with the § 4 settings.");
+}, "Add conversation"));
+// Progress of a plan's reading or conversation step.
+function onPlanStep({ planId, kind, label, event: e }) {
+  if (plan?.id !== planId) return;
+  $("planProgress").hidden = false;
+  const STAGE = ["short exchanges", "a few turns", "whole conversations"];
+  if (e.type === "started") {
+    $("planNow").textContent = label;
+    planLog(`${label}: started (held-out loss ${(e.baseline_loss ?? 0).toFixed(4)}${e.baseline_context ? `, context tests ${e.baseline_context.passed}/${e.baseline_context.total}` : ""}${e.classroom_total ? `, Classroom ${e.baseline_classroom}/${e.classroom_total}` : ""}).`);
+  } else if (e.type === "batch") {
+    $("planBar").style.width = (100 * e.step / Math.max(1, e.steps)).toFixed(1) + "%";
+    $("planLine").textContent = `${kind === "reading" ? "reading" : "conversation · " + STAGE[e.stage]} · step ${fmt(e.step)}/${fmt(e.steps)} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)}`;
+  } else if (e.type === "evaluated" || e.type === "checked") {
+    planLog(`${kind === "reading" ? "Reading" : "Conversation"} check at ${fmt(e.tokens)} tokens: held-out loss ${e.held_out_loss.toFixed(4)}` +
+      (e.context ? `, context tests ${e.context.passed}/${e.context.total}` : "") +
+      (e.classroom_total ? `, Classroom ${e.classroom_correct}/${e.classroom_total} (−${e.classroom_lost} +${e.classroom_gained})` : "") +
+      ` — ${e.accepted ? "kept" : "not kept: " + (e.reason || "")}`, e.accepted ? "ok" : undefined);
+  } else if (e.type === "stage") {
+    planLog(`Conversation: now ${e.name}. ${e.reason}`, e.mastered ? "ok" : "warn");
+  } else if (e.type === "learning_rate_lowered") {
+    planLog(`${e.reason}: learning rate ×${e.scale}.`, "warn");
+  } else if (e.type === "finished") {
+    planLog(`${label}: ${e.accepted ? "finished, best checkpoint kept" : "finished, model unchanged"}${e.stuck ? ` — ${e.stuck}` : ""}.`, e.accepted ? "ok" : "warn");
+  }
+}
+if (window.__TAURI__?.event?.listen) window.__TAURI__.event.listen("plan-step-event", ev => { try { onPlanStep(ev.payload); } catch (err) { log("ERROR", err); } });
 $("planStart").addEventListener("click", safe(async () => {
   $("planLog").replaceChildren();
   $("planBar").style.width = "0%";

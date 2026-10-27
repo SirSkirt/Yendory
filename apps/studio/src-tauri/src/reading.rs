@@ -78,6 +78,13 @@ fn corpora_dir(app: &AppHandle) -> Res<PathBuf> {
     Ok(dir)
 }
 
+impl ReadRecord {
+    /// The fingerprints of every corpus read.
+    pub(crate) fn sha256s(&self) -> Vec<&str> {
+        std::iter::once(self.sha256.as_str()).chain(self.parts.iter().map(|p| p.sha256.as_str())).collect()
+    }
+}
+
 pub(crate) fn corpus_path(app: &AppHandle, id: &str, ext: &str) -> Res<PathBuf> {
     if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid corpus id".into());
@@ -624,7 +631,7 @@ pub fn cancel_download(studio: State<Studio>) {
     studio.cancel_download.store(true, Ordering::Release);
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadOptions {
     /// The corpora to read and their shares of the batches.
@@ -645,7 +652,7 @@ pub struct ReadOptions {
     stages: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadPart {
     corpus_id: String,
@@ -676,21 +683,33 @@ fn stage_for(options: &ReadOptions, c: Category) -> Res<Option<EducationStage>> 
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReadFinished {
-    model: Option<Meta>,
-    accepted: bool,
-    baseline_loss: f32,
-    best_loss: f32,
-    tokens: u64,
-    stopped: bool,
-    early_stop: bool,
-    error: Option<String>,
+pub(crate) struct ReadFinished {
+    pub(crate) model: Option<Meta>,
+    pub(crate) accepted: bool,
+    pub(crate) baseline_loss: f32,
+    pub(crate) best_loss: f32,
+    pub(crate) tokens: u64,
+    pub(crate) stopped: bool,
+    pub(crate) early_stop: bool,
+    pub(crate) error: Option<String>,
     /// Automatic growth's decision after this run (models set to grow automatically).
-    growth: Option<growth::AutoDecision>,
+    pub(crate) growth: Option<growth::AutoDecision>,
 }
 
-#[tauri::command]
-pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) -> Res<()> {
+/// A reading checked and ready to run.
+pub(crate) struct ReadingJob {
+    infos: Vec<(CorpusInfo, f32, Option<EducationStage>)>,
+    cfg: PretrainConfig,
+    mode: &'static str,
+    records: Vec<ReadPartRecord>,
+}
+
+/// Checks reading options (and that the corpora are on this device) for a model.
+pub(crate) fn reading_job(
+    app: &AppHandle,
+    options: &ReadOptions,
+    word_limit: Option<usize>,
+) -> Res<ReadingJob> {
     if !(10_000..=2_000_000_000).contains(&options.tokens)
         || !(1..=128).contains(&options.batch_size)
         || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
@@ -708,15 +727,10 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
     }
     let mut infos = Vec::new();
     for p in &options.parts {
-        let info = load_info(&app, &p.corpus_id)?;
-        let stage = stage_for(&options, info.category)?;
+        let info = load_info(app, &p.corpus_id)?;
+        let stage = stage_for(options, info.category)?;
         infos.push((info, p.share, stage));
     }
-    let (meta, model) = with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone())))?;
-    if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
-        return Err("Already teaching or reading".into());
-    }
-    studio.stop.store(false, Ordering::Release);
     let cfg = PretrainConfig {
         tokens: options.tokens,
         batch_size: options.batch_size,
@@ -724,12 +738,12 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         window: options.window,
         grow_vocabulary: options.grow_vocabulary,
         max_words: options.max_words,
-        word_limit: meta.word_limit,
+        word_limit,
         seed: now(),
         ..PretrainConfig::default()
     };
     let mode = if options.mode == "bicameral" { "bicameral" } else { "joint" };
-    let records: Vec<ReadPartRecord> = infos
+    let records = infos
         .iter()
         .map(|(i, share, stage)| ReadPartRecord {
             name: i.name.clone(),
@@ -741,125 +755,168 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
             attribution: i.attribution.clone(),
         })
         .collect();
-    let corpora: Vec<&CorpusInfo> = infos.iter().map(|(i, _, _)| i).collect();
+    Ok(ReadingJob { infos, cfg, mode, records })
+}
+
+/// A short description of a reading, for plans.
+pub(crate) fn reading_label(app: &AppHandle, options: &ReadOptions) -> String {
+    let names: Vec<String> = options
+        .parts
+        .iter()
+        .map(|p| load_info(app, &p.corpus_id).map(|i| i.name).unwrap_or_else(|_| "(missing corpus)".into()))
+        .collect();
+    format!("Reading: {} · {} tokens", names.join(" + "), tokens_text(options.tokens))
+}
+
+/// Runs a reading on the open model (on the calling thread), saving every accepted checkpoint,
+/// recording it in the model's metadata and history. `emit` receives every event.
+pub(crate) fn run_reading(
+    app: &AppHandle,
+    job: &ReadingJob,
+    meta: Meta,
+    model: Bicameral,
+    stop: &AtomicBool,
+    emit: &dyn Fn(&PretrainEvent),
+) -> Res<ReadFinished> {
+    let studio = app.state::<Studio>();
+    let id = meta.id.clone();
+    let corpora: Vec<&CorpusInfo> = job.infos.iter().map(|(i, _, _)| i).collect();
     append_history(
-        &app,
+        app,
         &meta.id,
         serde_json::json!({"type": "reading_started", "time": now(), "corpus": corpora.first(), "corpora": corpora,
-            "parts": records, "mode": mode, "options": cfg}),
+            "parts": job.records, "mode": job.mode, "options": job.cfg}),
     );
+    let current = Arc::new(Mutex::new(meta.clone()));
+    let mut parts = Vec::new();
+    for (info, share, stage) in &job.infos {
+        let path = corpus_path(app, &info.id, "txt")?;
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if sha256_hex(text.as_bytes()) != info.sha256 {
+            return Err(format!(
+                "{}: the stored corpus does not match its fingerprint; download or import it again",
+                info.name
+            ));
+        }
+        parts.push(MixPart {
+            name: info.name.clone(),
+            category: info.category,
+            corpus: Corpus::prepare(&text),
+            share: *share,
+            stage: *stage,
+        });
+    }
+    let mut observer = |e: &PretrainEvent| {
+        emit(e);
+        if !matches!(e, PretrainEvent::Batch { .. }) {
+            append_history(app, &id, serde_json::json!({"time": now(), "reading": e}));
+        }
+    };
+    let mut on_accepted = |m: &Bicameral| -> Res<()> {
+        let mut meta = current.lock().unwrap();
+        refresh_meta(&mut meta, m);
+        let archive = with_active(&studio, |a| Ok(a.archive.clone())).unwrap_or_default();
+        save_all(app, &meta, m, &archive)?;
+        if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
+            a.model = m.clone();
+            a.meta = meta.clone();
+        }
+        Ok(())
+    };
+    let r = pretrain_mix(&model, &parts, &job.cfg, &mut observer, &mut on_accepted, stop)?;
+    drop(parts);
+    let mut meta = current.lock().unwrap().clone();
+    meta.read.push(ReadRecord {
+        corpus: job.infos.iter().map(|(i, _, _)| i.name.as_str()).collect::<Vec<_>>().join(" + "),
+        sha256: job.infos[0].0.sha256.clone(),
+        parts: job.records.clone(),
+        mode: job.mode.into(),
+        tokens: r.tokens,
+        baseline_loss: r.baseline_loss,
+        best_loss: r.best_loss,
+        accepted: r.accepted,
+        new_words: r.new_words,
+        stopped: r.stopped,
+        time: now(),
+    });
+    write_atomic(
+        &model_dir(app, &meta.id)?.join("meta.json"),
+        &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?,
+    )?;
+    let mut decision = None;
+    if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
+        a.meta = meta.clone();
+        // A safe boundary: the run is over and nothing else trains until it is reported.
+        if !r.stopped {
+            let checks: Vec<Check> = r
+                .evaluations
+                .iter()
+                .map(|e| Check { train_loss: e.train_loss, held_out_loss: e.held_out_loss })
+                .collect();
+            let dir = model_dir(app, &meta.id)?;
+            decision = growth::automatic_after_reading(
+                &dir,
+                a,
+                &checks,
+                r.early_stop,
+                job.cfg.batch_size,
+                job.cfg.window,
+            );
+            meta = a.meta.clone();
+        }
+    }
+    append_history(
+        app,
+        &id,
+        serde_json::json!({"type": "reading_finished", "time": now(), "accepted": r.accepted,
+            "tokens": r.tokens, "stopped": r.stopped, "error": null}),
+    );
+    Ok(ReadFinished {
+        growth: decision,
+        model: Some(meta),
+        accepted: r.accepted,
+        baseline_loss: r.baseline_loss,
+        best_loss: r.best_loss,
+        tokens: r.tokens,
+        stopped: r.stopped,
+        early_stop: r.early_stop,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) -> Res<()> {
+    let (meta, model) = with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone())))?;
+    let job = reading_job(&app, &options, meta.word_limit)?;
+    if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("Already teaching or reading".into());
+    }
+    studio.stop.store(false, Ordering::Release);
     let stop = studio.stop.clone();
     std::thread::spawn(move || {
         let studio = app.state::<Studio>();
         let id = meta.id.clone();
-        let current = Arc::new(Mutex::new(meta.clone()));
-        let run = || -> Res<ReadFinished> {
-            let mut parts = Vec::new();
-            for (info, share, stage) in &infos {
-                let path = corpus_path(&app, &info.id, "txt")?;
-                let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-                if sha256_hex(text.as_bytes()) != info.sha256 {
-                    return Err(format!(
-                        "{}: the stored corpus does not match its fingerprint; download or import it again",
-                        info.name
-                    ));
-                }
-                parts.push(MixPart {
-                    name: info.name.clone(),
-                    category: info.category,
-                    corpus: Corpus::prepare(&text),
-                    share: *share,
-                    stage: *stage,
-                });
-            }
-            let mut observer = |e: &PretrainEvent| {
-                let _ = app.emit("read-event", e);
-                if !matches!(e, PretrainEvent::Batch { .. }) {
-                    append_history(&app, &id, serde_json::json!({"time": now(), "reading": e}));
-                }
-            };
-            let mut on_accepted = |m: &Bicameral| -> Res<()> {
-                let mut meta = current.lock().unwrap();
-                refresh_meta(&mut meta, m);
-                let archive = with_active(&studio, |a| Ok(a.archive.clone())).unwrap_or_default();
-                save_all(&app, &meta, m, &archive)?;
-                if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
-                    a.model = m.clone();
-                    a.meta = meta.clone();
-                }
-                Ok(())
-            };
-            let r = pretrain_mix(&model, &parts, &cfg, &mut observer, &mut on_accepted, &stop)?;
-            drop(parts);
-            let mut meta = current.lock().unwrap().clone();
-            meta.read.push(ReadRecord {
-                corpus: infos.iter().map(|(i, _, _)| i.name.as_str()).collect::<Vec<_>>().join(" + "),
-                sha256: infos[0].0.sha256.clone(),
-                parts: records.clone(),
-                mode: mode.into(),
-                tokens: r.tokens,
-                baseline_loss: r.baseline_loss,
-                best_loss: r.best_loss,
-                accepted: r.accepted,
-                new_words: r.new_words,
-                stopped: r.stopped,
-                time: now(),
-            });
-            write_atomic(
-                &model_dir(&app, &meta.id)?.join("meta.json"),
-                &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?,
-            )?;
-            let mut decision = None;
-            if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
-                a.meta = meta.clone();
-                // A safe boundary: the run is over and nothing else trains until it is reported.
-                if !r.stopped {
-                    let checks: Vec<Check> = r
-                        .evaluations
-                        .iter()
-                        .map(|e| Check { train_loss: e.train_loss, held_out_loss: e.held_out_loss })
-                        .collect();
-                    let dir = model_dir(&app, &meta.id)?;
-                    decision = growth::automatic_after_reading(
-                        &dir,
-                        a,
-                        &checks,
-                        r.early_stop,
-                        cfg.batch_size,
-                        cfg.window,
-                    );
-                    meta = a.meta.clone();
-                }
-            }
-            Ok(ReadFinished {
-                growth: decision,
-                model: Some(meta),
-                accepted: r.accepted,
-                baseline_loss: r.baseline_loss,
-                best_loss: r.best_loss,
-                tokens: r.tokens,
-                stopped: r.stopped,
-                early_stop: r.early_stop,
-                error: None,
-            })
+        let emit = |e: &PretrainEvent| {
+            let _ = app.emit("read-event", e);
         };
-        let finished = guarded(run).unwrap_or_else(|e| ReadFinished {
-            model: None,
-            accepted: false,
-            baseline_loss: 0.,
-            best_loss: 0.,
-            tokens: 0,
-            stopped: false,
-            early_stop: false,
-            error: Some(e),
-            growth: None,
+        let finished = guarded(|| run_reading(&app, &job, meta, model, &stop, &emit)).unwrap_or_else(|e| {
+            append_history(
+                &app,
+                &id,
+                serde_json::json!({"type": "reading_finished", "time": now(), "error": e}),
+            );
+            ReadFinished {
+                model: None,
+                accepted: false,
+                baseline_loss: 0.,
+                best_loss: 0.,
+                tokens: 0,
+                stopped: false,
+                early_stop: false,
+                error: Some(e),
+                growth: None,
+            }
         });
-        append_history(
-            &app,
-            &id,
-            serde_json::json!({"type": "reading_finished", "time": now(), "accepted": finished.accepted,
-                "tokens": finished.tokens, "stopped": finished.stopped, "error": finished.error}),
-        );
         studio.teaching.store(false, Ordering::Release);
         if let Some(n) = yendory_engine::learn::take_device_notice() {
             let _ = app.emit("device-notice", n);

@@ -37,6 +37,8 @@ fn practice_checks_classroom_answers_and_keeps_better_checkpoints() {
         learning_rate: 1e-3,
         evaluations: 3,
         guard_questions: 30,
+        context_tests: 3,
+        pool_size: 128,
         own_name: "Nova".into(),
         ..ConversationConfig::default()
     };
@@ -45,6 +47,7 @@ fn practice_checks_classroom_answers_and_keeps_better_checkpoints() {
         &model,
         &sets,
         &earlier,
+        &[],
         &cfg,
         &mut |e| {
             if let ConversationEvent::Started { classroom_total, baseline_classroom, earlier_items, .. } = e {
@@ -62,13 +65,20 @@ fn practice_checks_classroom_answers_and_keeps_better_checkpoints() {
     );
     assert!(total > 0 && items > 0);
     assert_eq!((r.baseline_classroom, r.classroom_total), (baseline, total));
-    let floor = baseline - (cfg.guard_drop * baseline as f32).floor() as usize;
+    let allowed = (cfg.guard_drop * baseline as f32).floor() as usize;
     for c in &r.checks {
         if c.accepted {
-            assert!(c.classroom_correct >= floor, "an accepted checkpoint keeps the Classroom answers");
+            assert!(c.classroom_lost <= allowed, "an accepted checkpoint keeps the Classroom answers it had");
         }
+        assert_eq!(
+            c.classroom_correct + c.classroom_lost,
+            baseline + c.classroom_gained,
+            "lost and gained add up"
+        );
         // Nova's speaker is called Nova in the samples' prompts.
         assert!(c.samples.iter().all(|s| s.prompt.contains("Hi Nova!")), "{:?}", c.samples);
+        let ctx = c.context.as_ref().unwrap();
+        assert_eq!(ctx.total, 7 * cfg.context_tests);
     }
     assert!(r.best_loss <= r.baseline_loss);
 }

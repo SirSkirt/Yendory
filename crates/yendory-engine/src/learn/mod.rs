@@ -13,6 +13,7 @@ pub mod eval;
 pub mod generate;
 pub mod grading;
 pub mod lessons;
+pub mod listening;
 pub mod memory;
 pub mod practice;
 pub mod program;

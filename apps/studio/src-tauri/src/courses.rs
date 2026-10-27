@@ -504,6 +504,53 @@ pub struct Plan {
     next_overridden: bool,
     #[serde(default)]
     results: Vec<RunEntry>,
+    /// Reading and conversation steps, by the id they have in `courses`.
+    #[serde(default)]
+    steps: std::collections::BTreeMap<String, PlanStep>,
+    #[serde(default)]
+    step_results: Vec<StepResult>,
+}
+
+/// A plan step that is not a course: a reading (§ 2) or conversation practice (§ 4) with the
+/// settings it was added with.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanStep {
+    Reading { label: String, options: super::reading::ReadOptions },
+    Conversation { label: String, options: super::conversation::ConverseOptions },
+}
+
+impl PlanStep {
+    fn label(&self) -> &str {
+        match self {
+            PlanStep::Reading { label, .. } | PlanStep::Conversation { label, .. } => label,
+        }
+    }
+    fn kind(&self) -> &'static str {
+        match self {
+            PlanStep::Reading { .. } => "reading",
+            PlanStep::Conversation { .. } => "conversation",
+        }
+    }
+}
+
+/// A finished reading or conversation step.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepResult {
+    step_id: String,
+    kind: String,
+    label: String,
+    accepted: bool,
+    tokens: u64,
+    baseline_loss: f32,
+    best_loss: f32,
+    stopped: bool,
+    /// Why it ended early (stuck), or an error.
+    note: Option<String>,
+    started_step: u64,
+    end_step: u64,
+    finished: u64,
 }
 
 fn plan_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
@@ -546,6 +593,8 @@ fn add_model_run(app: &AppHandle, model_id: &str, run: RunSummary) -> Res<()> {
 #[serde(rename_all = "camelCase")]
 pub struct PlanCourse {
     id: String,
+    /// "course", "reading" or "conversation".
+    kind: String,
     name: String,
     /// "passed", "failed", "current", "pending" or "missing".
     state: String,
@@ -554,6 +603,8 @@ pub struct PlanCourse {
     /// Lessons, and how many of them are taught together.
     lessons: usize,
     together: usize,
+    /// A step's last result.
+    summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -564,6 +615,7 @@ pub struct PlanView {
     model_id: String,
     model_name: String,
     courses: Vec<PlanCourse>,
+    step_results: Vec<StepResult>,
     position: usize,
     status: PlanStatus,
     message: Option<String>,
@@ -580,6 +632,37 @@ fn plan_view(app: &AppHandle, plan: &Plan) -> PlanView {
         .iter()
         .enumerate()
         .map(|(i, id)| {
+            if let Some(step) = plan.steps.get(id) {
+                let last = plan.step_results.iter().rev().find(|r| r.step_id == *id);
+                let state = if i < plan.position {
+                    "passed"
+                } else if i == plan.position && plan.status == PlanStatus::Failed {
+                    "failed"
+                } else if i == plan.position && plan.status != PlanStatus::Finished {
+                    "current"
+                } else {
+                    "pending"
+                };
+                return PlanCourse {
+                    id: id.clone(),
+                    kind: step.kind().into(),
+                    name: step.label().into(),
+                    state: state.into(),
+                    grade: None,
+                    required: None,
+                    lessons: 0,
+                    together: 0,
+                    summary: last.map(|r| {
+                        format!(
+                            "{} · held-out loss {:.3} → {:.3}{}",
+                            if r.accepted { "kept the best checkpoint" } else { "unchanged" },
+                            r.baseline_loss,
+                            r.best_loss,
+                            r.note.as_ref().map(|n| format!(" · {n}")).unwrap_or_default()
+                        )
+                    }),
+                };
+            }
             let def = load_course(app, id).ok();
             let last = plan.results.iter().rev().find(|r| r.course_id == *id);
             let state = if def.is_none() {
@@ -595,6 +678,8 @@ fn plan_view(app: &AppHandle, plan: &Plan) -> PlanView {
             };
             PlanCourse {
                 id: id.clone(),
+                kind: "course".into(),
+                summary: None,
                 name: def.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "(deleted course)".into()),
                 state: state.into(),
                 grade: last.and_then(|r| r.grades.last().map(|g| g.grade)),
@@ -607,6 +692,7 @@ fn plan_view(app: &AppHandle, plan: &Plan) -> PlanView {
     let restart = matches!(plan.status, PlanStatus::Failed | PlanStatus::NeedsAttention)
         .then(|| plan.courses.get(plan.position))
         .flatten()
+        .filter(|id| !plan.steps.contains_key(*id))
         .and_then(|id| load_course(app, id).ok())
         .map(|def| restart_policy(&model_runs(app, &plan.model_id), &def.fingerprint()));
     PlanView {
@@ -615,6 +701,7 @@ fn plan_view(app: &AppHandle, plan: &Plan) -> PlanView {
         model_id: plan.model_id.clone(),
         model_name: plan.model_name.clone(),
         courses,
+        step_results: plan.step_results.clone(),
         position: plan.position,
         status: plan.status,
         message: plan.message.clone(),
@@ -675,7 +762,46 @@ pub fn create_plan(app: AppHandle, studio: State<Studio>, name: String) -> Res<P
         run_started_step: 0,
         next_overridden: false,
         results: Vec::new(),
+        steps: Default::default(),
+        step_results: Vec::new(),
     };
+    save_plan(&app, &plan)?;
+    Ok(plan_view(&app, &plan))
+}
+
+/// Adds a reading (`kind` "reading", the § 2 Reading settings) or conversation practice
+/// ("conversation", the § 4 settings) to the end of a plan.
+#[tauri::command]
+pub fn add_plan_step(
+    app: AppHandle,
+    studio: State<Studio>,
+    id: String,
+    kind: String,
+    options: serde_json::Value,
+) -> Res<PlanView> {
+    let mut plan = load_plan(&app, &id)?;
+    running(&studio, &plan)?;
+    let step = match kind.as_str() {
+        "reading" => {
+            let options: super::reading::ReadOptions =
+                serde_json::from_value(options).map_err(|e| format!("Reading settings: {e}"))?;
+            super::reading::reading_job(&app, &options, None)?;
+            PlanStep::Reading { label: super::reading::reading_label(&app, &options), options }
+        }
+        "conversation" => {
+            let options: super::conversation::ConverseOptions =
+                serde_json::from_value(options).map_err(|e| format!("Conversation settings: {e}"))?;
+            super::conversation::conversation_job(&app, &options)?;
+            PlanStep::Conversation { label: super::conversation::conversation_label(&app, &options), options }
+        }
+        _ => return Err("Unknown kind of plan step".into()),
+    };
+    let step_id = fresh_id('s');
+    plan.courses.push(step_id.clone());
+    plan.steps.insert(step_id, step);
+    if plan.status == PlanStatus::Finished {
+        plan.status = PlanStatus::Idle;
+    }
     save_plan(&app, &plan)?;
     Ok(plan_view(&app, &plan))
 }
@@ -723,6 +849,9 @@ pub fn edit_plan(
             check_id(id)?;
         }
         plan.courses = c;
+        // Steps removed from the plan go.
+        let kept: Vec<String> = plan.courses.clone();
+        plan.steps.retain(|id, _| kept.contains(id));
         if plan.status == PlanStatus::Finished && plan.position < plan.courses.len() {
             plan.status = PlanStatus::Idle;
         }
@@ -887,7 +1016,8 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
     if plan.position >= plan.courses.len() {
         return Err("Every course of this plan has passed; add courses to continue".into());
     }
-    if plan.status == PlanStatus::Failed {
+    let on_step = plan.courses.get(plan.position).is_some_and(|id| plan.steps.contains_key(id));
+    if plan.status == PlanStatus::Failed && !on_step {
         return Err("The course failed: revise it and use Restart course, or give it its one override".into());
     }
     let (meta, model, archive) = with_active(&studio, |a| {
@@ -939,6 +1069,82 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
     Ok(view)
 }
 
+/// Runs a reading or conversation step of a plan on the open model.
+#[allow(clippy::too_many_arguments)]
+fn run_step(
+    app: &AppHandle,
+    plan_id: &str,
+    step_id: &str,
+    step: &PlanStep,
+    meta: &Meta,
+    model: &Bicameral,
+    archive: &[Item],
+    stop: &AtomicBool,
+) -> Res<StepResult> {
+    let started_step = model.step;
+    let send = |e: serde_json::Value| {
+        let _ = app.emit(
+            "plan-step-event",
+            serde_json::json!({"planId": plan_id, "kind": step.kind(), "label": step.label(), "event": e}),
+        );
+    };
+    let result = |accepted, tokens, baseline_loss, best_loss, stopped, note| StepResult {
+        step_id: step_id.into(),
+        kind: step.kind().into(),
+        label: step.label().into(),
+        accepted,
+        tokens,
+        baseline_loss,
+        best_loss,
+        stopped,
+        note,
+        started_step,
+        end_step: 0,
+        finished: now(),
+    };
+    match step {
+        PlanStep::Reading { options, .. } => {
+            let job = super::reading::reading_job(app, options, meta.word_limit)?;
+            let throttle = std::cell::RefCell::new(BatchThrottle::default());
+            let emit = |e: &yendory_engine::learn::corpus::PretrainEvent| {
+                if let yendory_engine::learn::corpus::PretrainEvent::Batch { step, steps, .. } = e {
+                    if !throttle.borrow_mut().pass(*step as usize, *steps as usize) {
+                        return;
+                    }
+                }
+                send(serde_json::to_value(e).unwrap_or_default());
+            };
+            let f =
+                guarded(|| super::reading::run_reading(app, &job, meta.clone(), model.clone(), stop, &emit))?;
+            Ok(result(f.accepted, f.tokens, f.baseline_loss, f.best_loss, f.stopped, None))
+        }
+        PlanStep::Conversation { options, .. } => {
+            let job = super::conversation::conversation_job(app, options)?;
+            let throttle = std::cell::RefCell::new(BatchThrottle::default());
+            let emit = |e: &yendory_engine::learn::conversation::ConversationEvent| {
+                if let yendory_engine::learn::conversation::ConversationEvent::Batch { step, steps, .. } = e {
+                    if !throttle.borrow_mut().pass(*step as usize, *steps as usize) {
+                        return;
+                    }
+                }
+                send(serde_json::to_value(e).unwrap_or_default());
+            };
+            let f = guarded(|| {
+                super::conversation::run_conversation(
+                    app,
+                    &job,
+                    meta.clone(),
+                    model.clone(),
+                    archive.to_vec(),
+                    stop,
+                    &emit,
+                )
+            })?;
+            Ok(result(f.accepted, f.tokens, f.baseline_loss, f.best_loss, f.stopped, f.stuck))
+        }
+    }
+}
+
 fn run_plan(
     app: &AppHandle,
     mut plan: Plan,
@@ -955,8 +1161,57 @@ fn run_plan(
     loop {
         if plan.position >= plan.courses.len() {
             plan.status = PlanStatus::Finished;
-            plan.message = Some("Every course in the plan passed".into());
+            plan.message = Some("Every step of the plan is done".into());
             break;
+        }
+        let entry = plan.courses[plan.position].clone();
+        if let Some(step) = plan.steps.get(&entry).cloned() {
+            if plan.run.is_some() {
+                attention(
+                    &mut plan,
+                    "A course run is in progress where a step stands; restart the plan's course".into(),
+                );
+                break;
+            }
+            let outcome = run_step(app, &plan.id, &entry, &step, &meta, &model, &archive, stop);
+            // The step saved what it accepted on the open model: continue from there.
+            let studio = app.state::<Studio>();
+            if let Ok((m, a, mm)) =
+                with_active(&studio, |a| Ok((a.model.clone(), a.archive.clone(), a.meta.clone())))
+            {
+                model = m;
+                archive = a;
+                meta = mm;
+            }
+            match outcome {
+                Ok(result) => {
+                    let stopped = result.stopped;
+                    let stuck = result.note.clone();
+                    plan.step_results.push(StepResult { end_step: model.step, ..result });
+                    if stopped {
+                        plan.status = PlanStatus::Stopped;
+                        plan.message = Some(format!(
+                            "Stopped during {}; Resume runs this step again from the best checkpoint it kept",
+                            step.label()
+                        ));
+                        break;
+                    }
+                    if let (Some(why), PlanStep::Conversation { .. }) = (stuck, &step) {
+                        plan.status = PlanStatus::Failed;
+                        plan.message = Some(format!(
+                            "{why}. The model keeps the best checkpoint it reached. Start runs the step again, or change the plan"
+                        ));
+                        break;
+                    }
+                    plan.position += 1;
+                    let _ = save_plan(app, &plan);
+                    continue;
+                }
+                Err(e) => {
+                    attention(&mut plan, format!("{}: {e}", step.label()));
+                    break;
+                }
+            }
         }
         if plan.run.is_none() {
             let course_id = plan.courses[plan.position].clone();
