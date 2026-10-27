@@ -363,3 +363,50 @@ fn a_grown_model_trains_past_the_budget_by_offloading() {
     }
     close("grown model under the budget", &m.weights, &cpu.weights);
 }
+
+/// Held-out checks of long rows fit the GPU's memory budget: they are scored a few rows at a
+/// time, or on the CPU when not even one row fits, and give the CPU's loss either way.
+#[test]
+fn held_out_checks_fit_the_budget_or_run_on_the_cpu() {
+    let _lock = GLOBALS.lock().unwrap();
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    if yendory_engine::learn::gpu_name().is_err() {
+        println!("no GPU available; skipped");
+        return;
+    }
+    let (_, start) = models().remove(0);
+    let rows = rows(&start, 24);
+    let cpu = yendory_engine::learn::batch_loss(&start, &rows, Ablation::default()).unwrap();
+    let n = start.parameter_count();
+    let shape = StepShape {
+        parameters: n,
+        activation_floats_per_token: Bicameral::activation_floats_for(&start.config, None),
+        rows: rows.len(),
+        tokens: rows_max(&start),
+        vocab: start.config.vocab,
+    };
+    let ram =
+        MemorySettings { ram_limit_bytes: Some(1 << 40), ram_reserve_bytes: 0, ..MemorySettings::default() };
+    for (label, budget) in [
+        ("no budget", None),
+        (
+            "room for two rows",
+            Some((GpuModel::fixed_bytes_for(n, false) + shape.working_bytes(2)) * 100 / 90 + 100),
+        ),
+        ("room for no row", Some(GpuModel::fixed_bytes_for(n, true) * 100 / 90 + 100)),
+    ] {
+        memory::set_memory_settings(MemorySettings { gpu_memory_bytes: budget, ..ram.clone() });
+        set_device(Device::Gpu(yendory_engine::gpu::Api::Auto));
+        let t = Trainer::new(&start);
+        let got = t.gpu_loss(&start, &rows, Ablation::default());
+        set_device(Device::Cpu);
+        let notice = yendory_engine::learn::take_device_notice();
+        println!("{label}: {got:?} (CPU {cpu}); notice: {notice:?}");
+        if !t.on_gpu() {
+            continue;
+        }
+        let got = got.unwrap().unwrap();
+        assert!((got - cpu).abs() <= 1e-4 * cpu.max(1.), "{label}: {got} vs {cpu}");
+    }
+    memory::set_memory_settings(MemorySettings::default());
+}

@@ -99,6 +99,12 @@ the step-15000 checkpoint every candidate that lost Classroom answers it had was
 Studio's page, the Planner's reading and conversation steps and the new measures were checked in
 a browser with a stand-in backend. A real run on a taught model has not been done yet: whether
 these teaching methods help Nova more than plain practice is not measured.
+0.6.0: held-out checks on the GPU (Reading and Conversation) are scored in parts that fit the
+GPU memory budget, halved when a part does not fit, and run on the CPU (with a notice) when not
+even one row fits. Conversation checks score whole conversations up to the full context, and
+before this they were sent 8 rows at a time without the memory planner, which ran a 0.5.9
+Conversation run out of GPU memory. Tested on a software GPU with no budget, room for two rows
+and room for none (the same loss as the CPU each time).
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

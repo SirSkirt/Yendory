@@ -628,10 +628,54 @@ impl Trainer {
 
     /// In GPU training: the mean loss of rows computed on the GPU with the weights there (the
     /// same value as [`batch_loss`] on the synced model, much faster). `None` otherwise.
+    ///
+    /// The rows are scored in parts the GPU's memory budget holds (at most 8 rows at a time):
+    /// a check of long rows (whole conversations) needs much more working memory than a training
+    /// window. A part that still does not fit is halved; when not even one row fits, the check
+    /// runs on the CPU (with a notice) instead of failing.
     pub fn gpu_loss(&self, model: &Bicameral, rows: &[Row], abl: Ablation) -> Option<Result<f32, String>> {
         #[cfg(feature = "gpu")]
         {
-            self.gpu.as_ref().map(|g| g.mean_loss(model, rows, abl, 8))
+            let g = self.gpu.as_ref()?;
+            let shape = memory::StepShape {
+                parameters: model.parameter_count(),
+                activation_floats_per_token: Bicameral::activation_floats_for(
+                    &model.config,
+                    model.neuro.as_ref(),
+                ),
+                rows: rows.len(),
+                tokens: rows.iter().map(|r| r.ids.len()).max().unwrap_or(1),
+                vocab: model.config.vocab,
+            };
+            let mut part = match g.budget() {
+                Some(b) => {
+                    let free = b.saturating_sub(g.memory_bytes());
+                    ((free / shape.working_bytes(1).max(1)) as usize).clamp(1, 8)
+                }
+                None => 8,
+            };
+            loop {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    g.mean_loss(model, rows, abl, part)
+                }))
+                .unwrap_or_else(|p| Err(format!("GPU check failed: {}", panic_text(p))));
+                match r {
+                    Ok(loss) => return Some(Ok(loss)),
+                    Err(_) if part > 1 => {
+                        g.clear_pool();
+                        part /= 2;
+                    }
+                    Err(e) => {
+                        g.clear_pool();
+                        notice(format!(
+                            "A held-out check of {} rows of up to {} tokens did not fit in the GPU's memory ({e}); it ran on the CPU, and training stays on the GPU.",
+                            rows.len(),
+                            shape.tokens
+                        ));
+                        return Some(batch_loss(model, rows, abl));
+                    }
+                }
+            }
         }
         #[cfg(not(feature = "gpu"))]
         {
