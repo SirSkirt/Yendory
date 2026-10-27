@@ -1131,7 +1131,7 @@ same measures either way.
     run at every check. Each pair is two conversations that differ in one earlier fact and end
     with the same question ("Daniel went to the kitchen / hallway. … Where is Daniel?"). A pair
     passes only when Nova's answer follows the fact in both; a reply is graded by whether it
-    says the expected word and not the other version's, never by exact wording. For
+    says the expected word and not the other version's, never by exact wording; a word the reply denies ("not called Lena", "isn't in the kitchen") does not count either way. For
     uncertainty (asked about someone never mentioned) any "I do not know" is right and a guess
     is wrong. The tests use names, places, things, pets and colours that the practice never
     uses, and are never trained on, so they measure whether the skill generalises. Also

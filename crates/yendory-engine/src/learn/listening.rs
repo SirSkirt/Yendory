@@ -138,21 +138,36 @@ impl Probe {
     /// Whether a reply is right: it says an expected answer and not the other version's.
     pub fn right(&self, reply: &str) -> bool {
         let r = reply.to_ascii_lowercase();
-        let says = |w: &String| contains_words(&r, &w.to_ascii_lowercase());
+        let says = |w: &String| affirms(&r, &w.to_ascii_lowercase());
         self.expected.iter().any(says) && !self.wrong.iter().any(says)
     }
 }
 
-/// `phrase` occurs in `text` as whole words.
-fn contains_words(text: &str, phrase: &str) -> bool {
+/// Words that deny what follows them ("not called Lena", "isn't in the kitchen", "no, Lena").
+const DENY: [&str; 8] = ["not", "no", "never", "nor", "neither", "cannot", "without", "nobody"];
+/// The same written without an apostrophe.
+const NT: [&str; 9] = ["isnt", "wasnt", "dont", "doesnt", "didnt", "cant", "wont", "arent", "werent"];
+
+/// `phrase` occurs in `text` as whole words and is not denied: none of the three words before
+/// it is a negation ("not", "no", "isn't", ...). "Not in the hallway, in the kitchen" says
+/// kitchen and does not say hallway.
+fn affirms(text: &str, phrase: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '\'');
     let mut from = 0;
     while let Some(i) = text[from..].find(phrase) {
         let at = from + i;
         let before = text[..at].chars().next_back();
         let after = text[at + phrase.len()..].chars().next();
-        let word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
         if !word(before) && !word(after) {
-            return true;
+            let denied = text[..at]
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+                .filter(|w| !w.is_empty())
+                .rev()
+                .take(3)
+                .any(|w| DENY.contains(&w) || w.ends_with("n't") || NT.contains(&w));
+            if !denied {
+                return true;
+            }
         }
         from = at + phrase.len().max(1);
     }
@@ -454,7 +469,7 @@ pub fn score(tests: &[ContextTest], replies: &[String]) -> ContextScore {
         let (a, b) = (t.a.right(ra), t.b.right(rb));
         s.right += a as usize + b as usize;
         let mentions = |r: &str, p: &Probe| {
-            p.expected.iter().any(|w| contains_words(&r.to_ascii_lowercase(), &w.to_ascii_lowercase()))
+            p.expected.iter().any(|w| affirms(&r.to_ascii_lowercase(), &w.to_ascii_lowercase()))
         };
         if mentions(ra, &t.a) && mentions(rb, &t.b) {
             s.changed += 1;
@@ -499,6 +514,13 @@ mod tests {
         let (x, y) = (&loc.a.expected[0], &loc.b.expected[0]);
         assert!(loc.a.right(&format!("In the {x}.")) && loc.a.right(&format!("I think {x}")));
         assert!(!loc.a.right(&format!("In the {y}.")) && !loc.a.right(&format!("The {x} or the {y}.")));
+        // A denied word is not an answer: "not called Lena" does not say the name is Lena.
+        assert!(!loc.a.right(&format!("A does that is not called {x}.")));
+        assert!(!loc.a.right(&format!("He isn't in the {x}.")) && !loc.a.right(&format!("No, {x}.")));
+        assert!(
+            loc.a.right(&format!("Not in the {y}, in the {x}.")),
+            "a denied other answer is not a wrong one"
+        );
         let unsure = tests.iter().find(|t| t.skill == Skill::Uncertainty).unwrap();
         assert!(unsure.a.right("I don't know.") && unsure.a.right("I am not sure, you did not say."));
         assert!(!unsure.a.right(&format!("In the {}.", unsure.a.wrong[0])));
