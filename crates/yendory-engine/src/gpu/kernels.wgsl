@@ -922,11 +922,15 @@ fn attention_back_kv32(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invo
 // ---- output layer and cross-entropy -------------------------------------------------------
 
 var<workgroup> red: array<f32, 256>;
+var<workgroup> redu: array<u32, 256>;
 
 // One workgroup (256 threads) per row of a chunk of logits (f0, rows x vocab). Targets u0, mask
 // f1 and the row losses f2 are indexed from r0. The row's loss mask * -ln p(target) / denom goes
 // to f2, and f0 becomes the logits' gradient (softmax - one-hot) * mask * seed / denom.
-// p: vocab, rows, r0 | denom bits, seed bits
+// With p3 = the number of valid tokens (0 = off), f3 (indexed like f2) becomes 1 where the
+// target is the clear choice of greedy writing among the valid tokens (every other valid logit
+// is below the target's by more than p6's float), else 0.
+// p: vocab, rows, r0, valid | denom bits, seed bits, margin bits
 @compute @workgroup_size(256)
 fn xent(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let r = wg.y * nwg.x + wg.x;
@@ -957,6 +961,22 @@ fn xent(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3
     let tg = u0[g];
     let target_logit = f0[base + tg];
     workgroupBarrier();
+    if (p.a.w > 0u) {
+        let nv = min(p.a.w, v);
+        let margin = fl(p.b.z);
+        var close = 0u;
+        for (var j = li; j < nv; j = j + 256u) {
+            if (j != tg && f0[base + j] >= target_logit - margin) { close = close + 1u; }
+        }
+        redu[li] = close;
+        workgroupBarrier();
+        for (var s = 128u; s > 0u; s = s >> 1u) {
+            if (li < s) { redu[li] = redu[li] + redu[li + s]; }
+            workgroupBarrier();
+        }
+        if (li == 0u) { f3[g] = select(0.0, 1.0, redu[0] == 0u && tg < nv); }
+        workgroupBarrier();
+    }
     if (li == 0u) {
         let pt = exp(target_logit - mx) / sum;
         f2[g] = -f1[g] * log(max(pt, 1e-30)) / denom;

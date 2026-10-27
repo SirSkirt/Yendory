@@ -11,6 +11,101 @@ use std::collections::BTreeMap;
 /// Greedy reply length limit used by the reference evaluation.
 pub const MAX_REPLY_TOKENS: usize = 24;
 
+/// How far (in logits) every other token must be below an answer's next token for the GPU to
+/// confirm it: far more than the GPU's and CPU's arithmetic ever differ, so an answer the GPU
+/// confirms is the one the CPU would write. Closer calls are written out on the CPU.
+pub const GREEDY_MARGIN: f32 = 1e-3;
+
+/// Answers already known to be right without writing them out (the GPU confirmed that greedy
+/// writing gives exactly the expected answer): (item index, answer index within the item).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Confirmed(pub std::collections::HashSet<(usize, usize)>);
+
+impl Confirmed {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Answers the GPU can check: each one's (item, answer) index, and its row.
+pub type GreedyRows = (Vec<(usize, usize)>, Vec<super::Row>);
+
+/// The answers of `items` the GPU can check in one pass, each with its (item, answer) index and
+/// its row: the prompt exactly as the reply is written after it, then the expected answer and a
+/// line break as the weighted targets. Left to the CPU: actions, answers graded by a key the
+/// expected answer itself does not pass, answers that do not read back exactly as written, that
+/// contain a line break or are longer than a reply may be, and prompts longer than the model's
+/// context.
+pub fn greedy_rows(model: &Bicameral, items: &[&Item]) -> Result<GreedyRows, String> {
+    let tok = &model.tokenizer;
+    let newline = b'\n' as crate::tokenizer::TokenId;
+    let mut keys = Vec::new();
+    let mut rows = Vec::new();
+    let mut add = |key: (usize, usize), prompt: &str, expected: &str| -> Result<(), String> {
+        if expected.contains('\n') {
+            return Ok(());
+        }
+        let p = tok.encode(prompt)?;
+        let a = tok.encode(expected)?;
+        if p.is_empty()
+            || a.len() + 1 > MAX_REPLY_TOKENS
+            || p.len() + a.len() > model.config.max_tokens
+            || tok.decode(&a)? != expected
+        {
+            return Ok(());
+        }
+        let mut seq = p.clone();
+        seq.extend(&a);
+        seq.push(newline);
+        let ids = seq[..seq.len() - 1].to_vec();
+        let mask = (0..ids.len()).map(|i| if i + 1 >= p.len() { 1. } else { 0. }).collect();
+        keys.push(key);
+        rows.push(super::Row { ids, targets: seq[1..].to_vec(), mask });
+        Ok(())
+    };
+    for (i, it) in items.iter().enumerate() {
+        match it.kind {
+            Kind::Prose => {}
+            Kind::Conversation if it.has_actions() => {}
+            Kind::Conversation => {
+                let mut history = String::new();
+                for (j, (user, expected)) in it.users.iter().zip(&it.replies).enumerate() {
+                    history.push_str(&chat_prompt(user));
+                    add((i, j), &history, expected)?;
+                    history.push_str(expected);
+                    history.push('\n');
+                }
+            }
+            _ => {
+                let (Some(q), Some(expected)) = (&it.prompt, &it.answer) else { continue };
+                if it.key.as_ref().is_some_and(|k| !k.is_correct(expected)) {
+                    continue;
+                }
+                let prompt = format!("{}{}", it.context.as_deref().unwrap_or(""), chat_prompt(q));
+                add((i, 0), &prompt, expected)?;
+            }
+        }
+    }
+    Ok((keys, rows))
+}
+
+/// The answers of `items` the GPU confirms in GPU training (none otherwise), for
+/// [`evaluate_confirmed`] with the default ablation.
+pub fn confirm(trainer: &super::Trainer, model: &Bicameral, items: &[&Item]) -> Result<Confirmed, String> {
+    if !trainer.on_gpu() {
+        return Ok(Confirmed::default());
+    }
+    let (keys, rows) = greedy_rows(model, items)?;
+    if rows.is_empty() {
+        return Ok(Confirmed::default());
+    }
+    let Some(hits) = trainer.gpu_greedy(model, &rows) else { return Ok(Confirmed::default()) };
+    Ok(Confirmed(keys.into_iter().zip(hits?).filter(|(_, h)| *h).map(|(k, _)| k).collect()))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     pub kind: Kind,
@@ -83,7 +178,14 @@ pub fn continuation_log_prob(
     Ok(total)
 }
 
-fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outcome>, String> {
+fn evaluate_item(
+    model: &Bicameral,
+    i: usize,
+    it: &Item,
+    abl: Ablation,
+    confirmed: &Confirmed,
+) -> Result<Vec<Outcome>, String> {
+    let known = |j: usize| confirmed.0.contains(&(i, j));
     let mut out = Vec::new();
     match it.kind {
         Kind::Prose => {}
@@ -104,9 +206,10 @@ fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outc
         }
         Kind::Conversation => {
             let mut history = String::new();
-            for (user, expected) in it.users.iter().zip(&it.replies) {
+            for (j, (user, expected)) in it.users.iter().zip(&it.replies).enumerate() {
                 history.push_str(&chat_prompt(user));
-                let got = reply(model, &history, MAX_REPLY_TOKENS, abl)?;
+                let got =
+                    if known(j) { expected.clone() } else { reply(model, &history, MAX_REPLY_TOKENS, abl)? };
                 out.push(Outcome {
                     kind: it.kind,
                     source: it.source.clone(),
@@ -124,7 +227,7 @@ fn evaluate_item(model: &Bicameral, it: &Item, abl: Ablation) -> Result<Vec<Outc
             let (Some(q), Some(expected)) = (&it.prompt, &it.answer) else { return Ok(out) };
             // Study Mode memories retrieved for the question come before it.
             let prompt = format!("{}{}", it.context.as_deref().unwrap_or(""), chat_prompt(q));
-            let got = reply(model, &prompt, MAX_REPLY_TOKENS, abl)?;
+            let got = if known(0) { expected.clone() } else { reply(model, &prompt, MAX_REPLY_TOKENS, abl)? };
             let prefers_supported = match (&it.kind, &it.contradicted) {
                 (Kind::Reasoning, Some(bad)) => Some(
                     continuation_log_prob(model, &prompt, &format!("{expected}\n"), abl)?
@@ -174,6 +277,18 @@ type Indexed = Vec<(usize, Vec<Outcome>)>;
 
 /// Evaluates the given (normally held-out) items in parallel threads.
 pub fn evaluate(model: &Bicameral, items: &[&Item], abl: Ablation) -> Result<Report, String> {
+    evaluate_confirmed(model, items, abl, &Confirmed::default())
+}
+
+/// [`evaluate`] where the `confirmed` answers (from [`confirm`], for this model and these
+/// items, with the default ablation) are not written out again: greedy writing gives exactly
+/// the expected answer, so each is recorded as that reply, right. The report is the same.
+pub fn evaluate_confirmed(
+    model: &Bicameral,
+    items: &[&Item],
+    abl: Ablation,
+    confirmed: &Confirmed,
+) -> Result<Report, String> {
     let threads = super::cpu_threads().min(items.len().max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<Result<Indexed, String>> = std::thread::scope(|scope| {
@@ -186,7 +301,7 @@ pub fn evaluate(model: &Bicameral, items: &[&Item], abl: Ablation) -> Result<Rep
                         if i >= items.len() {
                             return Ok(done);
                         }
-                        done.push((i, evaluate_item(model, items[i], abl)?));
+                        done.push((i, evaluate_item(model, i, items[i], abl, confirmed)?));
                     }
                 })
             })

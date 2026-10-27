@@ -307,7 +307,9 @@ plan and status: docs/NEURO.md.
 ## Evaluation (`learn::eval`)
 
 - **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.
-  Conversations are scored per Nova turn with the true earlier turns as history.
+  Conversations are scored per Nova turn with the true earlier turns as history. In GPU
+  training the GPU may confirm an answer without writing it out (`evaluate_confirmed`, see GPU
+  checks under Training on the GPU); the report is the same.
 - **Supported vs contradicted:** for Reasoning, is the supported answer more likely than the
   contradicted one?
 - Held-out results measure the lesson's own patterns with new wording. They are **not** an
@@ -872,6 +874,32 @@ Held-out losses on the CPU also run forward passes only (no gradients), about a 
 work of a training step. Talking, exams and grading run on the CPU. `learn::set_cpu_threads(n)` limits the
 CPU threads (0: all).
 
+**GPU checks (0.6.4, `learn::set_gpu_checks`, on by default; Studio: "Check answers on the
+GPU" next to the training device).** Writing an answer token by token runs only on the CPU, so
+more of each check moves to the GPU:
+- **Lessons, courses and the Planner:** each candidate's held-out, Dense and retention losses are
+  computed on the GPU before the candidate goes to the CPU thread.
+- **Confirmed answers** (`eval::confirm`, Classroom candidates and Conversation's Classroom
+  guard): one forward pass on the GPU over the prompt followed by the expected answer and a line
+  break. If at every position of the answer the expected token is the model's clear choice
+  (every other valid token at least `eval::GREEDY_MARGIN`, 0.001, lower in logits), greedy
+  writing gives exactly that answer, so the CPU does not write it out; it is recorded as that
+  reply, right. Everything else is still written on the CPU: answers it gets wrong, close calls
+  (the margin is far larger than the GPU's and CPU's arithmetic ever differ), answers graded by
+  a key the expected answer itself does not pass, actions, answers with a line break or longer
+  than a reply may be, and prompts longer than the context. The more Nova knows, the less the
+  CPU writes. Context tests, reply checks and samples are judged by what Nova writes, so they
+  stay on the CPU.
+- **Reading** keeps reading when a check falls due while the CPU is still writing the previous
+  check's samples; the check starts as soon as that one is judged (the last one always runs).
+- Tested (`tests/gpu_checks.rs`, `tests/gpu.rs`): every confirmed answer is exactly what the CPU
+  writes and the reports are identical, for the step-15000 checkpoint (99 of its 99 right
+  answers confirmed) and a Nova Neuro model (95 of 97); a lesson taught with GPU checks on and
+  off selects the same candidates with the same scores.
+
+Off: the CPU computes the Classroom's whole score and writes every answer, and Reading waits for
+each check, as before 0.6.4.
+
 **Kernels.** Matrix products use 64 x 64 tiles with each thread's 4 x 4 results in vector
 registers. Attention takes 64 query rows of one sequence and head per workgroup and reads keys
 and values in tiles through workgroup memory, with a single-pass (running-maximum) softmax; for
@@ -1142,7 +1170,8 @@ same measures either way.
 - **Speed.** With GPU training, every loss in a check (the held-out conversations, listening,
   read text) and the practice pool's per-conversation losses are computed on the GPU; the
   answers Nova writes (Classroom questions, context tests, reply checks, samples) are written on
-  a CPU thread while the GPU keeps training. Training never waits for that thread: a check that
+  a CPU thread while the GPU keeps training; with GPU checks on, the GPU first confirms the
+  Classroom answers it can (see Training on the GPU), and those are not written again. Training never waits for that thread: a check that
   falls due while the last one is still being written starts as soon as it is judged.
 - **Reply checks** (`reply_checks`). Nova replies in the middle of 24 held-out conversations, and
   the replies are counted for: empty, repeating (the same three words twice, or its previous

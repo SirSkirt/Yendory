@@ -176,6 +176,7 @@ function showDevice(d) {
     }));
   }
   threads.value = String(d.cpuThreads >= d.cpuTotal ? 0 : d.cpuThreads);
+  $("gpuChecks").checked = d.gpuChecks ?? true;
   if (d.options) {
     const fastest = d.benchmark?.result?.fastest;
     const sel = $("deviceChoice");
@@ -183,7 +184,7 @@ function showDevice(d) {
       ...d.options.map(o => el("option", { value: o.id, disabled: o.available ? null : "", title: o.detail }, o.available ? o.label : `${o.label} — not available`)));
     sel.value = d.choice;
     const runs = d.active === "cpu" ? "the CPU" : d.activeName;
-    const parallel = d.active.startsWith("gpu") ? "; at the same time the CPU scores lesson candidates and checks reading" : d.active.startsWith("hybrid") ? "; each batch is split between them by their measured speed" : "";
+    const parallel = d.active.startsWith("gpu") ? (d.gpuChecks ?? true ? "; checks run on the GPU, and at the same time the CPU writes out the answers the GPU cannot confirm and reading samples" : "; at the same time the CPU scores lesson candidates and checks reading") : d.active.startsWith("hybrid") ? "; each batch is split between them by their measured speed" : "";
     $("deviceNote").textContent = `Training runs on ${runs}${parallel}.` + (d.note ? " " + d.note : "") + " Talking and exams run on the CPU.";
     showBenchmark(d.benchmark);
   } else {
@@ -251,6 +252,10 @@ $("threadChoice").addEventListener("change", safe(async () => {
   try { showDevice(await invoke("set_cpu_threads", { threads: Number($("threadChoice").value) })); }
   catch (e) { if (deviceInfo) $("threadChoice").value = String(deviceInfo.cpuThreads); throw e; }
 }, "CPU threads"));
+$("gpuChecks").addEventListener("change", safe(async () => {
+  try { showDevice(await invoke("set_gpu_checks", { on: $("gpuChecks").checked })); }
+  catch (e) { if (deviceInfo) $("gpuChecks").checked = deviceInfo.gpuChecks ?? true; throw e; }
+}, "GPU checks"));
 function renderSizes() {
   const body = $("sizeTable").tBodies[0];
   body.replaceChildren(...sizes.map(s => {

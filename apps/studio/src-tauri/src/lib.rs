@@ -541,6 +541,8 @@ struct DeviceInfo {
     /// CPU threads chosen (0: all) and the processor's total.
     cpu_threads: usize,
     cpu_total: usize,
+    /// GPU checks (`yendory_engine::learn::set_gpu_checks`): on by default.
+    gpu_checks: bool,
 }
 
 fn settings_file(app: &AppHandle) -> Res<PathBuf> {
@@ -592,6 +594,10 @@ fn device_choice(app: &AppHandle) -> String {
 
 fn thread_choice(app: &AppHandle) -> usize {
     read_settings(app).get("cpuThreads").and_then(|d| d.as_u64()).unwrap_or(0) as usize
+}
+
+fn checks_choice(app: &AppHandle) -> bool {
+    read_settings(app).get("gpuChecks").and_then(|d| d.as_bool()).unwrap_or(true)
 }
 
 fn stored_benchmark(app: &AppHandle) -> Option<serde_json::Value> {
@@ -646,9 +652,15 @@ fn device_label(d: Device) -> String {
 
 /// Applies a device choice ("auto": the last benchmark's fastest, else the GPU when there is
 /// one, else the CPU) and reports every option and where training runs.
-fn apply_device(choice: &str, threads: usize, benchmark: Option<serde_json::Value>) -> DeviceInfo {
+fn apply_device(
+    choice: &str,
+    threads: usize,
+    checks: bool,
+    benchmark: Option<serde_json::Value>,
+) -> DeviceInfo {
     use yendory_engine::learn::bench::{candidates, device_name};
     yendory_engine::learn::set_cpu_threads(threads);
+    yendory_engine::learn::set_gpu_checks(checks);
     let options: Vec<DeviceOption> = candidates()
         .into_iter()
         .map(|d| {
@@ -698,13 +710,15 @@ fn apply_device(choice: &str, threads: usize, benchmark: Option<serde_json::Valu
         gpu_error: gpu.err(),
         cpu_threads: threads,
         cpu_total: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        gpu_checks: checks,
     }
 }
 
 #[tauri::command]
 async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
     let (choice, threads, bench) = (device_choice(&app), thread_choice(&app), stored_benchmark(&app));
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
+    let checks = checks_choice(&app);
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
         .await
         .map_err(|e| e.to_string())
 }
@@ -716,8 +730,8 @@ async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: 
         return Err("Unknown training device".into());
     }
     write_setting(&app, "trainingDevice", choice.clone().into())?;
-    let (threads, bench) = (thread_choice(&app), stored_benchmark(&app));
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
+    let (threads, bench, checks) = (thread_choice(&app), stored_benchmark(&app), checks_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
         .await
         .map_err(|e| e.to_string())
 }
@@ -727,8 +741,19 @@ async fn set_training_device(app: AppHandle, studio: State<'_, Studio>, choice: 
 async fn set_cpu_threads(app: AppHandle, studio: State<'_, Studio>, threads: usize) -> Res<DeviceInfo> {
     not_teaching(&studio)?;
     write_setting(&app, "cpuThreads", threads.into())?;
-    let (choice, bench) = (device_choice(&app), stored_benchmark(&app));
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, bench))
+    let (choice, bench, checks) = (device_choice(&app), stored_benchmark(&app), checks_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// GPU checks on or off (see `yendory_engine::learn::set_gpu_checks`).
+#[tauri::command]
+async fn set_gpu_checks(app: AppHandle, studio: State<'_, Studio>, on: bool) -> Res<DeviceInfo> {
+    not_teaching(&studio)?;
+    write_setting(&app, "gpuChecks", on.into())?;
+    let (choice, threads, bench) = (device_choice(&app), thread_choice(&app), stored_benchmark(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, on, bench))
         .await
         .map_err(|e| e.to_string())
 }
@@ -775,8 +800,8 @@ async fn benchmark_training(
         "result": result,
     });
     write_setting(&app, "benchmark", record.clone())?;
-    let (choice, threads) = (device_choice(&app), thread_choice(&app));
-    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, Some(record)))
+    let (choice, threads, checks) = (device_choice(&app), thread_choice(&app), checks_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, Some(record)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -1883,6 +1908,7 @@ pub fn run() {
             training_device,
             set_training_device,
             set_cpu_threads,
+            set_gpu_checks,
             add_builtin_lessons,
             courses::builtin_courses,
             courses::add_builtin_course,

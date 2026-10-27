@@ -105,6 +105,15 @@ even one row fits. Conversation checks score whole conversations up to the full 
 before this they were sent 8 rows at a time without the memory planner, which ran a 0.5.9
 Conversation run out of GPU memory. Tested on a software GPU with no budget, room for two rows
 and room for none (the same loss as the CPU each time).
+0.6.4: GPU checks (`learn::set_gpu_checks`, on by default). The Classroom's candidate losses run
+on the GPU, and the GPU confirms the answers greedy writing certainly gives exactly (the expected
+token is the clear choice at every position, by more than 0.001 in logits), so the CPU writes
+out only the rest; Reading no longer waits for a check's samples. Tested on a software GPU
+(`tests/gpu_checks.rs`, `tests/gpu.rs`): every confirmed answer is exactly what the CPU writes
+and the reports are identical (step 15,000: 99 of 99 right answers confirmed; Nova Neuro: 95 of
+97); a lesson with GPU checks on and off selects the same candidates with the same scores, and
+Reading on the GPU stops at the same check as on the CPU. The speed-up on a real graphics card
+has not been measured.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

@@ -190,8 +190,9 @@ fn reading_and_lessons_train_on_the_gpu() {
         eval_limit: Some(6),
         ..Default::default()
     };
-    let teach = |gpu: bool| {
+    let teach = |gpu: bool, gpu_checks: bool| {
         set_gpu_training(gpu);
+        yendory_engine::learn::set_gpu_checks(gpu_checks);
         let r = yendory_engine::learn::session::teach(
             &start,
             &lesson,
@@ -202,14 +203,31 @@ fn reading_and_lessons_train_on_the_gpu() {
         )
         .unwrap();
         set_gpu_training(false);
+        yendory_engine::learn::set_gpu_checks(true);
         r
     };
-    let (c, g) = (teach(false), teach(true));
+    let (c, g) = (teach(false, true), teach(true, true));
     let pick = |r: &yendory_engine::learn::session::SessionResult| {
         r.epochs.iter().map(|e| e.selected.clone()).collect::<Vec<_>>()
     };
     assert_eq!(pick(&c), pick(&g), "the same candidates are selected");
     assert!((c.final_score.heldout_loss - g.final_score.heldout_loss).abs() < 2e-3);
+    // Candidates scored with the GPU's losses and confirmed answers are judged as when the CPU
+    // computes the whole score.
+    let cpu_checked = teach(true, false);
+    assert_eq!(pick(&g), pick(&cpu_checked));
+    let candidates = |r: &yendory_engine::learn::session::SessionResult| {
+        r.epochs.iter().flat_map(|e| e.candidates.iter().map(|c| c.score.clone())).collect::<Vec<_>>()
+    };
+    let (a, b) = (candidates(&g), candidates(&cpu_checked));
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(
+            (x.exact_correct, x.panel_correct, &x.by_kind),
+            (y.exact_correct, y.panel_correct, &y.by_kind)
+        );
+        assert!((x.heldout_loss - y.heldout_loss).abs() < 1e-4, "{} vs {}", x.heldout_loss, y.heldout_loss);
+    }
 }
 
 /// Hybrid training (part of each batch on the GPU, the rest on the CPU, gradients added, the

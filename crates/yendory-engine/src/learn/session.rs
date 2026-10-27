@@ -18,7 +18,7 @@
 //! epochs in a row without an accepted candidate the session ends, and the accepted model is
 //! the result. Teacher answers are training targets and evaluation keys only; they are never
 //! given to the model at inference.
-use super::eval::{evaluate, sample_per_kind, Report};
+use super::eval::{evaluate, evaluate_confirmed, sample_per_kind, Confirmed, Report};
 use super::lessons::{grow_vocabulary, Item, Kind};
 use super::reward::{Origin, Rewards, Totals};
 use super::{encode_item, lr_schedule, Rng, Row};
@@ -623,23 +623,84 @@ pub(super) fn rows_of(model: &Bicameral, items: &[&Item], rng: &mut Rng) -> Resu
     Ok(rows)
 }
 
+/// The parts of a candidate's score the GPU computes in GPU training (before the CPU writes
+/// out the remaining answers): the losses, and the answers it confirms.
+struct GpuParts {
+    heldout_loss: f32,
+    without_dense_loss: Option<f32>,
+    retention_loss: Option<f32>,
+    heldout: Confirmed,
+    panel: Confirmed,
+}
+
+/// The losses (the same values as on the CPU) and the confirmed answers of a candidate, with
+/// the weights on `trainer`'s GPU; `None` when training is not on the GPU or GPU checks are off
+/// ([`super::set_gpu_checks`]).
+fn gpu_parts(
+    trainer: &super::Trainer,
+    model: &Bicameral,
+    p: &Probes,
+    dense: bool,
+) -> Result<Option<GpuParts>, String> {
+    if !super::gpu_checks() || !trainer.on_gpu() {
+        return Ok(None);
+    }
+    let loss = |rows: &[Row], abl: Ablation| -> Result<f32, String> {
+        if rows.is_empty() {
+            return batch_loss_and_gradients_loss(model, rows, abl);
+        }
+        trainer.gpu_loss(model, rows, abl).unwrap_or_else(|| batch_loss_and_gradients_loss(model, rows, abl))
+    };
+    Ok(Some(GpuParts {
+        heldout_loss: loss(&p.heldout_rows, Ablation::default())?,
+        without_dense_loss: if dense {
+            Some(loss(&p.heldout_rows, Ablation { no_afferent: true, ..Ablation::default() })?)
+        } else {
+            None
+        },
+        retention_loss: if p.retention_rows.is_empty() {
+            None
+        } else {
+            Some(loss(&p.retention_rows, Ablation::default())?)
+        },
+        heldout: super::eval::confirm(trainer, model, &p.heldout_items)?,
+        panel: super::eval::confirm(trainer, model, &p.panel_items)?,
+    }))
+}
+
 fn score(model: &Bicameral, p: &Probes, dense: bool) -> Result<(Score, Report, Report), String> {
+    score_with(model, p, dense, None)
+}
+
+/// [`score`] with the parts the GPU already computed (the same results).
+fn score_with(
+    model: &Bicameral,
+    p: &Probes,
+    dense: bool,
+    gpu: Option<GpuParts>,
+) -> Result<(Score, Report, Report), String> {
     let abl = Ablation::default();
-    let heldout_loss = batch_loss_and_gradients_loss(model, &p.heldout_rows, abl)?;
-    let without_dense_loss = if dense {
-        let cut = Ablation { no_afferent: true, ..Ablation::default() };
-        Some(batch_loss_and_gradients_loss(model, &p.heldout_rows, cut)?)
-    } else {
-        None
+    let (heldout_loss, without_dense_loss, retention_loss, heldout, panel) = match gpu {
+        Some(g) => (g.heldout_loss, g.without_dense_loss, g.retention_loss, g.heldout, g.panel),
+        None => {
+            let heldout_loss = batch_loss_and_gradients_loss(model, &p.heldout_rows, abl)?;
+            let without_dense_loss = if dense {
+                let cut = Ablation { no_afferent: true, ..Ablation::default() };
+                Some(batch_loss_and_gradients_loss(model, &p.heldout_rows, cut)?)
+            } else {
+                None
+            };
+            let retention_loss = if p.retention_rows.is_empty() {
+                None
+            } else {
+                Some(batch_loss_and_gradients_loss(model, &p.retention_rows, abl)?)
+            };
+            (heldout_loss, without_dense_loss, retention_loss, Confirmed::default(), Confirmed::default())
+        }
     };
     let dense_reliance = without_dense_loss.map(|l| l - heldout_loss);
-    let report = evaluate(model, &p.heldout_items, abl)?;
-    let panel = evaluate(model, &p.panel_items, abl)?;
-    let retention_loss = if p.retention_rows.is_empty() {
-        None
-    } else {
-        Some(batch_loss_and_gradients_loss(model, &p.retention_rows, abl)?)
-    };
+    let report = evaluate_confirmed(model, &p.heldout_items, abl, &heldout)?;
+    let panel = evaluate_confirmed(model, &p.panel_items, abl, &panel)?;
     let overall = report.overall();
     Ok((
         Score {
@@ -1343,6 +1404,9 @@ pub fn teach_rewarded(
                 }
                 trainer.sync(&mut cand)?;
                 let train_loss = (losses / plan.len().max(1) as f64) as f32;
+                // The losses and the answers the GPU confirms, while the CPU may still be
+                // writing the previous candidate's answers.
+                let gpu = gpu_parts(&trainer, &cand, &probes, dense)?;
                 if let Some(p) = pending.take() {
                     let (cand, scored) = p.scoring.join().map_err(|_| "Scoring a candidate failed")?;
                     let j = Judge {
@@ -1369,8 +1433,9 @@ pub fn teach_rewarded(
                 }
                 let probes = &probes;
                 if trainer.on_gpu() {
+                    // The CPU writes out the answers the GPU did not confirm.
                     let scoring = scope.spawn(move || {
-                        let scored = score(&cand, probes, dense);
+                        let scored = score_with(&cand, probes, dense, gpu);
                         (cand, scored)
                     });
                     pending = Some(Pending { ci, focus, train_loss, scoring });

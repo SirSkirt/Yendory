@@ -735,6 +735,10 @@ pub(crate) struct GpuGraph<'a> {
     inputs: Vec<usize>,
     /// Loss only: no gradients are recorded.
     forward_only: bool,
+    /// Greedy check: the number of valid tokens and the margin (see `GpuModel::greedy_hits`).
+    greedy: Option<(u32, f32)>,
+    /// The greedy check's per-token results (1 = the target is the clear choice).
+    hits: Option<B>,
 }
 
 impl<'a> GpuGraph<'a> {
@@ -753,6 +757,8 @@ impl<'a> GpuGraph<'a> {
             upload_bytes: 0,
             inputs: Vec::new(),
             forward_only: false,
+            greedy: None,
+            hits: None,
         }
     }
 
@@ -969,6 +975,9 @@ impl<'a> GpuGraph<'a> {
         let (hb, _) = self.at(h);
         let (ea, ba) = (self.nodes[embed].param.unwrap().0, self.nodes[bias].param.unwrap().0);
         let losses = self.alloc(rows);
+        let (valid, margin) = self.greedy.unwrap_or((0, 0.));
+        let hits = (valid > 0).then(|| self.alloc(rows));
+        self.hits = hits;
         let dh = self.alloc(rows * d);
         let chunk = ((16usize << 20) / vocab.max(1)).clamp(1, rows.max(1));
         let logits = self.alloc(chunk * vocab);
@@ -984,9 +993,9 @@ impl<'a> GpuGraph<'a> {
                 groups(rc * vocab),
             );
             // One workgroup per row: the row's loss, and the logits become their gradient.
-            let p = [vocab as u32, rc as u32, r0 as u32, 0, bits(denom), bits(1.)];
+            let p = [vocab as u32, rc as u32, r0 as u32, valid, bits(denom), bits(1.), bits(margin)];
             let wg = groups(rc * 256);
-            self.dispatch(K::Xent, &[Some(logits), Some(mask), Some(losses)], Some(targets), &p, wg);
+            self.dispatch(K::Xent, &[Some(logits), Some(mask), Some(losses), hits], Some(targets), &p, wg);
             if self.forward_only {
                 continue;
             }
@@ -1660,6 +1669,7 @@ impl GpuModel {
 
     /// Records the forward pass, the loss and the backward pass of a batch (rows padded to the
     /// longest). Returns the graph, the per-row loss buffer and the number of rows.
+    #[allow(clippy::too_many_arguments)]
     fn record<'a>(
         &'a self,
         pool: &'a mut Pool,
@@ -1669,6 +1679,23 @@ impl GpuModel {
         denom: Option<f32>,
         gradients: bool,
         zero_grads: bool,
+    ) -> Result<(GpuGraph<'a>, B, usize), String> {
+        self.record_with(pool, model, rows, abl, denom, gradients, zero_grads, None)
+    }
+
+    /// [`GpuModel::record`] with the greedy check on (the number of valid tokens and the margin;
+    /// its per-token results are in the graph's `hits`).
+    #[allow(clippy::too_many_arguments)]
+    fn record_with<'a>(
+        &'a self,
+        pool: &'a mut Pool,
+        model: &Bicameral,
+        rows: &[Row],
+        abl: Ablation,
+        denom: Option<f32>,
+        gradients: bool,
+        zero_grads: bool,
+        greedy: Option<(u32, f32)>,
     ) -> Result<(GpuGraph<'a>, B, usize), String> {
         if rows.is_empty() {
             return Err("Empty training batch".into());
@@ -1709,6 +1736,7 @@ impl GpuModel {
         }
         let denom = denom.unwrap_or_else(|| mask.iter().map(|&m| m as f64).sum::<f64>().max(1.) as f32);
         let mut g = GpuGraph::new(&self.gpu, pool, t);
+        g.greedy = greedy;
         if gradients && zero_grads {
             g.fill(B::Grads, 0, self.n, 0.);
         }
@@ -2174,6 +2202,47 @@ impl GpuModel {
                     let sum: f64 = per_token[k * t..(k + 1) * t].iter().map(|&x| x as f64).sum();
                     let weight: f64 = r.mask.iter().map(|&m| m as f64).sum();
                     out.push((sum / weight.max(1.)) as f32);
+                }
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Greedy check, `chunk` rows at a time: for each row, whether at every weighted position
+    /// its target is the clear choice of greedy writing (the most likely of the model's valid
+    /// tokens, every other one below it by more than `margin` in logits, so that the small
+    /// differences between GPU and CPU arithmetic cannot change the choice). A row whose
+    /// weighted targets are an answer followed by a line break is then exactly what greedy
+    /// writing gives after the row's prompt.
+    pub fn greedy_hits(
+        &self,
+        model: &Bicameral,
+        rows: &[Row],
+        margin: f32,
+        chunk: usize,
+    ) -> Result<Vec<bool>, String> {
+        let valid = (128 + model.tokenizer.words().len()).min(model.config.vocab) as u32;
+        let mut out = Vec::with_capacity(rows.len());
+        self.with_pool(|pool| {
+            for part in rows.chunks(chunk.max(1)) {
+                let t = part.iter().map(|r| r.ids.len()).max().unwrap_or(1);
+                let (mut g, _, n) = self.record_with(
+                    pool,
+                    model,
+                    part,
+                    Ablation::default(),
+                    Some(1.),
+                    false,
+                    false,
+                    Some((valid, margin)),
+                )?;
+                self.run(&mut g);
+                let hits = g.hits.ok_or("The greedy check was not recorded")?;
+                let hits = self.gpu.read(self.buffer(&g, hits), n)?;
+                g.finish();
+                for (k, r) in part.iter().enumerate() {
+                    out.push(r.mask.iter().enumerate().all(|(i, &m)| m <= 0. || hits[k * t + i] > 0.5));
                 }
             }
             Ok(())

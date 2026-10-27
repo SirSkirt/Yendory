@@ -284,6 +284,23 @@ pub fn set_cpu_threads(n: usize) {
     CPU_THREADS.store(n, std::sync::atomic::Ordering::Release);
 }
 
+static GPU_CHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// GPU checks (on by default), for Reading, the Classroom, courses and Conversation in GPU
+/// training: the Classroom's losses are computed on the GPU, the GPU confirms the answers
+/// greedy writing certainly gives exactly (`eval::confirm`) so the CPU writes out only the
+/// rest, and Reading keeps training while the CPU writes a check's samples. The results are the
+/// same. Off: the CPU computes the Classroom's whole score and writes every answer, and Reading
+/// waits for each check, as before.
+pub fn set_gpu_checks(on: bool) {
+    GPU_CHECKS.store(on, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether GPU checks are on (see [`set_gpu_checks`]).
+pub fn gpu_checks() -> bool {
+    GPU_CHECKS.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// The CPU threads to use: the chosen limit, or every thread the processor has.
 pub fn cpu_threads() -> usize {
     let all = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
@@ -703,6 +720,29 @@ impl Trainer {
         #[cfg(not(feature = "gpu"))]
         {
             let _ = (model, rows, abl);
+            None
+        }
+    }
+
+    /// The greedy check on the GPU (`None` when training is not on the GPU): for each row,
+    /// whether greedy writing certainly gives its weighted targets (see
+    /// [`crate::gpu::GpuModel::greedy_hits`]). Rows that do not fit in the GPU's memory are
+    /// reported as not confirmed (the CPU then writes those answers).
+    pub fn gpu_greedy(&self, model: &Bicameral, rows: &[Row]) -> Option<Result<Vec<bool>, String>> {
+        #[cfg(feature = "gpu")]
+        {
+            let g = self.gpu.as_ref()?;
+            Some(self.in_parts(
+                model,
+                rows,
+                "answer check",
+                |part| g.greedy_hits(model, rows, eval::GREEDY_MARGIN, part),
+                || Ok(vec![false; rows.len()]),
+            ))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = (model, rows);
             None
         }
     }

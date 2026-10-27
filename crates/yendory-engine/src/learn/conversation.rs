@@ -41,7 +41,7 @@
 //! * **Reply checks** (`reply_checks`): replies Nova writes mid-conversation are checked for
 //!   emptiness, repetition, echoing, staying on topic, questions, its own name and an assistant's
 //!   voice. They are measured, never trained on.
-use super::eval::{evaluate, reply};
+use super::eval::reply;
 use super::lessons::{is_held_out, Item, Kind};
 #[cfg(test)]
 use super::listening::Skill;
@@ -803,6 +803,8 @@ struct GpuPart {
     stage_losses: Vec<f32>,
     listening: Option<f32>,
     reading: Option<f32>,
+    /// The Classroom guard's answers the GPU confirmed (the CPU writes out the rest).
+    confirmed: super::eval::Confirmed,
 }
 
 impl Fixed<'_> {
@@ -825,14 +827,15 @@ impl Fixed<'_> {
         } else {
             Some(batch_loss(model, &self.reading_probes, Ablation::default())?)
         };
-        Ok(GpuPart { stage_losses, listening, reading })
+        Ok(GpuPart { stage_losses, listening, reading, confirmed: Default::default() })
     }
 
-    fn classroom(&self, model: &Bicameral) -> Result<Vec<bool>, String> {
+    fn classroom(&self, model: &Bicameral, confirmed: &super::eval::Confirmed) -> Result<Vec<bool>, String> {
         if self.guard.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(evaluate(model, &self.guard, Ablation::default())?.outcomes.iter().map(|o| o.correct).collect())
+        let report = super::eval::evaluate_confirmed(model, &self.guard, Ablation::default(), confirmed)?;
+        Ok(report.outcomes.iter().map(|o| o.correct).collect())
     }
 
     fn context(&self, model: &Bicameral) -> Option<ContextScore> {
@@ -865,11 +868,11 @@ impl Fixed<'_> {
         train_loss: f32,
         gpu: Option<GpuPart>,
     ) -> Result<Measured, String> {
-        let GpuPart { stage_losses, listening, reading } = match gpu {
+        let GpuPart { stage_losses, listening, reading, confirmed } = match gpu {
             Some(g) => g,
             None => self.losses(&model)?,
         };
-        let classroom = self.classroom(&model)?;
+        let classroom = self.classroom(&model, &confirmed)?;
         let context = self.context(&model);
         let reply_checks = self.reply_checks(&model);
         let samples = self
@@ -1507,7 +1510,13 @@ pub fn converse(
                 };
                 let reading =
                     if fixed.reading_probes.is_empty() { None } else { Some(gpu(&fixed.reading_probes)?) };
-                let part = GpuPart { stage_losses, listening, reading };
+                // The Classroom answers the GPU confirms are not written out again.
+                let confirmed = if super::gpu_checks() {
+                    super::eval::confirm(&trainer, &current, &fixed.guard)?
+                } else {
+                    Default::default()
+                };
+                let part = GpuPart { stage_losses, listening, reading, confirmed };
                 let fixed = &fixed;
                 pending = Some(
                     scope.spawn(move || fixed.measure(snapshot, step + 1, tokens, train_loss, Some(part))),

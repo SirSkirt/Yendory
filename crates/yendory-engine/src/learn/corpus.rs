@@ -662,12 +662,15 @@ pub fn pretrain_mix(
         Ok(Measured { model, step, tokens, train_loss, check, samples })
     };
 
-    // With GPU training the CPU checks each checkpoint while the GPU keeps reading; the
-    // checkpoints and their results are the same as checking inline, and each check is
-    // judged before the next one starts, so early stopping happens at the same check.
+    // With GPU training the GPU measures the held-out losses and the CPU writes the samples
+    // while the GPU keeps reading. Each check is judged before the next one starts; a check that
+    // falls due while the previous one's samples are still being written starts as soon as that
+    // one is judged (with GPU checks off it waits for that one; on the CPU, every check runs
+    // inline when it falls due).
     let mut trainer = super::Trainer::new(&current);
     std::thread::scope(|scope| -> Result<(), String> {
         let mut pending: Option<std::thread::ScopedJoinHandle<'_, Result<Measured, String>>> = None;
+        let mut due = false;
         let join = |h: std::thread::ScopedJoinHandle<'_, Result<Measured, String>>| {
             h.join().map_err(|_| "A held-out check failed".to_string())?
         };
@@ -710,6 +713,12 @@ pub fn pretrain_mix(
             });
 
             if (step + 1) % eval_every == 0 || step + 1 == steps {
+                due = true;
+            }
+            // A check that falls due while the CPU is still writing the previous one's samples
+            // waits until that one is judged; training does not (the last check always runs).
+            if due && (pending.is_none() || step + 1 == steps || !super::gpu_checks()) {
+                due = false;
                 if let Some(h) = pending.take() {
                     if judge(join(h)?, observer)? {
                         early_stop = true;
