@@ -49,6 +49,9 @@ pub(crate) struct ChatSettings {
     pub fixed_seed: bool,
     /// Study Mode memories related to the message go in front of it (when Study Mode is on).
     pub memories: bool,
+    /// What Nova says about itself is remembered (Study Mode memory, shown to it again as
+    /// "I said: ..."), so it can stay consistent from one chat to the next.
+    pub remember_self: bool,
 }
 impl Default for ChatSettings {
     fn default() -> Self {
@@ -60,6 +63,7 @@ impl Default for ChatSettings {
             sampling: Sampling::default(),
             fixed_seed: false,
             memories: true,
+            remember_self: true,
         }
     }
 }
@@ -108,6 +112,12 @@ pub(crate) struct ReplyInfo {
     pub sampling: Sampling,
     /// The model's training step when it replied.
     pub step: u64,
+    /// What Nova said about itself in this reply, now remembered (memory ids and texts).
+    #[serde(default)]
+    pub remembered: Vec<(u64, String)>,
+    /// Earlier memories a remembered statement may contradict.
+    #[serde(default)]
+    pub may_contradict: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -124,6 +134,10 @@ pub(crate) struct Message {
     pub dropped: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<ReplyInfo>,
+    /// The teacher's mark on a reply: "consistent" (in keeping with what Nova said before, in its
+    /// own voice; trained in the Conversation stage) or "contradicts" (never trained).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -488,7 +502,15 @@ fn user_message(model: &Bicameral, text: &str, attachments: Vec<Attachment>) -> 
         });
     }
     let attachments = attachments.into_iter().map(|a| check_attachment(model, a)).collect::<Res<Vec<_>>>()?;
-    Ok(Message { role: "user".into(), text: clean, time: now(), attachments, dropped, info: None })
+    Ok(Message {
+        role: "user".into(),
+        text: clean,
+        time: now(),
+        attachments,
+        dropped,
+        info: None,
+        mark: None,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -713,12 +735,27 @@ async fn respond(
     })
     .await
     .map_err(|e| e.to_string())??;
+    let text = yendory_engine::nexus::readable(&reply.text);
+    // What Nova said about itself, remembered (finished replies only: a stopped reply may end
+    // mid-sentence).
+    let (mut remembered, mut may_contradict) = (Vec::new(), Vec::new());
+    if chat.settings.remember_self && reply.finished && study::study_mode(&app) {
+        let mut store = study::load_memory(&app, &model_id);
+        for (id, said, conflicts) in store.remember_said(&text, step, now(), &chat.id) {
+            remembered.push((id, said));
+            may_contradict.extend(conflicts.iter().filter_map(|c| store.get(*c).map(|m| m.text.clone())));
+        }
+        if !remembered.is_empty() {
+            study::save_memory(&app, &model_id, &store)?;
+        }
+    }
     chat.messages.push(Message {
         role: "model".into(),
-        text: yendory_engine::nexus::readable(&reply.text),
+        text,
         time: now(),
         attachments: Vec::new(),
         dropped: 0,
+        mark: None,
         info: Some(ReplyInfo {
             tokens: reply.tokens,
             millis: started.elapsed().as_millis() as u64,
@@ -733,11 +770,31 @@ async fn respond(
             stopped: reply.stopped,
             sampling,
             step,
+            remembered,
+            may_contradict,
         }),
     });
     chat.updated = now();
     save_chat(&app, &model_id, &chat)?;
     Ok(chat)
+}
+
+/// Replies that are taken back (regenerated, or after an edited message) were not said after
+/// all: what they put in memory goes.
+fn forget_replies(app: &AppHandle, model_id: &str, removed: &[Message]) -> Res<()> {
+    let ids: Vec<u64> = removed
+        .iter()
+        .filter_map(|m| m.info.as_ref())
+        .flat_map(|i| i.remembered.iter().map(|r| r.0))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut store = study::load_memory(app, model_id);
+    store
+        .entries
+        .retain(|m| !(ids.contains(&m.id) && m.origin == yendory_engine::memory::MemoryOrigin::Said));
+    study::save_memory(app, model_id, &store)
 }
 
 /// Marks a reply as being written; one at a time.
@@ -775,6 +832,7 @@ pub(crate) async fn chat_send(
         if chat.messages.get(i).map(|m| m.role.as_str()) != Some("user") {
             return Err("Only your own messages can be edited".into());
         }
+        forget_replies(&app, &model_id, &chat.messages[i..])?;
         chat.messages.truncate(i);
     }
     // Checked before anything is saved: a message that cannot fit is not added.
@@ -795,12 +853,78 @@ pub(crate) async fn chat_regenerate(app: AppHandle, studio: State<'_, Studio>, i
     let (model_id, model) = with_active(&studio, |a| Ok((a.meta.id.clone(), a.model.clone())))?;
     let mut chat = load_chat(&app, &model_id, &id)?;
     while chat.messages.last().is_some_and(|m| m.role == "model") {
-        chat.messages.pop();
+        let gone = chat.messages.pop().unwrap();
+        forget_replies(&app, &model_id, std::slice::from_ref(&gone))?;
     }
     if chat.messages.is_empty() {
         return Err("There is no message to reply to".into());
     }
     respond(app, &studio, model_id, model, chat).await
+}
+
+/// Marks one of the model's replies: "consistent", "contradicts" or none.
+#[tauri::command]
+pub(crate) fn chat_mark(
+    app: AppHandle,
+    studio: State<Studio>,
+    id: String,
+    index: usize,
+    mark: Option<String>,
+) -> Res<Chat> {
+    let model_id = active_id(&studio)?;
+    let mut chat = load_chat(&app, &model_id, &id)?;
+    if let Some(m) = &mark {
+        if m != "consistent" && m != "contradicts" {
+            return Err("Unknown mark".into());
+        }
+    }
+    let msg = chat
+        .messages
+        .get_mut(index)
+        .filter(|m| m.role == "model")
+        .ok_or("Only the model's replies can be marked")?;
+    msg.mark = mark;
+    save_chat(&app, &model_id, &chat)?;
+    Ok(chat)
+}
+
+/// The open model's chats as conversations for the Conversation stage: Nova's replies marked
+/// consistent are trained, everything else is the conversation they answer. Nova's speaker is
+/// called `nova` (the name it is given in practice, so its own text is never renamed). Returns
+/// the dialogues and the number of marked replies.
+pub(crate) fn marked_dialogues(
+    app: &AppHandle,
+    model_id: &str,
+    nova: &str,
+) -> (Vec<yendory_engine::learn::conversation::Dialogue>, usize) {
+    let mut out = Vec::new();
+    let mut marked = 0;
+    let Ok(dir) = chats_dir(app, model_id) else { return (out, 0) };
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(chat) = std::fs::read(entry.path())
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice::<Chat>(&b).map_err(|e| e.to_string()))
+        else {
+            continue;
+        };
+        let keep = |m: &Message| m.role == "model" && m.mark.as_deref() == Some("consistent");
+        let n = chat.messages.iter().filter(|m| keep(m)).count();
+        if n == 0 {
+            continue;
+        }
+        marked += n;
+        let messages: Vec<&Message> = chat.messages.iter().filter(|m| !m.text.trim().is_empty()).collect();
+        out.push(yendory_engine::learn::conversation::Dialogue {
+            situation: String::new(),
+            speakers: messages
+                .iter()
+                .map(|m| if m.role == "user" { "You".to_string() } else { nova.to_string() })
+                .collect(),
+            turns: messages.iter().map(|m| one_line(&yendory_engine::nexus::sanitize(&m.text))).collect(),
+            trainable: messages.iter().map(|m| keep(m)).collect(),
+        });
+    }
+    (out, marked)
 }
 
 /// Stops the reply being written (what was written so far is kept).
@@ -880,6 +1004,7 @@ mod tests {
             attachments: Vec::new(),
             dropped: 0,
             info: None,
+            mark: None,
         }
     }
 

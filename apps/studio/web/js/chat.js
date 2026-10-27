@@ -1,9 +1,9 @@
 "use strict";
-// § 12 Chat: saved conversations with the open model. Replies are written by the model in the
+// § 13 Chat: saved conversations with the open model. Replies are written by the model in the
 // Engine token by token and arrive here as "chat-token" events; this page only displays them.
 (() => {
   const DEFAULTS = {
-    context: "", history: "all", turns: 6, replyTokens: 0, fixedSeed: false, memories: true,
+    context: "", history: "all", turns: 6, replyTokens: 0, fixedSeed: false, memories: true, rememberSelf: true,
     sampling: { temperature: 0, topK: 0, topP: 1, repetitionPenalty: 1, seed: 0 },
   };
   const SAMPLED_TEMPERATURE = 0.8;
@@ -113,19 +113,34 @@
         f.memories?.length ? el("dt", {}, "Memories") : "", f.memories?.length ? el("dd", {}, el("ul", {}, ...f.memories.map(t => el("li", {}, t)))) : ""));
     return details;
   }
+  // The teacher's mark on a reply: by consistency with what Nova said before and whether it is
+  // its own voice, never by agreement. Replies marked consistent can be practised in § 4.
+  function markButtons(m, i) {
+    const set = mark => safe(async () => {
+      chat = await invoke("chat_mark", { id: chat.id, index: i, mark: m.mark === mark ? null : mark });
+      render();
+    }, "Mark")();
+    const hint = "Mark by consistency with what Nova said before and whether it gave its own reason, not by whether you agree.";
+    return el("span", { class: "chat-marks", title: hint },
+      el("button", { type: "button", class: "chat-act chat-mark" + (m.mark === "consistent" ? " on good" : ""), "aria-pressed": String(m.mark === "consistent"), onclick: () => set("consistent") }, "✓ Consistent"),
+      el("button", { type: "button", class: "chat-act chat-mark" + (m.mark === "contradicts" ? " on bad" : ""), "aria-pressed": String(m.mark === "contradicts"), onclick: () => set("contradicts") }, "✗ Contradicts itself"));
+  }
   function messageView(m, i) {
     const mine = m.role === "user";
     const last = i === chat.messages.length - 1;
     const actions = el("div", { class: "chat-actions" },
       el("button", { type: "button", class: "chat-act", onclick: () => copy(m.text) }, "Copy"),
       mine ? el("button", { type: "button", class: "chat-act", onclick: () => startEdit(i) }, "Edit") : "",
-      !mine && last ? el("button", { type: "button", class: "chat-act", onclick: safe(regenerate, "Regenerate") }, "Regenerate") : "");
+      !mine && last ? el("button", { type: "button", class: "chat-act", onclick: safe(regenerate, "Regenerate") }, "Regenerate") : "",
+      mine ? "" : markButtons(m, i));
     const body = el("div", { class: "chat-body" },
       el("div", { class: "chat-who" }, mine ? "You" : modelName(), el("time", {}, m.time ? new Date(m.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "")),
       attachmentsView(m.attachments),
       el("div", { class: "chat-text" + (m.text ? "" : " empty-reply") }, m.text || "(an empty reply: the model's first token ended the line)"),
       m.dropped ? el("p", { class: "chat-flag" }, `${fmt(m.dropped)} character(s) the model cannot read (emoji, other alphabets) were left out.`) : "",
       m.info?.memories?.length ? el("p", { class: "chat-flag memory" }, `${m.info.memories.length} Study Mode memor${m.info.memories.length === 1 ? "y" : "ies"} were in front of the message.`) : "",
+      m.info?.remembered?.length ? el("p", { class: "chat-flag said" }, "Remembered what it said about itself: ", m.info.remembered.map(r => `“${r[1]}”`).join(" ")) : "",
+      m.info?.mayContradict?.length ? el("p", { class: "chat-flag" }, "This may contradict what it said before: ", m.info.mayContradict.map(t => `“${t}”`).join(" "), " You can mark the reply below, or change the older memory on § 8 Study.") : "",
       mine ? "" : infoView(m, i), actions);
     return el("article", { class: "chat-msg " + (mine ? "user" : "model") }, mine ? "" : avatar("model"), body);
   }
@@ -178,6 +193,7 @@
     $("chatSeed").value = sp.seed;
     $("chatSeed").hidden = !s.fixedSeed;
     $("chatMemories").checked = s.memories;
+    $("chatRememberSelf").checked = s.rememberSelf;
     outputs();
     windowNote();
   }
@@ -196,6 +212,7 @@
       replyTokens: Math.max(0, Math.round(num("chatReplyTokens", 0))),
       fixedSeed: $("chatFixedSeed").checked,
       memories: $("chatMemories").checked,
+      rememberSelf: $("chatRememberSelf").checked,
       sampling: {
         temperature: sample ? num("chatTemp", SAMPLED_TEMPERATURE) : 0,
         topP: num("chatTopP", 1), topK: Math.max(0, Math.round(num("chatTopK", 0))),
@@ -213,7 +230,7 @@
     $("chatReplyNote").textContent = `tokens (0: Studio's default, ${fmt(def)} for this model)`;
     $("chatWindowNote").textContent = `${active.name} reads ${fmt(active.context)} tokens at once: the context text, memories, earlier turns, attached text and your message, plus the reply. ` +
       "What does not fit is left out, oldest turns first; the meter under the message box shows how it is spent.";
-    $("chatMemoryNote").textContent = studyModeOn ? "Study Mode is on." : "Study Mode is off (§ 7 Study), so no memories are added.";
+    $("chatMemoryNote").textContent = studyModeOn ? "Study Mode is on." : "Study Mode is off (§ 8 Study), so no memories are added.";
   }
   let saveTimer = 0;
   function settingsChanged() {

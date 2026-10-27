@@ -38,8 +38,8 @@ const gradeText = p => p == null ? "uncertain" : `${Math.round(p)}%`;
 const ORIGIN = { training: "taught (checkpoint)", session: "taught (during training)", held_out: "held-out", review: "review question", practice: "practice (teacher)" };
 
 function rewardStatusText(c) {
-  if (!c || !c.record) return "Rewards: off. Answers are not graded into a ledger (§ 8 Rewards).";
-  return `Rewards: grading and recording on${c.weighted_training ? "; reward-guided training ON (experimental): units are practised by need" : "; reward-guided training off (ordinary training)"}${c.letter_prefix ? "; letter-prefix progress on for spelling lessons" : ""}. Details on § 8 Rewards.`;
+  if (!c || !c.record) return "Rewards: off. Answers are not graded into a ledger (§ 9 Rewards).";
+  return `Rewards: grading and recording on${c.weighted_training ? "; reward-guided training ON (experimental): units are practised by need" : "; reward-guided training off (ordinary training)"}${c.letter_prefix ? "; letter-prefix progress on for spelling lessons" : ""}. Details on § 9 Rewards.`;
 }
 function showRewardStatus() {
   document.querySelectorAll("[data-reward-status]").forEach(p => { p.textContent = rewardStatusText(rewardConfig); });
@@ -181,7 +181,7 @@ function rewardedText(s) {
   const credit = [s.progress && `progress +${num2(s.progress)}`, s.retention && `retention +${num2(s.retention)}`,
     s.generalization && `generalization +${num2(s.generalization)}`].filter(Boolean).join(", ");
   if (s.when === "start") return `Rewards: asked ${s.quizzed} taught question(s), ${s.quiz_right} right (network alone)${credit ? `; ${credit}` : ""}.`;
-  return `Rewards this session: ${credit || "no new credit"}${s.flags.length ? `; ${s.flags.length} pattern(s) to investigate (§ 8 Rewards)` : ""}.`;
+  return `Rewards this session: ${credit || "no new credit"}${s.flags.length ? `; ${s.flags.length} pattern(s) to investigate (§ 9 Rewards)` : ""}.`;
 }
 function emphasisText(e) {
   const p = e.plan;

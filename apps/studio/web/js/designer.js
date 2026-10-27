@@ -10,7 +10,7 @@ const KIND_NOTE = {
   reading: "Nova reads this text (neural reading, Study Mode memory, or both).",
   lesson: "Instruction: the concept, its principles and relationships. Taught as explanation before the examples after it.",
   examples: "Worked examples and demonstrations with their answers (trained).",
-  practice: "Questions Nova answers herself. Trained like examples when taught automatically; asked one by one in a practice session (§ 7 Study).",
+  practice: "Questions Nova answers herself. Trained like examples when taught automatically; asked one by one in a practice session (§ 8 Study).",
   extra_practice: "Reserve exercises a course uses when the lesson needs more practice.",
   evaluation: "Held-out questions: never taught, never studied into memory; they grade the lesson.",
   raw: "Unified lesson text kept as written.",
@@ -194,7 +194,7 @@ function blockCard(b, i) {
     mode.value = b.mode || "neural";
     card.append(el("div", { class: "actions" }, mode,
       b.mode !== "neural" ? el("span", { class: studyModeOn ? "note" : "note warn" },
-        studyModeOn ? "Study Mode is on: memories are formed when the lesson is taught." : "Study Mode is off: only neural reading happens until it is turned on (§ 7 Study).") : ""));
+        studyModeOn ? "Study Mode is on: memories are formed when the lesson is taught." : "Study Mode is off: only neural reading happens until it is turned on (§ 8 Study).") : ""));
   }
   if (ITEM_KINDS.includes(b.kind)) card.append(itemTable(b));
   else card.append(textEditor(b));

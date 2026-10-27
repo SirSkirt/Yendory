@@ -206,6 +206,43 @@ pub fn sources() -> Vec<Source> {
     ]
 }
 
+/// Conversation datasets for the Conversation stage: the same conversations as the Reading
+/// sources, kept with their speakers' names (`Name: text` lines), so Nova's speaker can be given
+/// Nova's own name. Both are conversations between two people, not an assistant and a user.
+pub fn conversation_sources() -> Vec<Source> {
+    vec![
+        Source {
+            id: "soda-dialogues",
+            name: "SODA conversations (with speakers' names)",
+            category: Category::Conversation,
+            description: "Everyday social conversations between two people: greetings, plans, worries, jokes, disagreements. 1.2 million in all; download only the first part you need.",
+            page: "https://huggingface.co/datasets/allenai/soda",
+            license: "CC BY 4.0",
+            attribution: "SODA, Kim et al. (2023), Allen Institute for AI",
+            size_mb: 1100,
+            default_mb: 40,
+            fetch: Fetch::HfRows { dataset: "allenai/soda", configs: &["default"], split: "train", convert: soda_speakers },
+        },
+        Source {
+            id: "persona-chat-dialogues",
+            name: "Synthetic-Persona-Chat (with speakers' names)",
+            category: Category::Conversation,
+            description: "Two people getting to know each other: their likes, families, work and plans (the training split, about 15 MB).",
+            page: "https://huggingface.co/datasets/google/Synthetic-Persona-Chat",
+            license: "CC BY 4.0",
+            attribution: "Synthetic-Persona-Chat, Jandaghi et al. (2023), Google",
+            size_mb: 15,
+            default_mb: 15,
+            fetch: Fetch::HfRows {
+                dataset: "google/Synthetic-Persona-Chat",
+                configs: &["default"],
+                split: "train",
+                convert: persona_speakers,
+            },
+        },
+    ]
+}
+
 fn s<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("").trim()
 }
@@ -249,6 +286,66 @@ pub fn soda(row: &Value) -> Vec<String> {
         doc.push_str(t.trim().trim_end_matches('"'));
     }
     vec![doc.trim_start().to_string()]
+}
+
+/// SODA with its speakers: the situation, then `Name: text` turns. Conversations with other than
+/// two speakers, or a speaker name that is not a plain name, are left out.
+pub fn soda_speakers(row: &Value) -> Vec<String> {
+    let list = |k: &str| -> Vec<String> {
+        row.get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|t| t.trim().to_string())
+            .collect()
+    };
+    let (turns, speakers) = (list("dialogue"), list("speakers"));
+    let plain = |n: &str| {
+        !n.is_empty()
+            && n.len() <= 32
+            && n.split(' ').count() <= 3
+            && n.starts_with(|c: char| c.is_ascii_uppercase())
+            && n.chars().all(|c| c.is_ascii_alphabetic() || " .'-".contains(c))
+    };
+    let mut names = speakers.clone();
+    names.sort();
+    names.dedup();
+    if turns.len() < 2 || turns.len() != speakers.len() || names.len() != 2 || !names.iter().all(|n| plain(n))
+    {
+        return Vec::new();
+    }
+    let mut doc = String::new();
+    let situation = s(row, "narrative");
+    if !situation.is_empty() {
+        doc.push_str(&format!("Situation: {}\n", situation.replace('\n', " ")));
+    }
+    for (who, said) in speakers.iter().zip(&turns) {
+        doc.push_str(&format!("{who}: {}\n", said.trim_end_matches('"').replace('\n', " ")));
+    }
+    vec![doc.trim_end().to_string()]
+}
+
+/// Synthetic-Persona-Chat with its speakers: the name placeholders become names and each line
+/// is `Name: text`.
+pub fn persona_speakers(row: &Value) -> Vec<String> {
+    const NAMES: [(&str, &str); 6] =
+        [("Ann", "Ben"), ("Cara", "Dan"), ("Eva", "Finn"), ("Mia", "Leo"), ("Sara", "Tom"), ("Zoe", "Ray")];
+    let text = s(row, "Best Generated Conversation");
+    let (a, b) = NAMES[text.len() % NAMES.len()];
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let line = line.replace("[user 1's name]", a).replace("[user 2's name]", b);
+        if let Some(t) = line.strip_prefix("User 1:") {
+            lines.push(format!("{a}: {}", t.trim()));
+        } else if let Some(t) = line.strip_prefix("User 2:") {
+            lines.push(format!("{b}: {}", t.trim()));
+        }
+    }
+    if lines.len() < 2 {
+        return Vec::new();
+    }
+    vec![lines.join("\n")]
 }
 
 /// Synthetic-Persona-Chat: "User 1:" becomes `U:` and "User 2:" `N:`; the name placeholders
@@ -439,6 +536,30 @@ mod tests {
     }
 
     #[test]
+    fn conversations_keep_their_speakers() {
+        let d = soda_speakers(
+            &json!({"narrative": "Veda went to church.", "dialogue": ["Hi, Father.", "Hello, Veda.", "Tell me more.\""], "speakers": ["Veda", "Priest", "Veda"]}),
+        );
+        assert_eq!(
+            d,
+            ["Situation: Veda went to church.\nVeda: Hi, Father.\nPriest: Hello, Veda.\nVeda: Tell me more."]
+        );
+        let parsed = yendory_engine::learn::conversation::parse_dialogue(&d[0]).unwrap();
+        assert_eq!(parsed.pair(), ("Veda".to_string(), "Priest".to_string()));
+        assert!(soda_speakers(
+            &json!({"narrative": "", "dialogue": ["a", "b", "c"], "speakers": ["A", "B", "C"]})
+        )
+        .is_empty());
+        let d = persona_speakers(
+            &json!({"Best Generated Conversation": "User 1: Hi! I'm [user 1's name].\nUser 2: Hi [user 1's name], I'm [user 2's name].\nUser 1: What do you do for fun?"}),
+        );
+        let parsed = yendory_engine::learn::conversation::parse_dialogue(&d[0]).unwrap();
+        assert_eq!(parsed.turns.len(), 3);
+        let (a, b) = parsed.pair();
+        assert!(parsed.turns[1].contains(&a) && parsed.turns[1].contains(&b), "{:?}", parsed.turns);
+    }
+
+    #[test]
     fn gutenberg_header_and_footer_are_removed() {
         let mut text = String::from("The Project Gutenberg eBook of X\nLicence words here\n*** START OF THE PROJECT GUTENBERG EBOOK X ***\n\n");
         for i in 0..30 {
@@ -455,7 +576,7 @@ mod tests {
 
     #[test]
     fn every_source_has_a_licence_and_attribution() {
-        for s in sources() {
+        for s in sources().into_iter().chain(conversation_sources()) {
             assert!(!s.license.is_empty() && !s.attribution.is_empty(), "{}", s.id);
         }
     }

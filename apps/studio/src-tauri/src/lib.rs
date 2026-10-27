@@ -21,6 +21,7 @@ use yendory_engine::{
 };
 
 mod chat;
+mod conversation;
 mod courses;
 mod designer;
 mod growth;
@@ -90,6 +91,9 @@ pub struct Meta {
     /// Corpora this model has read (pre-training), oldest first.
     #[serde(default)]
     read: Vec<reading::ReadRecord>,
+    /// Conversation stage runs, oldest first.
+    #[serde(default)]
+    conversation: Vec<conversation::ConversationRecord>,
     /// "bicameral" or "neuro" (Nova Neuro, experimental).
     #[serde(default = "bicameral")]
     architecture: String,
@@ -242,6 +246,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         taught: Vec::new(),
         origin: origin.into(),
         read: Vec::new(),
+        conversation: Vec::new(),
         slots: 0,
         word_limit: None,
         context: 0,
@@ -1811,6 +1816,10 @@ pub fn run() {
             chat::chat_regenerate,
             chat::chat_stop,
             chat::chat_export,
+            chat::chat_mark,
+            conversation::conversation_sources,
+            conversation::conversation_material,
+            conversation::converse,
             saved_lessons,
             forget_saved_lesson,
             model_checkpoints,

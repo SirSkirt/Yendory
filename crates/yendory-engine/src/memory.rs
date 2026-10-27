@@ -102,6 +102,8 @@ pub enum MemoryOrigin {
     Studied,
     /// Written by the teacher.
     Teacher,
+    /// Said by Nova about itself in a conversation (shown to it again as "I said: ...").
+    Said,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,6 +234,27 @@ pub fn surprise(model: &Bicameral, text: &str) -> Result<f32, String> {
     ids.pop();
     let mask = vec![1.; ids.len()];
     model.loss(&ids, &targets, &mask, Ablation::default())
+}
+
+/// Words by which a sentence speaks about the speaker.
+const FIRST_PERSON: [&str; 9] = ["i", "im", "ive", "id", "ill", "my", "me", "mine", "myself"];
+
+/// The sentences of a reply in which the speaker says something about itself: statements (not
+/// questions) of 3 to 30 words in the first person ("I like the sea.", "My dog is old.").
+pub fn self_statements(reply: &str) -> Vec<String> {
+    let flat = reply.split_whitespace().collect::<Vec<_>>().join(" ");
+    sentences(&flat)
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| {
+            let n = s.split_whitespace().count();
+            let first = s
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+                .map(|w| w.replace('\'', "").to_ascii_lowercase())
+                .any(|w| FIRST_PERSON.contains(&w.as_str()));
+            (3..=30).contains(&n) && first && !s.ends_with('?')
+        })
+        .collect()
 }
 
 /// Statements a passage offers: its sentences of 3 to 40 words that are not questions.
@@ -375,6 +398,30 @@ impl MemoryStore {
         id
     }
 
+    /// Remembers what Nova said about itself in a conversation (`self_statements` of its reply).
+    /// A statement already remembered is counted again instead of stored twice. Returns each
+    /// new memory's id and text with the earlier memories it may contradict.
+    pub fn remember_said(
+        &mut self,
+        reply: &str,
+        step: u64,
+        now: u64,
+        chat: &str,
+    ) -> Vec<(u64, String, Vec<u64>)> {
+        let mut out = Vec::new();
+        for s in self_statements(reply) {
+            if let Some(j) = self.same(&s) {
+                self.entries[j].seen += 1;
+                continue;
+            }
+            let conflicts = self.contradicting(&s);
+            let source = MemorySource { lesson: format!("chat {chat}"), sha256: String::new(), sentence: 0 };
+            let id = self.add(&s, MemoryOrigin::Said, 0., step, now, Some(source));
+            out.push((id, s, conflicts));
+        }
+        out
+    }
+
     /// Changes, switches off or on, verifies or deletes a memory, recording the decision.
     pub fn decide(&mut self, id: u64, action: &str, text: Option<&str>, now: u64) -> Result<(), String> {
         let i = self.entries.iter().position(|m| m.id == id).ok_or("No such memory")?;
@@ -460,7 +507,8 @@ impl MemoryStore {
         let mut out = String::new();
         for id in ids {
             if let Some(m) = self.get(*id) {
-                let line = format!("{MEMORY}{}\n", crate::nexus::sanitize(&m.text).replace('\n', " "));
+                let said = if m.origin == MemoryOrigin::Said { "I said: " } else { "" };
+                let line = format!("{MEMORY}{said}{}\n", crate::nexus::sanitize(&m.text).replace('\n', " "));
                 if out.len() + line.len() > budget {
                     break;
                 }
@@ -660,6 +708,25 @@ impl StudyHook for Studying {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_nova_says_about_itself_is_remembered_and_checked() {
+        assert_eq!(
+            self_statements(
+                "I like the sea. Do you like it? The sea is big. My dog is old and slow! I'm very happy. Ok."
+            ),
+            ["I like the sea.", "My dog is old and slow!", "I'm very happy."]
+        );
+        let mut store = MemoryStore::default();
+        let first = store.remember_said("I like tea very much. What about you?", 5, 100, "c1");
+        assert_eq!(first.len(), 1);
+        assert_eq!(store.get(first[0].0).unwrap().origin, MemoryOrigin::Said);
+        assert_eq!(store.context(&[first[0].0], 200), format!("{MEMORY}I said: I like tea very much.\n"));
+        assert!(store.remember_said("I like tea very much.", 6, 101, "c2").is_empty(), "said again: counted");
+        assert_eq!(store.entries[0].seen, 2);
+        let later = store.remember_said("I do not like tea very much.", 7, 102, "c3");
+        assert_eq!(later[0].2, vec![first[0].0], "flagged as a possible contradiction");
+    }
 
     fn store(texts: &[&str]) -> MemoryStore {
         let mut s = MemoryStore::default();

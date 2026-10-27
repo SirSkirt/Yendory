@@ -79,12 +79,17 @@ trained (accepted, held-out loss 3.19 → 2.52); a reflection on memories measur
 review material generated as a Designer lesson, checked, assessed, trained and compared.
 Rewards, in the app: a practice session graded automatically (reasons shown, uncertain where no
 rule decides), certain grades accepted, a partial teacher grade (40%) and note given, trained
-(accepted); the § 8 Rewards page shows the ledger (credit, concepts, the session, questions with
+(accepted); the § 9 Rewards page shows the ledger (credit, concepts, the session, questions with
 their emphasis and reasons, the audit log with withheld credit and reasons).
-§ 12 Chat (0.5.7): the page was checked in a browser with a stand-in backend (layout at desktop
+§ 13 Chat (0.5.7): the page was checked in a browser with a stand-in backend (layout at desktop
 and phone widths, light and dark; streaming text; attachments; settings; the chat menu). Prompt
 building, conversion to the model's alphabet and file attachments are unit-tested in Studio, and
 sampling in the Engine; the page has not yet been used in the installed app.
+§ 4 Conversation (0.5.8): the training is tested in the Engine (rows train only Nova's lines;
+both sides; names; cut at turns; a run keeps only better checkpoints; stop), the chat-memory
+extraction and contradiction flag in the Engine, the dataset conversions in Studio. The page and
+the chat marks were checked in a browser with a stand-in backend; a real practice run on a
+taught model has not been done yet, so how much it helps Nova talk is not measured.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

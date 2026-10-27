@@ -17,15 +17,16 @@
     <button type="button" data-page="models" class="active"><span>1</span>Models</button>
     <button type="button" data-page="reading"><span>2</span>Reading</button>
     <button type="button" data-page="classroom"><span>3</span>Classroom</button>
-    <button type="button" data-page="designer"><span>4</span>Designer</button>
-    <button type="button" data-page="courses"><span>5</span>Courses</button>
-    <button type="button" data-page="planner"><span>6</span>Planner</button>
-    <button type="button" data-page="study"><span>7</span>Study</button>
-    <button type="button" data-page="rewards"><span>8</span>Rewards</button>
-    <button type="button" data-page="exams"><span>9</span>Exams</button>
-    <button type="button" data-page="brain"><span>10</span>Brain</button>
-    <button type="button" data-page="library"><span>11</span>Library</button>
-    <button type="button" data-page="chat"><span>12</span>Chat</button>
+    <button type="button" data-page="conversation"><span>4</span>Conversation</button>
+    <button type="button" data-page="designer"><span>5</span>Designer</button>
+    <button type="button" data-page="courses"><span>6</span>Courses</button>
+    <button type="button" data-page="planner"><span>7</span>Planner</button>
+    <button type="button" data-page="study"><span>8</span>Study</button>
+    <button type="button" data-page="rewards"><span>9</span>Rewards</button>
+    <button type="button" data-page="exams"><span>10</span>Exams</button>
+    <button type="button" data-page="brain"><span>11</span>Brain</button>
+    <button type="button" data-page="library"><span>12</span>Library</button>
+    <button type="button" data-page="chat"><span>13</span>Chat</button>
   </nav>
 </header>
 
@@ -305,9 +306,72 @@
     </table>
   </section>
 
-  <!-- § 4 Lesson Designer -->
+  <!-- § 4 Conversation -->
+  <section class="page" id="page-conversation" hidden>
+    <h2><span class="sec">§ 4</span> Conversation</h2>
+    <p class="lede">After the Classroom, Nova practises real conversations between two people, so it can use what it learned to talk. It practises as a peer, not as an assistant: nothing tells it who to be, and what it thinks comes from what it has read, been taught and said itself.</p>
+    <ul class="conv-points">
+      <li><b>Peers, not assistants.</b> Everyday conversations between two people. Any conversation in an assistant's voice ("as an AI", "how can I assist you") is left out, and no persona or instruction is put in front of one.</li>
+      <li><b>Only Nova's lines are trained.</b> Nova plays one of the two people; the other person's lines are what it answers.</li>
+      <li><b>Both sides.</b> Each conversation is practised once as each person, so Nova learns to start conversations and ask, not only to answer.</li>
+      <li><b>Its own name.</b> The person Nova plays is given Nova's name, so it does not learn to call itself by a hundred names.</li>
+      <li><b>Checked like reading.</b> A conversation has no single right reply, so progress is the loss of Nova's lines in held-out conversations it never practises. A checkpoint must also keep the Classroom answers it had.</li>
+    </ul>
+
+    <h3>Conversations</h3>
+    <p class="note">These datasets keep the speakers' names, which lets Nova's speaker take Nova's name. Conversation corpora downloaded on § 2 Reading can be practised too (without names).</p>
+    <div id="convSources"></div>
+    <div class="entry" id="convDownload" hidden>
+      <h4 id="convDownloadTitle">Downloading</h4>
+      <div class="meter"><div id="convDownloadBar"></div></div>
+      <p class="mono" id="convDownloadLine">—</p>
+      <div class="actions"><button type="button" id="convCancelDownload">Cancel download</button></div>
+    </div>
+    <table class="ledger" id="convTable">
+      <thead><tr><th>Practise</th><th>Dataset</th><th class="num">Size</th><th class="num">Conversations</th><th>Licence</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">No conversation dataset yet. Download one above.</td></tr></tbody>
+    </table>
+    <label class="check conv-chats"><input type="checkbox" id="convChats" checked> Also practise Nova's replies you marked <b>consistent</b> in § 13 Chat <span class="note" id="convChatCount"></span></label>
+
+    <h3>Settings</h3>
+    <div class="settings">
+      <label>Tokens to practise <input type="number" id="convTokens" min="10000" step="100000" value="2000000"></label>
+      <label>Batch size <input type="number" id="convBatch" min="1" max="128" value="16"></label>
+      <label>Learning rate <input type="number" id="convRate" min="0.000001" max="0.01" step="0.0001" value="0.0003"></label>
+      <label>Nova's name in the conversations <input id="convName" maxlength="32" placeholder="keep the speakers' names" autocomplete="off"></label>
+      <label>Earlier lessons mixed in (%) <input type="number" id="convEarlier" min="0" max="80" value="20"></label>
+      <label>Classroom questions checked <input type="number" id="convGuard" min="0" max="2000" value="200"></label>
+      <label>Classroom answers a checkpoint may lose (%) <input type="number" id="convDrop" min="0" max="100" step="0.5" value="2"></label>
+      <label class="check wide"><input type="checkbox" id="convBoth" checked> Practise each conversation as both people</label>
+      <label class="check wide"><input type="checkbox" id="convSituations"> Put the situation in front of a conversation when the dataset has one (context only, never trained)</label>
+    </div>
+    <p class="note" id="convNote">—</p>
+    <div class="actions">
+      <button type="button" id="converse" class="primary">Practise conversations</button>
+      <button type="button" id="stopConverse" disabled>Stop</button>
+    </div>
+
+    <div class="entry" id="convEntry" hidden>
+      <h3 id="convTitle">Practising</h3>
+      <div class="meter"><div id="convBar"></div></div>
+      <p class="mono" id="convLine">—</p>
+      <table class="ledger compact" id="convChecks">
+        <thead><tr><th class="num">Tokens</th><th class="num">Train loss</th><th class="num" title="Loss of Nova's lines in held-out conversations">Held-out loss</th><th class="num">Classroom</th><th>Decision</th><th>Nova's replies in held-out conversations</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3>Making up your mind</h3>
+    <p class="note">A built-in Classroom course for deciding with reasons: choosing what fits, saying no when there is a reason to, keeping to what it said before, changing its mind for a reason, and keeping its view when someone else has none. Every choice follows from what the question says, never from a preference written into the lessons, so it teaches how to decide, not what to like. Teach it in the Classroom before or between conversation practice.</p>
+    <div class="actions"><button type="button" id="convAddCourse">Add “Making up your mind” to the Classroom lessons</button></div>
+
+    <h3>Earlier practice</h3>
+    <div id="convHistory"><p class="empty">None yet.</p></div>
+  </section>
+
+  <!-- § 5 Lesson Designer -->
   <section class="page" id="page-designer" hidden>
-    <h2><span class="sec">§ 4</span> Lesson Designer</h2>
+    <h2><span class="sec">§ 5</span> Lesson Designer</h2>
     <p class="lede">Turn a text dataset into a lesson. Yendory proposes blocks from the file's layout (headings, questions and answers, worked examples); the proposal is only a draft, and you decide what the lesson finally contains. Finished lessons go to the Classroom or into a course.</p>
     <div class="actions">
       <button type="button" id="importDesign" class="primary">Import a .txt dataset…</button>
@@ -371,9 +435,9 @@
     </div>
   </section>
 
-  <!-- § 5 Courses -->
+  <!-- § 6 Courses -->
   <section class="page" id="page-courses" hidden>
-    <h2><span class="sec">§ 5</span> Courses</h2>
+    <h2><span class="sec">§ 6</span> Courses</h2>
     <p class="lede">A course is a set of lesson files with pass marks, extra practice material held in reserve, and a final exam. Its grade is 70% lessons (re-graded at the end of the course) and 30% final exam; it passes when the grade reaches the average of its lesson pass marks.</p>
     <p class="note">File names decide everything: the first number orders the lessons; the words <b>Dense</b>, <b>Transformer</b> or <b>Co-op</b> choose Stage A, B or C; a file named <b>Practice</b> is extra practice for the lesson with the same number and stage (an <code>[Extra Practice]</code> block inside a lesson works too); a file named <b>Exam</b> is the final exam, with <code>[Dense]</code>, <code>[Transformer]</code>, <code>[Co-op]</code> or <code>[Whole Brain]</code> sections. Answers may list accepted forms and rules, separated by <code>|</code>: <code>animal | creature | !plant</code> (Dense: keywords, a <code>!</code> word must not appear) or <code>A robin is an animal. | must: robin animal | never: not</code> (sentences). Training uses the first form.</p>
     <div class="actions"><button type="button" id="newCourse" class="primary">New course…</button></div>
@@ -436,9 +500,9 @@
     </div>
   </section>
 
-  <!-- § 6 Planner -->
+  <!-- § 7 Planner -->
   <section class="page" id="page-planner" hidden>
-    <h2><span class="sec">§ 6</span> Planner</h2>
+    <h2><span class="sec">§ 7</span> Planner</h2>
     <p class="lede">A plan teaches saved courses to one model, in order and unattended. Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
     <div class="actions"><button type="button" id="newPlan" class="primary">New plan for the open model…</button></div>
     <table class="ledger" id="planList">
@@ -475,9 +539,9 @@
     </div>
   </section>
 
-  <!-- § 7 Study -->
+  <!-- § 8 Study -->
   <section class="page" id="page-study" hidden>
-    <h2><span class="sec">§ 7</span> Study</h2>
+    <h2><span class="sec">§ 8</span> Study</h2>
     <p class="lede">Study Mode gives Nova a memory of statements she chose to keep from her reading. It is not part of her network and never answers for her: retrieved memories are put in front of a question, and she has to learn through training how to use them. What she answers without memory (neurally learned) is always measured apart from what she answers with it (remembered).</p>
 
     <div class="entry" id="studyModeEntry">
@@ -521,7 +585,7 @@
     </table>
 
     <h3>Practice</h3>
-    <p class="note">Nova answers a lesson's practice questions herself. Yendory suggests an automatic grade where the lesson has an answer (or says it is uncertain). You mark each answer right or wrong, may give a grade from 0 to 100% for partial credit, and may write a correction and a note; grades and notes go into the reward ledger (§ 8 Rewards). A partly right answer is never trained as written. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
+    <p class="note">Nova answers a lesson's practice questions herself. Yendory suggests an automatic grade where the lesson has an answer (or says it is uncertain). You mark each answer right or wrong, may give a grade from 0 to 100% for partial credit, and may write a correction and a note; grades and notes go into the reward ledger (§ 9 Rewards). A partly right answer is never trained as written. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
     <div class="actions">
       <select id="practiceSource" aria-label="Lesson to practise"><option value="">Choose a lesson…</option></select>
       <button type="button" id="practiceStart" class="primary">Nova answers</button>
@@ -621,9 +685,9 @@
     <div id="studyBody"></div>
   </section>
 
-  <!-- § 8 Rewards -->
+  <!-- § 9 Rewards -->
   <section class="page" id="page-rewards" hidden>
-    <h2><span class="sec">§ 8</span> Rewards</h2>
+    <h2><span class="sec">§ 9</span> Rewards</h2>
     <p class="lede">Yendory grades Nova's answers 0–100% and keeps a reward ledger: one-time credit for new progress on a question, smaller bonuses for answers she keeps across checkpoints, and the most for questions she was never trained on. Reward-guided training uses that history to decide how often each unit is practised; what she is taught never changes. Course final exams never enter the ledger.</p>
 
     <div class="entry" id="rewardSettings">
@@ -690,13 +754,13 @@
     </table>
   </section>
 
-  <!-- § 9 Exams -->
+  <!-- § 10 Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 9</span> Exams</h2>
+    <h2><span class="sec">§ 10</span> Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is scripted. With Study Mode on, memories related to your message are put in front of it (shown as memory lines); the reply is still the model's own.</p>
 
     <h3>Conversation</h3>
-    <p class="note">A quick check of the open model. Saved chats, with their own context, settings and attached files, are on § 12 Chat.</p>
+    <p class="note">A quick check of the open model. Saved chats, with their own context, settings and attached files, are on § 13 Chat.</p>
     <div class="transcript" id="transcript"><p class="empty">Ask the open model something.</p></div>
     <div class="line-form">
       <input id="message" maxlength="300" placeholder="Write a question…" autocomplete="off">
@@ -710,11 +774,11 @@
     <div id="examResult"></div>
   </section>
 
-  <!-- § 10 Brain -->
+  <!-- § 11 Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 10</span> Brain</h2>
+    <h2><span class="sec">§ 11</span> Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
-    <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on § 7 Study. Everything below is the network itself.</p>
+    <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on § 8 Study. Everything below is the network itself.</p>
     <div class="plate-wrap">
       <figure class="plate">
         <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
@@ -797,17 +861,17 @@
     <div id="thinkTree" class="think-tree"><p class="empty">Trace a reply to see how it was produced.</p></div>
   </section>
 
-  <!-- § 11 Library -->
+  <!-- § 12 Library -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 11</span> Library</h2>
+    <h2><span class="sec">§ 12</span> Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>
   </section>
 
-  <!-- § 12 Chat -->
+  <!-- § 13 Chat -->
   <section class="page" id="page-chat" hidden>
-    <h2><span class="sec">§ 12</span> Chat</h2>
+    <h2><span class="sec">§ 13</span> Chat</h2>
     <p class="lede">Talk with the open model. Every reply is generated by the model token by token and appears as it is written; nothing is scripted. Chats are saved with the model.</p>
     <div class="chat-shell" id="chatShell">
       <aside class="chat-list" id="chatList" aria-label="Chats">
@@ -881,6 +945,8 @@
         <input id="chatPenalty" type="range" min="1" max="3" step="0.05">
         <p class="note">A token already in the reply becomes this many times less likely (1: off).</p>
         <label class="cs-check"><input type="checkbox" id="chatMemories"> Study Mode memories in front of each message</label>
+        <label class="cs-check"><input type="checkbox" id="chatRememberSelf"> Nova remembers what it says about itself</label>
+        <p class="note">Its own statements ("I like the sea.") go into Study Mode memory and come back as "I said: …" when they are related, so it can stay consistent from one chat to the next. A statement that may contradict an earlier one is pointed out. A reply you regenerate, or one after a message you edit, is forgotten.</p>
         <p class="note" id="chatMemoryNote"></p>
         <h4>Context window</h4>
         <p class="note" id="chatWindowNote">—</p>
@@ -910,5 +976,6 @@
 <script src="js/growth.js"></script>
 <script src="js/memory.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/conversation.js"></script>
 </body>
 </html>

@@ -57,6 +57,7 @@ function showActive(meta) {
     : "No model open");
   $("activeEntry").hidden = !meta;
   window.showChat?.(meta);
+  window.showConversation?.(meta);
   if (!meta) return;
   $("activeName").textContent = meta.name;
   refreshSaved();
@@ -858,7 +859,8 @@ function onDownload(e) {
   $("downloadBar").style.width = "100%";
   const c = e.corpus;
   $("downloadLine").textContent = `Saved ${c.name}: ${mb(c.bytes)}, ${fmt(c.documents)} documents (${fmt(c.heldOut)} held out).`;
-  pick(c.id);
+  // Chosen for reading only when downloaded for reading (not a § 4 Conversation dataset).
+  if (sourcesList.some(s => s.id === e.source)) pick(c.id);
   refreshCorpora();
   say(`Downloaded ${c.name}.`);
 }

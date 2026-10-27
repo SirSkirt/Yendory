@@ -3,7 +3,7 @@
 //! <app data>/corpora/<id>.{txt,json}; the training itself is
 //! `yendory_engine::learn::corpus::pretrain_mix`.
 use super::*;
-use crate::sources::{gutenberg_book, sources, Convert, Fetch, Source};
+use crate::sources::{conversation_sources, gutenberg_book, sources, Convert, Fetch, Source};
 use std::time::Duration;
 use yendory_engine::learn::autogrow::Check;
 use yendory_engine::learn::corpus::{
@@ -17,25 +17,25 @@ pub const MAX_CORPUS_BYTES: u64 = 400 << 20;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorpusInfo {
-    id: String,
-    name: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
     /// Download URL or the imported file's name.
-    origin: String,
-    license: String,
-    bytes: u64,
-    sha256: String,
-    documents: usize,
-    held_out: usize,
-    dropped_chars: usize,
+    pub(crate) origin: String,
+    pub(crate) license: String,
+    pub(crate) bytes: u64,
+    pub(crate) sha256: String,
+    pub(crate) documents: usize,
+    pub(crate) held_out: usize,
+    pub(crate) dropped_chars: usize,
     /// The download stopped at the size limit (the file continues beyond it).
-    truncated: bool,
-    added: u64,
+    pub(crate) truncated: bool,
+    pub(crate) added: u64,
     /// What kind of text it is (for mixing and bicameral reading).
     #[serde(default)]
-    category: Category,
+    pub(crate) category: Category,
     /// How to credit the source.
     #[serde(default)]
-    attribution: String,
+    pub(crate) attribution: String,
 }
 
 /// One corpus of a reading, as recorded.
@@ -78,7 +78,7 @@ fn corpora_dir(app: &AppHandle) -> Res<PathBuf> {
     Ok(dir)
 }
 
-fn corpus_path(app: &AppHandle, id: &str, ext: &str) -> Res<PathBuf> {
+pub(crate) fn corpus_path(app: &AppHandle, id: &str, ext: &str) -> Res<PathBuf> {
     if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid corpus id".into());
     }
@@ -127,7 +127,7 @@ fn store(app: &AppHandle, name: &str, from: &Provenance, bytes: Vec<u8>, truncat
     Ok(info)
 }
 
-fn load_info(app: &AppHandle, id: &str) -> Res<CorpusInfo> {
+pub(crate) fn load_info(app: &AppHandle, id: &str) -> Res<CorpusInfo> {
     let bytes = std::fs::read(corpus_path(app, id, "json")?).map_err(|e| e.to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
@@ -552,7 +552,11 @@ struct DownloadEvent {
 
 #[tauri::command]
 pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, max_mb: u64) -> Res<()> {
-    let src = sources().into_iter().find(|s| s.id == source).ok_or("Unknown corpus source")?;
+    let src = sources()
+        .into_iter()
+        .chain(conversation_sources())
+        .find(|s| s.id == source)
+        .ok_or("Unknown corpus source")?;
     let limit = (max_mb.max(1) << 20).min(MAX_CORPUS_BYTES);
     if studio.downloading.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("A download is already running".into());
@@ -955,7 +959,7 @@ mod tests {
     #[ignore]
     fn sources_are_reachable_and_convert() {
         let mut failed = Vec::new();
-        for src in sources() {
+        for src in sources().into_iter().chain(conversation_sources()) {
             let limit = match src.fetch {
                 Fetch::Gutenberg(_) => 200_000,
                 _ => 300_000,
@@ -980,6 +984,21 @@ mod tests {
                     );
                     if corpus.train.is_empty() || corpus.held_out.is_empty() {
                         failed.push(format!("{}: too few documents", src.id));
+                    }
+                    if conversation_sources().iter().any(|c| c.id == src.id) {
+                        let parsed = corpus
+                            .train
+                            .iter()
+                            .filter(|d| yendory_engine::learn::conversation::parse_dialogue(d).is_some())
+                            .count();
+                        println!(
+                            "{}: {parsed} of {} documents are two-speaker dialogues",
+                            src.id,
+                            corpus.train.len()
+                        );
+                        if parsed * 2 < corpus.train.len() {
+                            failed.push(format!("{}: only {parsed} dialogues", src.id));
+                        }
                     }
                 }
                 Err(e) => failed.push(format!("{}: {e}", src.id)),

@@ -60,7 +60,7 @@ step-19,000 vocabulary word for word, and the published held-out scores of step 
 
 ## Lesson Designer (`learn::designer`)
 
-The Studio's Lesson Designer (§ 4) turns an imported `.txt` dataset into a lesson draft of
+The Studio's Lesson Designer (§ 5) turns an imported `.txt` dataset into a lesson draft of
 blocks: **Reading** (text Nova reads: neural reading, Study Mode memory, or both), **Lesson**
 (instruction), **Examples**, **Practice**, **Extra Practice**, **Evaluation** (the teacher's
 held-out questions), **Unified text** (blocks of the lesson format kept as written) and
@@ -104,7 +104,7 @@ unfinished.
 
 ## Study Mode memory (`memory`)
 
-Study Mode (Studio § 7, a switch) gives a model a **memory** of statements it chose to keep from
+Study Mode (Studio § 8, a switch) gives a model a **memory** of statements it chose to keep from
 its reading. The memory is not part of the network, and nothing in it is counted as learned.
 
 **Forming memories.** Each sentence (3–40 words, not a question) of a Reading block in `memory`
@@ -157,7 +157,7 @@ memory lines and 11% without them (chance 12%); 88% / 9% after 1,500 steps.
 
 ## Interactive practice (`learn::practice`)
 
-In a practice session (Studio § 7) Nova answers a lesson's practice questions herself: the
+In a practice session (Studio § 8) Nova answers a lesson's practice questions herself: the
 Practice blocks of a Lesson Designer lesson, or the taught questions of a Classroom lesson (up to
 40), each answered greedily by the network (with Study Mode memories in front when it is on,
 shown with the answer). The teacher marks each answer right or wrong and may write a correction
@@ -1043,7 +1043,7 @@ greedy reply is token for token the exam reply (`tests/sampling.rs`).
 as greedy generation) and hands every token's text to a callback as it is written; the callback
 can stop the reply.
 
-Studio's **§ 12 Chat** keeps conversations per model in `models/<id>/chats/<chat>.json`. The
+Studio's **§ 13 Chat** keeps conversations per model in `models/<id>/chats/<chat>.json`. The
 prompt is written the way the model was taught turns: the chat's context text, Study Mode
 memories (when on), earlier turns as `U: …` / `N: …` lines (newest kept first; "as many as fit",
 "the last few" or "none"), the text of attached files, and the message. Room for the longest
@@ -1052,3 +1052,59 @@ the cut is recorded with the reply). Text the model's alphabet cannot write (emo
 alphabets) is converted where it can be (typographic quotes, accents) and otherwise left out,
 with the count shown. Images are stored with the chat as data for networks that can see them;
 no current network reads them, and Studio says so.
+
+## Conversation stage (`learn::conversation`)
+
+After Reading (pre-training) and the Classroom (hand-written lessons), Studio's **§ 4
+Conversation** lets a model practise real conversations, so it can use what it learned to talk.
+It is the usual supervised fine-tuning step of language models, with one deliberate difference:
+Nova practises as a **peer, not an assistant**. Nothing tells it who to be; what it thinks comes
+from what it has read, been taught and said itself.
+
+- **Material.** Conversations between two people (SODA everyday conversations and
+  Synthetic-Persona-Chat, both CC BY 4.0), downloaded with their speakers' names
+  (`soda-dialogues`, `persona-chat-dialogues`; `Name: text` lines). Conversation corpora from
+  Reading (`U:` / `N:` turns) can be practised too. A dialogue with other than two speakers is
+  not used, and one in an assistant's voice ("as an AI", "language model", "how can I assist
+  you", ...) is left out and counted. No persona or instruction is put in front of a
+  conversation; a dataset's situation line can be put in front as context (off by default,
+  never trained).
+- **Rows.** Nova plays one speaker: that speaker's turns are `N: ...` and the other's `U: ...`.
+  Only Nova's replies (and the line break that ends each) carry loss weight; the other speaker's
+  lines and the `N: ` prefix have weight `user_weight` (0 by default). Long conversations are cut
+  to the context at turn boundaries, from a random turn that leaves a trained reply in the
+  window.
+- **Both sides.** Every dialogue is practised once as each speaker (on by default), so Nova also
+  learns to open a conversation and to ask.
+- **Its own name.** Nova's speaker's name, wherever it appears (whole words), becomes
+  `own_name` (the model's name by default), so Nova does not learn to call itself by every name
+  in the dataset; the other speaker keeps theirs.
+- **Checks.** About one dialogue in ten is held out (stable hash, as everywhere). A checkpoint is
+  accepted when the loss of Nova's lines in the held-out conversations improves by at least
+  `min_loss_improvement`, and it still answers the sampled held-out Classroom questions: at most
+  `guard_drop` (2%) of the correct answers the model had before practice may be lost (200
+  questions by default, spread over the model's taught lessons). Each check also shows Nova's
+  greedy reply to three held-out conversations next to what the person said.
+- **Earlier lessons.** `earlier_share` (20%) of the training rows are units the model was taught
+  in the Classroom.
+- **The teacher's chats.** Replies marked **consistent** in § 13 Chat are trained as Nova's
+  lines of that chat (the rest of the chat is context); replies marked **contradicts itself** and
+  unmarked ones never are. Chats are not held out (they are few, and not a test). The mark is
+  about consistency with what Nova said before and whether it gave its own reason, not about
+  agreement: training on agreement would make it an assistant by another route.
+
+**Memory of what Nova said.** With Study Mode on, a chat (setting on by default) remembers Nova's
+first-person statements from each finished reply (`memory::self_statements`, origin `said`):
+statements of 3 to 30 words with I, my, me, ... that are not questions. When related, they come
+back in front of a message as `I said: ...`, so Nova can stay consistent from one chat to the
+next. A new statement that may contradict an earlier memory (mostly the same words, one negated)
+is shown on the reply. A reply that is regenerated, or follows a message that is edited, was not
+said after all: its memories are removed.
+
+**Making up your mind** (built-in Classroom course, `builtin::deciding`): choosing what fits a
+stated need and saying why, declining when there is a reason to (and agreeing when there is
+not), choosing in keeping with what it said earlier ("Earlier you said: I like X more than Y"),
+changing a plan for a reason and keeping it when nothing relevant changed, and keeping what it
+saw when someone else has no reason to differ (and changing its view when they do). Every
+answer follows from the question; across the examples each option is the right choice equally
+often, so the lessons teach how to decide, not what to like.

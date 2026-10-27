@@ -438,9 +438,371 @@ fn math() -> BuiltinCourse {
     }
 }
 
+/// Making up your mind: choosing with a reason, saying no when there is a reason to, keeping to
+/// what you said before, changing your mind for a reason and keeping your view without one.
+/// Every choice follows from what the question says (a need, a fact, what Nova said earlier),
+/// never from a preference written into the lesson: across the examples each option is chosen
+/// as often as the other, so the lessons teach how to decide, not what to like.
+fn deciding() -> BuiltinCourse {
+    // (situation, the option that fits, the reason it fits)
+    let needs: [(&str, &str, &str); 30] = [
+        ("It is raining and you want to stay dry", "the umbrella", "it keeps me dry"),
+        ("It is cold outside", "the warm coat", "it keeps me warm"),
+        ("You are very hungry", "the sandwich", "it will fill me up"),
+        ("You are thirsty", "the water", "it will quench my thirst"),
+        ("It is dark in the room", "the lamp", "it gives light"),
+        ("You want to write a note", "the pen", "I can write with it"),
+        ("You need to open the door", "the key", "it opens the door"),
+        ("You want to read a story", "the book", "it has a story in it"),
+        ("The sun is very bright", "the sun hat", "it shades my eyes"),
+        ("You are going to the beach", "the swimsuit", "I can swim in it"),
+        ("You want to cut the paper", "the scissors", "they cut paper"),
+        ("You have to carry many apples", "the big bag", "it holds many apples"),
+        ("You are tired after a long day", "the soft bed", "I can rest in it"),
+        ("You want to listen to music", "the radio", "it plays music"),
+        ("The floor is dirty", "the broom", "it sweeps the floor"),
+        ("You want to call a friend", "the phone", "I can call with it"),
+        ("Your hands are wet", "the towel", "it dries my hands"),
+        ("You want to plant a flower", "the shovel", "it digs the soil"),
+        ("The road is long and you are in a hurry", "the bike", "it is faster than walking"),
+        ("You want to see far away", "the telescope", "it shows things far away"),
+        ("It is snowing", "the boots", "they keep my feet warm"),
+        ("You want to paint a picture", "the brush", "I can paint with it"),
+        ("You want to eat soup", "the spoon", "I can eat soup with it"),
+        ("You need to fix a loose nail", "the hammer", "it drives nails in"),
+        ("You want to keep the milk cold", "the fridge", "it keeps food cold"),
+        ("You want to know the time", "the clock", "it shows the time"),
+        ("The plants are dry", "the watering can", "it gives them water"),
+        ("You want to find your way in a new town", "the map", "it shows the way"),
+        ("You need to lock your bike", "the chain", "it keeps the bike safe"),
+        ("It is windy and you want to fly something", "the kite", "the wind lifts it"),
+    ];
+    let others = [
+        "the spoon",
+        "the rock",
+        "the sock",
+        "the kite",
+        "the cup",
+        "the ball",
+        "the hat",
+        "the leaf",
+        "the shoe",
+        "the coin",
+    ];
+    let forms: [(&str, &str); 4] = [
+        ("Will you take {a} or {b}?", "I will take"),
+        ("Which do you pick, {a} or {b}?", "I pick"),
+        ("Would you rather have {a} or {b}?", "I would rather have"),
+        ("Do you want {a} or {b}?", "I want"),
+    ];
+    let mut choose = Vec::new();
+    for (k, (need, good, why)) in needs.iter().enumerate() {
+        // A distractor that does not fit the need (never the good option itself).
+        let other = others.iter().cycle().skip(k).find(|o| *o != good).unwrap();
+        for (q, a) in forms {
+            for (x, y) in [(good, other), (other, good)] {
+                choose.push((
+                    format!("{need}. {}", q.replace("{a}", x).replace("{b}", y)),
+                    format!("{a} {good}, because {why}."),
+                ));
+            }
+        }
+    }
+    let choose = all_of(41, EXAMPLES, choose);
+
+    // (activity, fact against it, reason no, fact for it, reason yes)
+    let plans: [(&str, &str, &str, &str, &str); 25] = [
+        (
+            "go swimming",
+            "The water is very cold today",
+            "the water is too cold",
+            "The water is warm today",
+            "the water is warm",
+        ),
+        ("have a picnic", "It is raining hard", "it is raining", "The sun is shining", "the sun is shining"),
+        (
+            "play football",
+            "The field is flooded",
+            "the field is flooded",
+            "The field is dry and green",
+            "the field is dry",
+        ),
+        (
+            "go for a walk",
+            "There is a big storm",
+            "there is a storm",
+            "The weather is calm",
+            "the weather is calm",
+        ),
+        (
+            "eat the cake",
+            "The cake has gone bad",
+            "the cake has gone bad",
+            "The cake is fresh",
+            "the cake is fresh",
+        ),
+        (
+            "go to the shop",
+            "The shop is closed today",
+            "the shop is closed",
+            "The shop is open",
+            "the shop is open",
+        ),
+        (
+            "ride our bikes",
+            "Both bikes have flat tires",
+            "the tires are flat",
+            "The bikes are fixed",
+            "the bikes are fixed",
+        ),
+        (
+            "go skating",
+            "The ice is thin and cracking",
+            "the ice is not safe",
+            "The ice is thick and safe",
+            "the ice is safe",
+        ),
+        (
+            "climb the tree",
+            "The branches are broken",
+            "the branches are broken",
+            "The branches are strong",
+            "the branches are strong",
+        ),
+        (
+            "watch the film",
+            "The film is very scary for us",
+            "it is too scary",
+            "The film is funny",
+            "the film is funny",
+        ),
+        (
+            "stay up late",
+            "We have to wake up very early",
+            "we have to wake up early",
+            "Tomorrow is a holiday",
+            "tomorrow is a holiday",
+        ),
+        (
+            "go to the beach",
+            "There are sharks in the water",
+            "there are sharks",
+            "The beach is calm and sunny",
+            "it is calm and sunny",
+        ),
+        (
+            "drink the milk",
+            "The milk smells sour",
+            "the milk is sour",
+            "The milk is fresh",
+            "the milk is fresh",
+        ),
+        (
+            "visit the zoo",
+            "The zoo is closed for repairs",
+            "the zoo is closed",
+            "The zoo has new animals",
+            "there are new animals",
+        ),
+        (
+            "sit on the bench",
+            "The paint on the bench is wet",
+            "the paint is wet",
+            "The bench is clean and dry",
+            "the bench is dry",
+        ),
+        (
+            "go fishing",
+            "The lake is frozen",
+            "the lake is frozen",
+            "The fish are biting today",
+            "the fish are biting",
+        ),
+        (
+            "play in the garden",
+            "The garden is full of bees",
+            "there are too many bees",
+            "The flowers are out",
+            "the garden is lovely",
+        ),
+        (
+            "bake cookies",
+            "We have no flour",
+            "we have no flour",
+            "We have everything we need",
+            "we have everything",
+        ),
+        (
+            "cross the river",
+            "The bridge is broken",
+            "the bridge is broken",
+            "The bridge is new and strong",
+            "the bridge is strong",
+        ),
+        (
+            "go camping",
+            "A big storm is coming tonight",
+            "a storm is coming",
+            "The night will be clear",
+            "the night will be clear",
+        ),
+        (
+            "take the boat out",
+            "The waves are very high",
+            "the waves are too high",
+            "The sea is calm",
+            "the sea is calm",
+        ),
+        (
+            "paint the fence",
+            "It is about to rain",
+            "the rain will wash it off",
+            "It will be dry all day",
+            "it will stay dry",
+        ),
+        (
+            "go to the park",
+            "The park is closed today",
+            "the park is closed",
+            "The park has a fair today",
+            "there is a fair",
+        ),
+        ("eat outside", "It is freezing cold", "it is freezing", "It is a warm evening", "it is warm"),
+        (
+            "play tennis",
+            "The court is covered in snow",
+            "the court has snow on it",
+            "The court is free now",
+            "the court is free",
+        ),
+    ];
+    let invites = ["Let's {x}.", "We could {x}.", "How about we {x}?", "Shall we {x}?"];
+    let mut decline = Vec::new();
+    for (act, bad, no_why, good, yes_why) in plans {
+        for inv in invites {
+            let ask = inv.replace("{x}", act);
+            decline.push((format!("{ask} {bad}."), format!("No, I do not want to {act}, because {no_why}.")));
+            decline.push((format!("{ask} {good}."), format!("Yes, let's {act}, because {yes_why}.")));
+        }
+    }
+    let decline = all_of(42, EXAMPLES, decline);
+
+    let kinds: [(&str, &[&str]); 4] = [
+        (
+            "food",
+            &["apples", "pears", "rice", "bread", "soup", "cheese", "grapes", "carrots", "eggs", "plums"],
+        ),
+        ("color", &["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown"]),
+        ("animal", &["cats", "dogs", "birds", "horses", "rabbits", "fish", "ducks", "goats"]),
+        (
+            "place",
+            &[
+                "the sea",
+                "the hills",
+                "the city",
+                "the woods",
+                "the farm",
+                "the lake",
+                "the desert",
+                "the town",
+            ],
+        ),
+    ];
+    let said = examples(43, EXAMPLES, |r| {
+        let (_, list) = kinds[r.below(kinds.len())];
+        let (liked, other) = r.two(list);
+        let (x, y) = if r.below(2) == 0 { (liked, other) } else { (other, liked) };
+        if r.below(2) == 0 {
+            (
+                format!(
+                    "Earlier you said: I like {liked} more than {other}. Which do you choose, {x} or {y}?"
+                ),
+                format!("I choose {liked}, because I said I like {liked} more."),
+            )
+        } else {
+            (
+                format!("Earlier you said: I do not like {other} much. Which do you choose, {x} or {y}?"),
+                format!("I choose {liked}, because I said I do not like {other} much."),
+            )
+        }
+    });
+
+    // (plan, news against it, what to do instead, news that changes nothing)
+    let changes: [(&str, &str, &str, &str); 16] = [
+        ("walk to school", "it is raining hard", "take the bus", "a bird is singing"),
+        ("eat lunch in the park", "the park is closed", "eat lunch at home", "the clouds are white"),
+        ("read the red book", "the red book is lost", "read the blue book", "the kettle is boiling"),
+        ("swim in the lake", "the lake is frozen", "swim in the pool", "a dog is barking"),
+        ("ride the bike", "the bike is broken", "walk", "the clock struck noon"),
+        ("bake bread", "there is no flour", "make soup", "the sun came out"),
+        ("visit Grandma on Monday", "Grandma is away on Monday", "visit her on Tuesday", "it is a sunny day"),
+        ("paint the door blue", "the blue paint is gone", "paint it green", "the radio is on"),
+        ("go to the beach", "a storm is coming", "stay at home", "the cat is asleep"),
+        ("play chess with Sam", "Sam is ill today", "play chess with Mia", "the tea is ready"),
+        ("take the train", "the trains are not running", "take the car", "the shop is busy"),
+        ("plant the seeds today", "the ground is frozen", "plant them next week", "the bell rang"),
+        ("wear the white shirt", "the white shirt is dirty", "wear the gray shirt", "the window is open"),
+        ("climb the hill", "the path is blocked", "walk by the river", "a leaf fell down"),
+        ("have tea", "the tea is all gone", "have juice", "the door is shut"),
+        ("cross the bridge", "the bridge is closed", "take the ferry", "the grass is green"),
+    ];
+    let mut mind = Vec::new();
+    for (plan, against, instead, nothing) in changes {
+        for lead in [
+            "You said you would",
+            "Earlier you planned to",
+            "You told me you would",
+            "This morning you decided to",
+            "Yesterday you said you would",
+        ] {
+            mind.push((
+                format!("{lead} {plan}. Now {against}. Will you still {plan}?"),
+                format!("No, I will {instead}, because {against}."),
+            ));
+            mind.push((
+                format!("{lead} {plan}. Now {nothing}. Will you still {plan}?"),
+                format!("Yes, I will still {plan}."),
+            ));
+        }
+    }
+    let mind = all_of(44, EXAMPLES, mind);
+
+    let view = examples(45, EXAMPLES, |r| {
+        let n = r.pick(&NAMES);
+        let o = r.pick(&OBJECTS);
+        let (mine, theirs) = r.two(&COLOURS);
+        if r.below(2) == 0 {
+            (
+                format!("You saw the {o}, and it is {mine}. {n} did not see it and says it is {theirs}. What color is the {o}?"),
+                format!("It is {mine}. I saw it, and {n} did not."),
+            )
+        } else {
+            (
+                format!(
+                    "You did not see the {o}. {n} saw it and says it is {theirs}. What color is the {o}?"
+                ),
+                format!("It is {theirs}, because {n} saw it."),
+            )
+        }
+    });
+
+    BuiltinCourse {
+        id: "deciding",
+        name: "Making up your mind (built-in)",
+        description: "Choosing with a reason, saying no when there is a reason to, keeping to what you said before, changing your mind for a reason, and keeping your view when someone else has no reason. Each choice follows from what the question says, never from a preference written into the lessons.",
+        lessons: vec![
+            file("01 Choosing for a reason", qa_block("Dialogue Lesson", "Choose the thing that fits what you need, and say why.", &choose)),
+            file("02 Saying no for a reason", qa_block("Dialogue Lesson", "Say no when there is a good reason not to, and yes when there is not. Give the reason.", &decline)),
+            file("03 What you said before", qa_block("Dialogue Lesson", "Choose in keeping with what you said earlier, and say so.", &said)),
+            file("04 Changing your mind", qa_block("Dialogue Lesson", "Change a plan when there is a reason to, and keep it when nothing matters to it.", &mind)),
+            file("05 Keeping your view", qa_block("Dialogue Lesson", "Keep what you saw when the other person has no reason. Change your view when they do.", &view)),
+        ],
+    }
+}
+
 /// The built-in courses, generated (the same text every time).
 pub fn builtin_courses() -> Vec<BuiltinCourse> {
-    vec![english(), reasoning_course(), math()]
+    vec![english(), reasoning_course(), math(), deciding()]
 }
 
 #[cfg(test)]

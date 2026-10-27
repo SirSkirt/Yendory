@@ -45,12 +45,12 @@ function renderMemory() {
   for (const m of rows) {
     const decide = (action, text) => safe(async () => { await invoke("memory_decide", { id: m.id, action, text }); await refreshStudy(); }, "Memory");
     const textCell = el("td", {}, m.text, m.edited ? el("span", { class: "tag" }, "edited") : "", m.verified ? el("span", { class: "tag ok" }, "checked") : "",
-      el("div", { class: "note" }, `${m.origin === "teacher" ? "written by you" : "kept by Nova"} · step ${fmt(m.step)}${m.seen > 1 ? ` · studied ${m.seen} times` : ""}`));
+      el("div", { class: "note" }, `${m.origin === "teacher" ? "written by you" : m.origin === "said" ? "said by Nova in a chat" : "kept by Nova"} · step ${fmt(m.step)}${m.seen > 1 ? ` · studied ${m.seen} times` : ""}`));
     body.append(el("tr", { class: m.enabled ? null : "off" },
       el("td", { class: "num" }, String(m.id)),
       textCell,
       el("td", { class: "note" }, m.sources.map(s => `${s.lesson}${s.sentence ? ` (sentence ${s.sentence})` : ""}`).join("; ") || "—"),
-      el("td", { class: "num" }, m.origin === "teacher" ? "—" : m.surprise.toFixed(2)),
+      el("td", { class: "num" }, m.origin === "studied" ? m.surprise.toFixed(2) : "—"),
       el("td", { class: "num" }, fmt(m.retrieved)),
       el("td", { class: "num" }, m.usefulness == null ? "—" : (m.usefulness >= 0 ? "+" : "") + m.usefulness.toFixed(3)),
       el("td", {},

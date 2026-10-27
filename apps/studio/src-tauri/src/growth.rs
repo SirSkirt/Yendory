@@ -458,6 +458,7 @@ mod tests {
             taught: Vec::new(),
             origin: "test".into(),
             read: Vec::new(),
+            conversation: Vec::new(),
             architecture: bicameral(),
             design: None,
             blocks: None,
