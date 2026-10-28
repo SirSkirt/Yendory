@@ -148,6 +148,18 @@ Also found:
   from the model after growth, so they never see it.
 - **Answer churn**: every epoch loses 15-23 answers the accepted model gave and gains 11-17
   (mostly earlier lessons trained again), so the net safeguard rejects most candidates.
+0.7.2: follow-ups to the probation results. **New words now come only from the lessons being
+taught** (`words_from_new_lessons`, on by default): on step 19,000, adding the 380 words of every
+lesson trained (the new course and the 27 earlier lessons trained with it) cost 67 of its 417
+earlier answers before any training; the 156 words of the new course alone cost 9
+(`examples/growth_probe.rs`). Starting new words from their letters' embeddings changed nothing
+before training. The answers just before and after words are added are reported, and can be
+guarded (`guard_before_growth`, experimental). Also: a larger earlier-lesson check (every
+earlier lesson, judged by net change; experimental), cut-off replies counted apart from wrong
+ones, "Compare settings (experiment)" in the Classroom (A/B/C on the open model with a test half
+never trained or judged; `learn::compare`, tested on step 15,000: the model is unchanged, every
+epoch is tested, the test half is never judged) and a best balanced Conversation checkpoint
+(experimental). Not yet run on the owner's model.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

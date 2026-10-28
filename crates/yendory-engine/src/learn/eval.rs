@@ -199,6 +199,10 @@ pub struct Outcome {
     /// Reasoning only: the model gives the supported answer a higher likelihood than the
     /// contradicted one.
     pub prefers_supported: Option<bool>,
+    /// The reply was stopped by its length limit before it ended (an unfinished reply, not a
+    /// finished wrong one).
+    #[serde(default)]
+    pub cut_off: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -218,6 +222,9 @@ pub struct Report {
     pub exact: BTreeMap<String, Score>,
     pub prefers_supported: Score,
     pub outcomes: Vec<Outcome>,
+    /// Replies stopped by their length limit before they ended (counted among the wrong ones).
+    #[serde(default)]
+    pub cut_off: usize,
 }
 impl Report {
     pub fn overall(&self) -> Score {
@@ -230,9 +237,20 @@ impl Report {
 
 /// Greedy reply to `prompt`, newline-terminated replies with the trailing newline removed.
 pub fn reply(model: &Bicameral, prompt: &str, max_tokens: usize, abl: Ablation) -> Result<String, String> {
+    Ok(reply_limited(model, prompt, max_tokens, abl)?.0)
+}
+
+/// [`reply`], and whether it was stopped by `max_tokens` before it ended (no line break).
+pub fn reply_limited(
+    model: &Bicameral,
+    prompt: &str,
+    max_tokens: usize,
+    abl: Ablation,
+) -> Result<(String, bool), String> {
     let ids = model.tokenizer.encode(prompt)?;
     let out = model.generate_cached_ids(&ids, max_tokens, abl)?;
-    Ok(model.tokenizer.decode(&out)?.trim_end_matches('\n').to_string())
+    let cut = out.len() >= max_tokens && out.last() != Some(&(b'\n' as crate::tokenizer::TokenId));
+    Ok((model.tokenizer.decode(&out)?.trim_end_matches('\n').to_string(), cut))
 }
 
 /// Sum of log-probabilities of `continuation` after `prompt` (prompt and continuation are
@@ -283,6 +301,7 @@ fn evaluate_item(
                     correct: got == expected,
                     reply: crate::nexus::readable(&got),
                     prefers_supported: None,
+                    cut_off: false,
                 });
             }
         }
@@ -290,10 +309,10 @@ fn evaluate_item(
             let mut history = String::new();
             for (j, (user, expected)) in it.users.iter().zip(&it.replies).enumerate() {
                 history.push_str(&chat_prompt(user));
-                let got = if known(j) {
-                    expected.clone()
+                let (got, cut_off) = if known(j) {
+                    (expected.clone(), false)
                 } else {
-                    reply(model, &history, reply_budget(expected, false), abl)?
+                    reply_limited(model, &history, reply_budget(expected, false), abl)?
                 };
                 out.push(Outcome {
                     kind: it.kind,
@@ -303,6 +322,7 @@ fn evaluate_item(
                     correct: &got == expected,
                     reply: got,
                     prefers_supported: None,
+                    cut_off,
                 });
                 history.push_str(expected);
                 history.push('\n');
@@ -313,7 +333,11 @@ fn evaluate_item(
             // Study Mode memories retrieved for the question come before it.
             let prompt = format!("{}{}", it.context.as_deref().unwrap_or(""), chat_prompt(q));
             let budget = reply_budget(expected, it.key.is_some());
-            let got = if known(0) { expected.clone() } else { reply(model, &prompt, budget, abl)? };
+            let (got, cut_off) = if known(0) {
+                (expected.clone(), false)
+            } else {
+                reply_limited(model, &prompt, budget, abl)?
+            };
             let prefers_supported = match (&it.kind, &it.contradicted) {
                 (Kind::Reasoning, Some(bad)) => Some(
                     continuation_log_prob(model, &prompt, &format!("{expected}\n"), abl)?
@@ -332,6 +356,7 @@ fn evaluate_item(
                 },
                 reply: got,
                 prefers_supported,
+                cut_off,
             });
         }
     }
@@ -409,6 +434,7 @@ pub fn evaluate_confirmed(
             report.prefers_supported.total += 1;
             report.prefers_supported.correct += usize::from(p);
         }
+        report.cut_off += usize::from(outcome.cut_off);
         report.outcomes.push(outcome);
     }
     Ok(report)

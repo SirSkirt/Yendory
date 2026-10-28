@@ -260,6 +260,12 @@ pub struct ConversationConfig {
     /// practises saying that about herself. Assistant-style conversations without such lines
     /// are kept either way. On by default.
     pub skip_ai_voice: bool,
+    /// Experimental (off by default): also keep the best BALANCED checkpoint, besides the best
+    /// language one: among checks that keep the Classroom answers and the read text as the
+    /// accepted ones must, and whose held-out loss is below where practice started, the one
+    /// whose context tests pass the most pairs, then with the higher listening measure, then the
+    /// lower loss. Context and listening never reject a checkpoint; this only keeps a second one.
+    pub keep_balanced: bool,
 }
 
 impl Default for ConversationConfig {
@@ -298,6 +304,7 @@ impl Default for ConversationConfig {
             reading_share: 0.1,
             reading_rise: 0.02,
             skip_ai_voice: true,
+            keep_balanced: false,
         }
     }
 }
@@ -365,6 +372,9 @@ pub struct ConversationCheck {
     pub accepted: bool,
     pub reason: Option<String>,
     pub samples: Vec<Sample>,
+    /// `keep_balanced`: this check became the best balanced checkpoint so far.
+    #[serde(default)]
+    pub balanced: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -441,6 +451,9 @@ pub struct ConversationResult {
     pub early_stop: bool,
     pub stage: usize,
     pub stuck: Option<String>,
+    /// `keep_balanced`: the best balanced checkpoint and its check (`None` when no check
+    /// qualified).
+    pub balanced: Option<(Bicameral, ConversationCheck)>,
 }
 
 /// Words too common to show that a reply uses something said earlier.
@@ -695,7 +708,7 @@ fn spread(len: usize, n: usize) -> Vec<usize> {
 }
 
 /// Greedy replies to many prompts (in parallel threads).
-fn replies(model: &Bicameral, prompts: &[String], max_tokens: usize) -> Vec<String> {
+pub(super) fn replies(model: &Bicameral, prompts: &[String], max_tokens: usize) -> Vec<String> {
     if prompts.is_empty() {
         return Vec::new();
     }
@@ -1283,6 +1296,15 @@ pub fn converse(
     let mut pool = new_pool(&trainer, &current, curriculum.stage, &mut rng)?;
 
     let mut best: Option<(Bicameral, ConversationCheck)> = None;
+    // `keep_balanced`: the best balanced checkpoint so far and its rank.
+    let mut balanced: Option<(Bicameral, ConversationCheck)> = None;
+    let rank = |c: &ConversationCheck| {
+        (
+            c.context.as_ref().map_or(0, |x| x.passed),
+            c.listening.unwrap_or(f32::NEG_INFINITY),
+            -c.held_out_loss,
+        )
+    };
     let mut best_loss = baseline_loss;
     let mut checks = Vec::new();
     let mut misses = 0;
@@ -1348,7 +1370,21 @@ pub fn converse(
             accepted,
             reason,
             samples: m.samples,
+            balanced: false,
         };
+        let mut c = c;
+        // A balanced candidate keeps what an accepted checkpoint must keep and has learned
+        // something; among those, more context pairs, then more listening, then lower loss.
+        if cfg.keep_balanced && keeps_classroom && keeps_reading && loss.is_finite() && loss < baseline_loss {
+            let better = balanced.as_ref().is_none_or(|(_, b)| {
+                let (a, b) = (rank(&c), rank(b));
+                a.0 > b.0 || (a.0 == b.0 && (a.1 > b.1 || (a.1 == b.1 && a.2 > b.2)))
+            });
+            if better {
+                c.balanced = true;
+                balanced = Some((m.model.clone(), c.clone()));
+            }
+        }
         if accepted {
             best_loss = loss;
             on_accepted(&m.model)?;
@@ -1589,6 +1625,7 @@ pub fn converse(
         early_stop,
         stage,
         stuck,
+        balanced,
     })
 }
 
@@ -1806,6 +1843,7 @@ mod tests {
             evaluations: 5,
             pool_size: 64,
             context_tests: 2,
+            keep_balanced: true,
             ..ConversationConfig::default()
         };
         let reading: Vec<String> =
@@ -1828,6 +1866,14 @@ mod tests {
         .unwrap();
         assert!(r.accepted, "the replies are easy to learn");
         assert!(r.best_loss < r.baseline_loss);
+        // The balanced checkpoint: a check that learned something and kept what must be kept,
+        // the last of those flagged, and none flagged after a better one.
+        let (_, bc) = r.balanced.as_ref().expect("some check learned something");
+        assert!(bc.balanced && bc.held_out_loss < r.baseline_loss);
+        assert_eq!(r.checks.iter().rev().find(|c| c.balanced).map(|c| c.step), Some(bc.step));
+        let passed = |c: &ConversationCheck| c.context.as_ref().map_or(0, |x| x.passed);
+        let flagged: Vec<usize> = r.checks.iter().filter(|c| c.balanced).map(passed).collect();
+        assert!(flagged.windows(2).all(|w| w[0] <= w[1]), "{flagged:?}");
         assert_eq!(saved, r.checks.iter().filter(|c| c.accepted).count());
         let Some(ConversationEvent::Started {
             baseline_context,

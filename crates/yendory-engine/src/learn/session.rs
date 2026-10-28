@@ -165,6 +165,31 @@ pub struct SessionConfig {
     /// training restarts from the accepted model. Every step is recorded (`EpochRecord::probation`).
     #[serde(default)]
     pub probation_epochs: u32,
+    /// New word units come only from the lessons being taught (on by default), not from saved
+    /// earlier lessons trained alongside them (`train_earlier`): the model already reads those
+    /// letter by letter, and turning their words into new units costs answers it had (measured
+    /// on step 19,000: 380 words from all lessons cost 67 of its 417 earlier answers, 156 from
+    /// the new course alone 9). Off: words come from everything trained, as before 0.7.2.
+    #[serde(default = "yes")]
+    pub words_from_new_lessons: bool,
+    /// Experimental (off by default): when words are added, the earlier-lesson answers are
+    /// guarded as the model gave them before the words were added, so answers lost to the new
+    /// words must be won back before a checkpoint is accepted. Off: they are guarded as the model
+    /// gives them after the words are added (that loss is reported, not guarded).
+    #[serde(default)]
+    pub guard_before_growth: bool,
+    /// Experimental (`None` by default): the earlier lessons' answer check takes up to this many
+    /// held-out questions from EVERY earlier lesson, instead of `retention_panel` questions in
+    /// all, so a lesson the session damages is seen and one changed answer weighs less.
+    #[serde(default)]
+    pub retention_per_lesson: Option<usize>,
+    /// Experimental (off by default): the earlier lessons' answer check is judged by its net
+    /// change: a candidate is rejected only when it loses more of the answers the baseline gave
+    /// than it newly gets right among the same questions (widespread forgetting, not a few
+    /// answers changing). Off: no answer the baseline gave may be lost (see also
+    /// `earlier_answers_net`).
+    #[serde(default)]
+    pub earlier_panel_net: bool,
     /// For experiments: called at the end of every epoch with the epoch, the accepted model and
     /// the working model training continues from. Not saved with settings.
     #[serde(skip)]
@@ -185,6 +210,9 @@ impl PartialEq for EpochHook {
     fn eq(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
+}
+fn yes() -> bool {
+    true
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -267,6 +295,10 @@ impl Default for SessionConfig {
             override_first_epoch: false,
             probation_epochs: 0,
             epoch_hook: None,
+            words_from_new_lessons: true,
+            guard_before_growth: false,
+            retention_per_lesson: None,
+            earlier_panel_net: false,
         }
     }
 }
@@ -379,6 +411,9 @@ pub struct Score {
     /// together show each lesson's own progress with it.
     #[serde(default)]
     pub by_lesson: std::collections::BTreeMap<String, (usize, usize)>,
+    /// Held-out replies stopped by their length limit before they ended (among the wrong ones).
+    #[serde(default)]
+    pub cut_off: usize,
 }
 
 /// Exact matches per lesson: each item's outcomes (one per question, one per conversation
@@ -572,6 +607,22 @@ pub struct EpochRecord {
     pub probation: Option<Probation>,
 }
 
+/// Words added at the start of a session: what the model answered just before and just after
+/// they were added (right, asked), with no training between, so a loss here comes from the new
+/// words alone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GrowthCheck {
+    pub words: usize,
+    /// The questions the session judges by.
+    pub judged_before: (usize, usize),
+    pub judged_after: (usize, usize),
+    /// The earlier lessons' answer check.
+    pub earlier_before: (usize, usize),
+    pub earlier_after: (usize, usize),
+    /// The earlier-lesson answers are guarded as they were before (`guard_before_growth`).
+    pub guarded_before: bool,
+}
+
 /// One epoch of probation (see `SessionConfig::probation_epochs`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -599,6 +650,9 @@ pub enum Event {
         /// the model's vocabulary, reply limits, answers that cannot fit).
         #[serde(default)]
         replies: super::eval::ReplyRoom,
+        /// Words added at the start, and the answers just before and just after.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        growth: Option<GrowthCheck>,
     },
     Batch {
         epoch: u32,
@@ -770,6 +824,7 @@ fn score_with(
             dense_reliance,
             without_dense_loss,
             by_lesson: by_lesson(&p.heldout_items, &report),
+            cut_off: report.cut_off,
         },
         report,
         panel,
@@ -798,6 +853,7 @@ pub(super) fn lesson_score(model: &Bicameral, items: &[Item]) -> Result<Score, S
         dense_reliance: None,
         without_dense_loss: None,
         by_lesson: by_lesson(&held, &report),
+        cut_off: report.cut_off,
     })
 }
 
@@ -1023,13 +1079,21 @@ impl Judge<'_> {
                 });
             }
         }
-        let lost_panel =
-            base_panel_correct.iter().zip(correct_set(&panel)).filter(|(b, n)| **b && !*n).count();
+        let panel_now = correct_set(&panel);
+        let lost_panel = base_panel_correct.iter().zip(&panel_now).filter(|(b, n)| **b && !**n).count();
+        let regained_panel = base_panel_correct.iter().zip(&panel_now).filter(|(b, n)| !**b && **n).count();
         let now_correct = correct_set(&report);
         let gained_here = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| !**b && **n).count();
-        if lost_panel > 0 && !(cfg.earlier_answers_net && lost_panel <= gained_here) {
+        let panel_ok = (cfg.earlier_answers_net && lost_panel <= gained_here)
+            || (cfg.earlier_panel_net && lost_panel <= regained_panel);
+        if lost_panel > 0 && !panel_ok {
             rejections.push(Rejection::EarlierAnswersLost);
-            reasons.push(if cfg.earlier_answers_net {
+            reasons.push(if cfg.earlier_panel_net {
+                format!(
+                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced and got {regained_panel} of the others right (net -{})",
+                    lost_panel - regained_panel
+                )
+            } else if cfg.earlier_answers_net {
                 format!(
                     "lost {lost_panel} earlier-lesson answer(s) the baseline produced, more than the {gained_here} gained in this lesson"
                 )
@@ -1204,7 +1268,15 @@ pub fn teach_rewarded(
     let mut new_words = 0;
     if cfg.grow_vocabulary {
         let limit = cfg.word_limit.unwrap_or(start.word_capacity()).max(start.tokenizer.words().len());
-        let words = grow_vocabulary(start.tokenizer.words(), lesson, limit, cfg.min_word_count);
+        // Words of the lessons being taught; saved earlier lessons trained alongside them are left
+        // out (see `words_from_new_lessons`).
+        let earlier: std::collections::HashSet<&str> = archive.iter().map(|i| i.source.as_str()).collect();
+        let taught: Vec<Item> = if cfg.words_from_new_lessons {
+            lesson.iter().filter(|i| !earlier.contains(i.source.as_str())).cloned().collect()
+        } else {
+            lesson.to_vec()
+        };
+        let words = grow_vocabulary(start.tokenizer.words(), &taught, limit, cfg.min_word_count);
         new_words = words.len() - start.tokenizer.words().len();
         if words.len() > start.word_capacity() {
             start = start.with_word_capacity(words.len(), cfg.seed ^ 0x5EED)?;
@@ -1234,9 +1306,30 @@ pub fn teach_rewarded(
     let archive_heldout: Vec<&Item> =
         archive.iter().filter(|it| it.held_out && it.kind != Kind::Prose).collect();
     let kinds = archive_heldout.iter().map(|it| it.kind).collect::<std::collections::BTreeSet<_>>().len();
-    let per_kind = cfg.retention_panel.div_ceil(kinds.max(1));
-    let mut panel_items = sample_per_kind(&archive_heldout, Some(per_kind), cfg.seed ^ 0xA5);
-    panel_items.truncate(cfg.retention_panel);
+    let panel_items = match cfg.retention_per_lesson {
+        // Up to `n` questions of every earlier lesson, spread over its kinds.
+        Some(n) => {
+            let mut by_lesson: std::collections::BTreeMap<&str, Vec<&Item>> = Default::default();
+            for &it in &archive_heldout {
+                by_lesson.entry(it.source.as_str()).or_default().push(it);
+            }
+            let mut out = Vec::new();
+            for (i, items) in by_lesson.values().enumerate() {
+                let kinds = items.iter().map(|it| it.kind).collect::<std::collections::BTreeSet<_>>().len();
+                let mut pick =
+                    sample_per_kind(items, Some(n.div_ceil(kinds.max(1))), cfg.seed ^ 0xA5 ^ i as u64);
+                pick.truncate(n);
+                out.extend(pick);
+            }
+            out
+        }
+        None => {
+            let per_kind = cfg.retention_panel.div_ceil(kinds.max(1));
+            let mut p = sample_per_kind(&archive_heldout, Some(per_kind), cfg.seed ^ 0xA5);
+            p.truncate(cfg.retention_panel);
+            p
+        }
+    };
     let retention_items = sample_per_kind(&archive_heldout, Some(cfg.retention_units), cfg.seed ^ 0x5A);
     let probes = Probes {
         heldout_rows: rows_of(&start, &probe_items, &mut rng)?,
@@ -1247,8 +1340,27 @@ pub fn teach_rewarded(
 
     let dense = cfg.education.is_some();
     let (baseline, base_report, base_panel) = score(&start, &probes, dense)?;
-    let base_panel_correct = correct_set(&base_panel);
+    let mut base_panel_correct = correct_set(&base_panel);
     let replies = super::eval::reply_room(&start, &heldout)?;
+    // Words added: what the model answered just before and just after (no training between).
+    let growth = if new_words > 0 {
+        let lesson_before = evaluate(model, &probes.heldout_items, Ablation::default())?;
+        let panel_before = evaluate(model, &probes.panel_items, Ablation::default())?;
+        if cfg.guard_before_growth {
+            base_panel_correct = correct_set(&panel_before);
+        }
+        let n = |r: &Report| (r.overall().correct, r.overall().total);
+        Some(GrowthCheck {
+            words: new_words,
+            judged_before: n(&lesson_before),
+            judged_after: n(&base_report),
+            earlier_before: n(&panel_before),
+            earlier_after: n(&base_panel),
+            guarded_before: cfg.guard_before_growth,
+        })
+    } else {
+        None
+    };
     observer(&Event::Started {
         train_units: train.len(),
         heldout_units: heldout.len(),
@@ -1256,6 +1368,7 @@ pub fn teach_rewarded(
         new_words,
         baseline: baseline.clone(),
         replies,
+        growth,
     });
 
     // Rewards: the start checkpoint's answers go into the ledger (evaluation only: nothing here

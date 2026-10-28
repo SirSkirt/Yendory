@@ -390,3 +390,59 @@ fn rates_read_as_entered() {
         assert_eq!(rate_text(r), t, "{r}");
     }
 }
+
+/// New word units come only from the lessons being taught, not from saved earlier lessons
+/// trained alongside them; the answers just before and after the words were added are reported;
+/// the per-lesson earlier check asks up to the chosen number of every earlier lesson's questions.
+#[test]
+fn words_come_from_the_lessons_taught_and_growth_is_reported() {
+    use yendory_engine::learn::lessons::grow_vocabulary;
+    let start = model();
+    let built = yendory_engine::learn::builtin::builtin_courses().remove(0).lessons.remove(0);
+    let lesson = parse_lesson(&built.text, &built.name).unwrap();
+    let (_, archive) = course();
+    let mut all = lesson.clone();
+    all.extend(archive.iter().cloned());
+    let cfg = SessionConfig {
+        epochs: 1,
+        foundation: false,
+        word_limit: Some(start.tokenizer.words().len() + 400),
+        min_word_count: 3,
+        retention_per_lesson: Some(2),
+        ..quick()
+    };
+    let run = |cfg: &SessionConfig| {
+        let mut started = None;
+        let r = teach(
+            &start,
+            &all,
+            &archive,
+            cfg,
+            &mut |e| {
+                if let Event::Started { .. } = e {
+                    started = Some(e.clone());
+                }
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        (r, started.unwrap())
+    };
+    let limit = start.tokenizer.words().len() + 400;
+    let from_lesson = grow_vocabulary(start.tokenizer.words(), &lesson, limit, 3);
+    let from_all = grow_vocabulary(start.tokenizer.words(), &all, limit, 3);
+    assert!(from_all.len() > from_lesson.len(), "the earlier lessons would add words of their own");
+    let (_, e) = run(&cfg);
+    let Event::Started { new_words, growth, baseline, .. } = e else { unreachable!() };
+    assert_eq!(new_words, from_lesson.len() - start.tokenizer.words().len());
+    let g = growth.expect("words were added");
+    println!("{g:?}");
+    assert_eq!(g.words, new_words);
+    assert_eq!(g.earlier_after, (baseline.panel_correct, baseline.panel_total));
+    // Every earlier lesson (one source here) gives up to 2 questions.
+    assert!(baseline.panel_total <= 2 && baseline.panel_total > 0);
+    // Off: words come from everything trained, as before.
+    let (_, e) = run(&SessionConfig { words_from_new_lessons: false, ..cfg.clone() });
+    let Event::Started { new_words, .. } = e else { unreachable!() };
+    assert_eq!(new_words, from_all.len() - start.tokenizer.words().len());
+}

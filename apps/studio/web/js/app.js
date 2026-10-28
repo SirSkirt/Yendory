@@ -485,6 +485,7 @@ $("clearLessons").addEventListener("click", safe(async () => {
 function setTeaching(on) {
   teaching = on;
   $("teach").disabled = on;
+  $("compareSettings").disabled = on;
   $("stopTeach").disabled = !on;
   $("read").disabled = on;
   $("stopRead").disabled = !on;
@@ -521,9 +522,8 @@ function stageFoci(stage, foundation) {
   if (stage === "dense") return foundation ? ["dense", "interconnect", "dense+interconnect"] : ["dense+interconnect"];
   return foundation ? ["dense", "transformer", "interconnect", "dense+interconnect", "joint"] : ["dense+interconnect", "joint"];
 }
-$("teach").addEventListener("click", safe(async () => {
-  if (!active) throw new Error("Open or create a model first");
-  const options = {
+function teachOptions() {
+  return {
     epochs: Number($("optEpochs").value),
     batchSize: Number($("optBatch").value),
     learningRate: Number($("optRate").value),
@@ -541,8 +541,15 @@ $("teach").addEventListener("click", safe(async () => {
     backoff: $("optBackoff").checked,
     overrideFirstEpoch: $("optOverrideFirst").checked,
     probationEpochs: Math.max(0, Math.min(10, Number($("optProbation").value) || 0)),
+    wordsFromNewLessons: $("optWordsNew").checked,
+    guardBeforeGrowth: $("optGuardGrowth").checked,
+    earlierEveryLesson: $("optEarlierEvery").checked,
     continueRun: $("optContinue").checked,
   };
+}
+$("teach").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open or create a model first");
+  const options = teachOptions();
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
@@ -554,6 +561,55 @@ $("teach").addEventListener("click", safe(async () => {
   setTeaching(true);
   say("Teaching started.");
 }, "Teach"));
+// Comparing settings (an experiment on the open model; it is not changed).
+const compareRows = [];
+function testCell(t) { return `${t.new_right}/${t.new_total}`; }
+function onCompareEvent(e) {
+  if (e.type === "started") {
+    compareRows.length = 0;
+    $("compareTable").tBodies[0].replaceChildren(el("tr", {}, el("td", {}, "Start (before teaching)"), el("td", {}, ""), el("td", {}, ""),
+      el("td", { class: "num" }, testCell(e.start)), el("td", { class: "num" }, `${e.start.earlier_right}/${e.start.earlier_total}`), el("td", {}, ""),
+      el("td", { class: "num" }, `${e.start.new_loss.toFixed(3)} / ${e.start.earlier_loss.toFixed(3)}`),
+      el("td", { class: "num" }, e.start_context ? `${e.start_context.passed}/${e.start_context.total}` : "—"), el("td", {}, "")));
+    $("compareTrajectory").replaceChildren();
+    $("compareLine").textContent = `Kept back for testing: ${fmt(e.new_test)} questions of the lessons taught, ${fmt(e.earlier_test)} of the earlier lessons.`;
+  } else if (e.type === "variant_started") {
+    $("compareLine").textContent = `Teaching ${e.name}…`;
+    $("compareTrajectory").append(el("h4", {}, e.name));
+  } else if (e.type === "session" && e.event.type === "batch") {
+    const s = e.event;
+    $("compareLine").textContent = `${["A", "B", "C"][e.index] ?? e.index} — epoch ${s.epoch} · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)}`;
+  } else if (e.type === "tested") {
+    const t = e.test;
+    $("compareTrajectory").append(el("div", { class: "note mono" },
+      `epoch ${t.epoch}: accepted ${testCell(t.accepted)} new, ${t.accepted.earlier_right}/${t.accepted.earlier_total} earlier · continues from ${testCell(t.working)} new, ${t.working.earlier_right}/${t.working.earlier_total} earlier (loss ${t.working.new_loss.toFixed(3)} / ${t.working.earlier_loss.toFixed(3)})`));
+  } else if (e.type === "variant_finished") {
+    const r = e.result;
+    const g = r.growth;
+    $("compareTable").tBodies[0].append(el("tr", {},
+      el("td", {}, r.name),
+      el("td", { class: "num" }, `${r.epochs} (${r.accepted_epochs})`),
+      el("td", { class: "num" }, `${r.promoted} / ${r.dropped}`),
+      el("td", { class: "num" }, testCell(r.end)),
+      el("td", { class: "num" }, `${r.end.earlier_right}/${r.end.earlier_total}`),
+      el("td", { class: "num" }, `${r.gained} / ${r.lost}`),
+      el("td", { class: "num" }, `${r.end.new_loss.toFixed(3)} / ${r.end.earlier_loss.toFixed(3)}`),
+      el("td", { class: "num" }, r.context ? `${r.context.passed}/${r.context.total}` : "—"),
+      el("td", {}, g ? `${g.words}: earlier answers ${g.earlier_before[0]} → ${g.earlier_after[0]} of ${g.earlier_after[1]} just from adding them` : "none")));
+  } else if (e.type === "finished") {
+    $("compareLine").textContent = e.stopped ? "Stopped." : "Finished. Compare the rows: the test questions were never trained on or used to choose a checkpoint.";
+  }
+}
+$("compareSettings").addEventListener("click", safe(async () => {
+  if (!active) throw new Error("Open or create a model first");
+  const options = teachOptions();
+  $("compareEntry").hidden = false;
+  $("compareTable").tBodies[0].replaceChildren();
+  $("compareLine").textContent = "Starting…";
+  await invoke("compare_settings", { options });
+  setTeaching(true);
+  say("Comparing settings: A, B and C are taught one after another.");
+}, "Compare settings"));
 $("optEducation").addEventListener("change", () => {
   const f = stageFoci($("optEducation").value, true).join(", ");
   $("optFoundation").parentElement.title = $("optEducation").value === "off" ? "" : `In this stage Foundation tries: ${f}`;
@@ -631,6 +687,9 @@ function onTeachEvent(e) {
       else log("INFO", `Accepted epoch ${s.epoch} written to the checkpoint folder (step ${fmt(s.step)}); the model itself is saved when the session ends.`);
     } else if (s.type === "started") {
       $("progressLine").textContent = `Baseline: held-out loss ${s.baseline.heldout_loss.toFixed(4)}, exact ${scoreCell(s.baseline)}; ${fmt(s.train_units)} units to learn, ${fmt(s.heldout_units)} held out, ${fmt(s.new_words)} new word units.`;
+      const g = s.growth;
+      if (g) log(g.earlier_before[0] > g.earlier_after[0] || g.judged_before[0] > g.judged_after[0] ? "WARN" : "INFO",
+        `${fmt(g.words)} word units added. Just from adding them (before any training): earlier-lesson answers checked ${g.earlier_before[0]} → ${g.earlier_after[0]} of ${g.earlier_after[1]}, questions judged ${g.judged_before[0]} → ${g.judged_after[0]} of ${g.judged_after[1]}.` + (g.guarded_before ? " The earlier answers are guarded as they were before." : " That loss is not guarded (the guards start from the model with the new words)."));
       const room = s.replies;
       if (room && room.longest_answer) log("INFO", `Held-out answers take up to ${fmt(room.longest_answer)} tokens with this vocabulary (median ${fmt(room.median_answer)}); replies may use up to ${fmt(room.longest_limit)} (each reply gets room to spell its answer one letter at a time).`);
       if (room?.too_long) log("WARN", `${fmt(room.too_long)} of the ${fmt(room.exact)} held-out answers graded word for word are longer than a reply may be (24 tokens with fitted reply limits off), so they can never be answered exactly right: their loss can still fall, but exact answers cannot rise on them. Turn on "Fit the reply limit to each answer" next to the training device.`);
@@ -1162,6 +1221,12 @@ async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
   await tauri.event.listen("teach-event", ev => { try { onTeachEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("teach-finished", ev => onTeachFinished(ev.payload));
+  await tauri.event.listen("compare-event", ev => { try { onCompareEvent(ev.payload); } catch (err) { log("ERROR", err); } });
+  await tauri.event.listen("compare-finished", ev => {
+    setTeaching(false);
+    if (ev.payload) { log("ERROR", ev.payload); $("compareLine").textContent = ev.payload; }
+    else say("The comparison finished.");
+  });
   await tauri.event.listen("read-event", ev => { try { onReadEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("read-finished", ev => onReadFinished(ev.payload));
   await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));

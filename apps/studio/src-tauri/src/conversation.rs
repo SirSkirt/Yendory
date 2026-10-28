@@ -153,6 +153,9 @@ pub struct ConverseOptions {
     /// Leave out conversations where a speaker says it is an AI or an assistant.
     #[serde(default = "yes")]
     skip_ai_voice: bool,
+    /// Experimental: also keep the best balanced checkpoint (saved as a model of its own).
+    #[serde(default)]
+    keep_balanced: bool,
 }
 
 impl Default for ConverseOptions {
@@ -183,6 +186,7 @@ impl Default for ConverseOptions {
             reading_percent: 100. * d.reading_share,
             reading_rise_percent: 100. * d.reading_rise,
             skip_ai_voice: d.skip_ai_voice,
+            keep_balanced: d.keep_balanced,
         }
     }
 }
@@ -200,6 +204,10 @@ pub(crate) struct ConverseFinished {
     pub(crate) error: Option<String>,
     /// Why the run stopped when Nova was stuck in a stage.
     pub(crate) stuck: Option<String>,
+    /// `keep_balanced`: the best balanced checkpoint, saved as a model of its own (its name),
+    /// when it is not the checkpoint kept.
+    #[serde(default)]
+    pub(crate) balanced: Option<String>,
 }
 
 /// Nova's own name in practice conversations: letters and spaces only (or empty to keep the
@@ -288,6 +296,7 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
         reading_share: o.reading_percent / 100.,
         reading_rise: o.reading_rise_percent / 100.,
         skip_ai_voice: o.skip_ai_voice,
+        keep_balanced: o.keep_balanced,
         ..ConversationConfig::default()
     };
     Ok(ConversationJob { infos, cfg, chats: o.chats })
@@ -407,6 +416,25 @@ pub(crate) fn run_conversation(
     let r = practise(&model, &sets, &archive, &reading, cfg, &mut observer, &mut on_accepted, stop)?;
     drop(sets);
     let mut meta = current.lock().unwrap().clone();
+    // The best balanced checkpoint, when it differs from the one kept: a model of its own beside
+    // this one (not opened), so the two can be compared.
+    let mut balanced = None;
+    if let Some((bm, bc)) = r.balanced.as_ref().filter(|(bm, _)| bm.step != r.model.step) {
+        let name: String = format!("{} (balanced, step {})", meta.name, bc.step).chars().take(60).collect();
+        let mut copy = meta.clone();
+        copy.id = new_id();
+        copy.name = name.clone();
+        copy.created = now();
+        copy.origin = format!("best balanced checkpoint of {}'s conversation practice", meta.name);
+        refresh_meta(&mut copy, bm);
+        save_all(app, &copy, bm, &archive)?;
+        append_history(
+            app,
+            &copy.id,
+            serde_json::json!({"type": "balanced_checkpoint", "time": now(), "from": meta.id, "check": bc}),
+        );
+        balanced = Some(name);
+    }
     meta.conversation.push(ConversationRecord {
         sources,
         chat_replies,
@@ -448,6 +476,7 @@ pub(crate) fn run_conversation(
         early_stop: r.early_stop,
         error: None,
         stuck: r.stuck,
+        balanced,
     })
 }
 
@@ -485,6 +514,7 @@ pub fn converse(app: AppHandle, studio: State<Studio>, options: ConverseOptions)
                     early_stop: false,
                     error: Some(e),
                     stuck: None,
+                    balanced: None,
                 }
             });
         studio.teaching.store(false, Ordering::Release);

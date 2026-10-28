@@ -4,6 +4,7 @@
 pub mod autogrow;
 pub mod bench;
 pub mod builtin;
+pub mod compare;
 pub mod conversation;
 pub mod corpus;
 pub mod course;

@@ -276,6 +276,9 @@
       <label class="check"><input type="checkbox" id="optRecoverEarlier" checked> When an epoch is rejected only because earlier lessons slipped, keep training from it without saving it, so the next epochs can win them back</label>
       <label class="check"><input type="checkbox" id="optBackoff" checked> If the first epochs only make the model worse (answers or earlier lessons lost), halve the learning rate and try again (up to 3 times)</label>
       <label class="check" title="Experimental. A rejected epoch is not saved; training continues from its most promising candidate so a change that first costs something can recover. The accepted checkpoint changes only when a later epoch passes every safeguard; after this many epochs without one, the branch is dropped and training restarts from the accepted checkpoint. 0 = off.">Probation (experimental): when an epoch is rejected, keep training from it for up to <input type="number" id="optProbation" min="0" max="10" value="0" class="inline-num"> epochs before going back to the accepted checkpoint (it is accepted only if a later epoch passes every safeguard; 0 = off)</label>
+      <label class="check"><input type="checkbox" id="optWordsNew" checked> Add new word units only from the lessons being taught, not from the saved earlier lessons trained with them (turning words Nova already reads letter by letter into new units costs answers she had)</label>
+      <label class="check"><input type="checkbox" id="optGuardGrowth"> Experimental: guard the earlier lessons' answers as Nova gave them before new words were added, so answers lost to the new words must be won back before a checkpoint is accepted</label>
+      <label class="check"><input type="checkbox" id="optEarlierEvery"> Experimental: check up to 4 answers of every earlier lesson (instead of 8 in all) and judge them by net change, so widespread forgetting is caught and a few changed answers do not block learning</label>
       <label class="check"><input type="checkbox" id="optOverrideFirst"> Override checkpoint acceptance on the first epoch: accept its best candidate even if the safeguards reject it, and protect what that model knows from then on (for a model the safeguards keep refusing to move)</label>
       <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses more held-out answers the model already gives than it gains (net safeguard; it beat the stricter "lose none" rule on two seeds, see docs/STATUS.md)</label>
       <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
@@ -287,6 +290,7 @@
       <label class="check" id="resumeBox" hidden><input type="checkbox" id="optContinue" checked> <span id="resumeText">Continue the interrupted run</span></label>
       <button type="button" id="teach" class="primary">Teach</button>
       <button type="button" id="stopTeach" disabled>Stop</button>
+      <button type="button" id="compareSettings" title="An experiment on this model; the model is not changed">Compare settings (experiment)</button>
       <span class="note" id="teachNote">A lesson passes only when the pass mark is reached; improvements below it are kept and reported as progress. Foundation training takes about four times as long as Joint-only.</span>
     </div>
 
@@ -300,6 +304,17 @@
         <thead><tr><th>Epoch</th><th>Candidate</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num">Exact</th><th class="num">Earlier lessons</th><th>Decision</th></tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+
+    <div class="entry" id="compareEntry" hidden>
+      <h3>Comparing settings</h3>
+      <p class="note">The lessons above are taught from the open model three times with these settings: <b>A</b> yours (probation off), <b>B</b> yours with probation (3 epochs), <b>C</b> B with the larger earlier-lesson check (questions from every earlier lesson, judged by net change). Half of every lesson's held-out questions is kept back: never trained on and never used to choose a checkpoint, so it shows what each one really learned. The model is not changed and nothing is saved but the results (in the model's history). It takes about three times as long as teaching once.</p>
+      <p class="mono" id="compareLine">—</p>
+      <table class="ledger compact" id="compareTable">
+        <thead><tr><th>Settings</th><th class="num">Epochs (accepted)</th><th class="num">Probation kept / dropped</th><th class="num">New lessons right</th><th class="num">Earlier lessons right</th><th class="num">Gained / lost</th><th class="num">Loss new / earlier</th><th class="num">Context tests</th><th>Words added</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <details><summary>After every epoch (accepted model / model training continues from)</summary><div id="compareTrajectory"></div></details>
     </div>
 
     <h3>Course record</h3>
@@ -343,6 +358,7 @@
       <div class="actions"><button type="button" id="convOwnSave">Save as a dataset</button> <span class="note" id="convOwnNote"></span></div>
     </details>
     <label class="check conv-chats"><input type="checkbox" id="convSkipAi" checked> Leave out conversations where someone says they are an AI or an assistant ("as an AI", "a language model", "how can I assist you"), so Nova never practises saying that about herself. Assistant-style conversations without such lines are kept either way.</label>
+    <label class="check conv-chats"><input type="checkbox" id="convBalanced"> Experimental: also keep the best <b>balanced</b> checkpoint, besides the best language one: among checkpoints that learned and kept the Classroom answers and reading, the one passing the most context tests, then listening best. It is saved as a model of its own, so the two can be compared; context and listening never reject a checkpoint.</label>
     <label class="check conv-chats"><input type="checkbox" id="convChats" checked> Also practise Nova's replies you marked <b>consistent</b> in § 13 Chat <span class="note" id="convChatCount"></span></label>
 
     <h3>Settings</h3>

@@ -1383,6 +1383,16 @@ struct TeachOptions {
     /// Experimental: epochs of probation (0 = off; see `SessionConfig::probation_epochs`).
     #[serde(default)]
     probation_epochs: u32,
+    /// New word units only from the lessons being taught (`SessionConfig::words_from_new_lessons`).
+    #[serde(default = "yes")]
+    words_from_new_lessons: bool,
+    /// Experimental: `SessionConfig::guard_before_growth`.
+    #[serde(default)]
+    guard_before_growth: bool,
+    /// Experimental: 4 earlier-lesson answers of every earlier lesson, judged by net change
+    /// (`retention_per_lesson`, `earlier_panel_net`).
+    #[serde(default)]
+    earlier_every_lesson: bool,
     /// Continue the interrupted run a restored checkpoint came from (its epochs, learning rate
     /// and schedule), when there is one.
     #[serde(default = "yes")]
@@ -1491,6 +1501,38 @@ struct TeachFinished {
     model: Option<Meta>,
 }
 
+/// The Classroom's session settings from the page's options (checkpoints aside).
+fn teach_config(options: &TeachOptions, meta: &Meta) -> Res<SessionConfig> {
+    Ok(SessionConfig {
+        epochs: options.epochs,
+        batch_size: options.batch_size,
+        learning_rate: options.learning_rate,
+        foundation: options.foundation,
+        rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
+        protect_correct_answers: options.protect_answers,
+        pass_mark: (options.pass_percent / 100.).clamp(0., 1.),
+        patience: options.flat_epochs,
+        retry: RetryPolicy {
+            retries: if options.retries { 3 } else { 0 },
+            requeue: options.requeue,
+            ..RetryPolicy::default()
+        },
+        seed: now(),
+        word_limit: meta.word_limit,
+        education: education_stage(options.education.as_deref())?,
+        train_earlier: options.train_earlier,
+        recover_earlier: options.recover_earlier,
+        backoff: options.backoff,
+        override_first_epoch: options.override_first_epoch,
+        probation_epochs: options.probation_epochs.min(10),
+        words_from_new_lessons: options.words_from_new_lessons,
+        guard_before_growth: options.guard_before_growth,
+        retention_per_lesson: options.earlier_every_lesson.then_some(4),
+        earlier_panel_net: options.earlier_every_lesson,
+        ..SessionConfig::default()
+    })
+}
+
 #[tauri::command]
 fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()> {
     if !(1..=50).contains(&options.epochs)
@@ -1519,29 +1561,8 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     }
     studio.stop.store(false, Ordering::Release);
     let cfg = SessionConfig {
-        epochs: options.epochs,
-        batch_size: options.batch_size,
-        learning_rate: options.learning_rate,
-        foundation: options.foundation,
-        rehearsal_share: if options.rehearsal { 0.10 } else { 0.0 },
-        protect_correct_answers: options.protect_answers,
-        pass_mark: (options.pass_percent / 100.).clamp(0., 1.),
-        patience: options.flat_epochs,
-        retry: RetryPolicy {
-            retries: if options.retries { 3 } else { 0 },
-            requeue: options.requeue,
-            ..RetryPolicy::default()
-        },
-        seed: now(),
-        word_limit: meta.word_limit,
-        education: education_stage(options.education.as_deref())?,
-        train_earlier: options.train_earlier,
-        recover_earlier: options.recover_earlier,
         checkpoint_dir: Some(checkpoints_dir(&app, &meta.id)?),
-        backoff: options.backoff,
-        override_first_epoch: options.override_first_epoch,
-        probation_epochs: options.probation_epochs.min(10),
-        ..SessionConfig::default()
+        ..teach_config(&options, &meta)?
     };
     // Continuing a restored checkpoint's interrupted run: its schedule, not a new one.
     let mut cfg = cfg;
@@ -1671,6 +1692,86 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
             let _ = app.emit("device-notice", n);
         }
         let _ = app.emit("teach-finished", &finished);
+    });
+    Ok(())
+}
+
+/// The experiment: the Classroom's lessons taught from the open model three times, A with the
+/// page's settings (probation off), B with probation for 3 epochs, C with probation and the
+/// larger earlier-lesson check (questions from every earlier lesson, judged by net change). Half
+/// of every lesson's held-out questions are kept back to test each result. The model is never
+/// changed; results go to the page and the model's history.
+#[tauri::command]
+fn compare_settings(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()> {
+    if !(1..=50).contains(&options.epochs)
+        || !(1..=128).contains(&options.batch_size)
+        || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
+        || !(1..=20).contains(&options.flat_epochs)
+    {
+        return Err(
+            "Choose 1-50 epochs, a batch size of 1-128, a learning rate up to 0.01 and 1-20 flat epochs"
+                .into(),
+        );
+    }
+    let files = studio.lessons.lock().unwrap().clone();
+    if files.is_empty() {
+        return Err("Add the lessons to compare on first".into());
+    }
+    let (meta, model, archive) =
+        with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
+    if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("Wait until teaching or reading has finished".into());
+    }
+    studio.stop.store(false, Ordering::Release);
+    use yendory_engine::learn::compare::{compare, CompareEvent, Variant};
+    // One seed for all three, so they differ only in the settings compared.
+    let base =
+        SessionConfig { probation_epochs: 0, override_first_epoch: false, ..teach_config(&options, &meta)? };
+    let variants = vec![
+        Variant { name: "A: your settings".into(), cfg: base.clone() },
+        Variant {
+            name: "B: + probation (3 epochs)".into(),
+            cfg: SessionConfig { probation_epochs: 3, ..base.clone() },
+        },
+        Variant {
+            name: "C: + probation and the larger earlier-lesson check".into(),
+            cfg: SessionConfig {
+                probation_epochs: 3,
+                retention_per_lesson: Some(4),
+                earlier_panel_net: true,
+                ..base.clone()
+            },
+        },
+    ];
+    let stop = studio.stop.clone();
+    append_history(
+        &app,
+        &meta.id,
+        serde_json::json!({"type": "compare_started", "time": now(), "files": files.len(), "options": base}),
+    );
+    std::thread::spawn(move || {
+        let studio = app.state::<Studio>();
+        let mut throttle = BatchThrottle::default();
+        let mut observer = |e: &CompareEvent| {
+            if let CompareEvent::Session { event: Event::Batch { batch, batches, .. }, .. } = e {
+                if !throttle.pass(*batch, *batches) {
+                    return;
+                }
+            }
+            let _ = app.emit("compare-event", e);
+        };
+        let course_files: Vec<CourseFile> = files.clone();
+        let result = guarded(|| compare(&model, &course_files, &archive, &variants, 6, &mut observer, &stop));
+        let summary = match &result {
+            Ok(r) => serde_json::json!({"type": "compare_finished", "time": now(), "results": r}),
+            Err(e) => serde_json::json!({"type": "compare_finished", "time": now(), "error": e}),
+        };
+        append_history(&app, &meta.id, summary);
+        studio.teaching.store(false, Ordering::Release);
+        if let Some(n) = yendory_engine::learn::take_device_notice() {
+            let _ = app.emit("device-notice", n);
+        }
+        let _ = app.emit("compare-finished", result.err());
     });
     Ok(())
 }
@@ -1938,6 +2039,7 @@ pub fn run() {
             set_cpu_threads,
             set_gpu_checks,
             set_fitted_replies,
+            compare_settings,
             add_builtin_lessons,
             courses::builtin_courses,
             courses::add_builtin_course,

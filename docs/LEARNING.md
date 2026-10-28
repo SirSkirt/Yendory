@@ -748,6 +748,37 @@ split, one half judges checkpoints and the other half is never trained on or use
 anything, so it measures generalization; the accepted and the working model are both asked it
 after every epoch. Results: docs/STATUS.md.
 
+### New words, the earlier-lesson check, and comparing settings (0.7.2)
+
+- **New words come from the lessons being taught** (`words_from_new_lessons`, on by default;
+  Studio checkbox). With `train_earlier`, the saved earlier lessons are trained in the same
+  session, and their words used to be added as new word units too. The model already reads those
+  letter by letter, and a word that becomes a new, untrained unit is suddenly unfamiliar where it
+  knew it: on step 19,000, 380 words added from every lesson cost 67 of its 417 earlier answers
+  before any training; 156 words from the new course alone cost 9. (Starting new words from the
+  mean of their letters' embeddings made no difference before training: the loss comes from the
+  re-tokenizing.)
+- **Growth is reported** (`Event::Started::growth`, `GrowthCheck`): the answers just before and
+  just after words are added, with no training between, for the judged questions and the
+  earlier-lesson check; the Classroom log shows them. `guard_before_growth` (experimental, off)
+  guards the earlier-lesson answers as they were before the words were added, so that loss must
+  be won back before a checkpoint is accepted.
+- **A larger earlier-lesson check** (experimental, off; Studio checkbox): `retention_per_lesson`
+  takes up to that many held-out questions of every earlier lesson (instead of 8 in all), and
+  `earlier_panel_net` rejects a candidate only when it loses more of the baseline's earlier
+  answers than it newly gets right among the same questions.
+- **Cut-off replies** are counted apart from finished wrong ones (`Outcome::cut_off`,
+  `Report::cut_off`, `Score::cut_off`): a reply stopped by its length limit before its line
+  break.
+- **Comparing settings** (`learn::compare`; Studio: "Compare settings (experiment)" in the
+  Classroom): the Classroom's lessons are taught from the open model once per variant, A the
+  page's settings (probation off), B with probation for 3 epochs, C with probation and the larger
+  earlier-lesson check, all with the same seed. Every lesson's held-out questions are split by
+  position: half are judged, half are a test never trained on or used to choose anything. After
+  every epoch the accepted model and the working model are asked the test half; at the end the
+  context tests of `learn::listening` are asked too. The model is never changed; the results go to
+  the page and the model's history.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a
@@ -1222,6 +1253,14 @@ same measures either way.
   a CPU thread while the GPU keeps training; with GPU checks on, the GPU first confirms the
   Classroom answers it can (see Training on the GPU), and those are not written again. Training never waits for that thread: a check that
   falls due while the last one is still being written starts as soon as it is judged.
+- **Best balanced checkpoint** (experimental, `keep_balanced`, off by default; Studio checkbox).
+  The checkpoint kept is the best language one (held-out loss, with the Classroom and reading
+  protections). With this on, a second one is tracked: among checks that keep what an accepted
+  checkpoint must keep and whose held-out loss is below where practice started, the one whose
+  context tests pass the most pairs, then with the higher listening measure, then the lower loss
+  (`ConversationCheck::balanced`, `ConversationResult::balanced`). Context and listening never
+  reject a checkpoint (the context tests are few and noisy); Studio saves the balanced one as a
+  model of its own when it differs, so the two can be compared on conversations neither saw.
 - **Reply checks** (`reply_checks`). Nova replies in the middle of 24 held-out conversations, and
   the replies are counted for: empty, repeating (the same three words twice, or its previous
   reply again), echoing the other person, on topic (a topic word of the last two turns, or a

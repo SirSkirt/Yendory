@@ -190,8 +190,9 @@
     const text = f.error ? `Conversation practice ended with an error: ${f.error}`
       : f.accepted ? `${f.stopped ? "Stopped" : f.earlyStop ? "Finished early (no further improvement)" : "Finished"} after ${fmt(f.tokens)} tokens: held-out loss of Nova's lines ${f.baselineLoss.toFixed(4)} → ${f.bestLoss.toFixed(4)}. The best checkpoint is saved.`
       : `${f.stopped ? "Stopped" : "Finished"}: no checkpoint was better on held-out conversations while keeping the Classroom answers and reading, so the model is unchanged.`;
-    $("convTitle").textContent = f.stuck ? `${text} ${f.stuck}.` : text;
-    if (f.error) log("ERROR", f.error); else say(text);
+    const balanced = f.balanced ? ` The best balanced checkpoint (most context tests passed, then listening, among those that learned and kept the Classroom answers) is saved as its own model: "${f.balanced}".` : "";
+    $("convTitle").textContent = (f.stuck ? `${text} ${f.stuck}.` : text) + balanced;
+    if (f.error) log("ERROR", f.error); else say(text + balanced);
     refresh().catch(e => log("ERROR", e));
     refreshModels();
   }
@@ -226,6 +227,7 @@
       readingPercent: n("convReading"),
       readingRisePercent: n("convReadingRise"),
       skipAiVoice: $("convSkipAi").checked,
+      keepBalanced: $("convBalanced").checked,
     };
   }
   window.conversationOptions = async () => {

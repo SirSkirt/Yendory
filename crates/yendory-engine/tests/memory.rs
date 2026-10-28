@@ -108,6 +108,10 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         override_first_epoch: false,
         probation_epochs: 0,
         epoch_hook: None,
+        words_from_new_lessons: true,
+        guard_before_growth: false,
+        retention_per_lesson: None,
+        earlier_panel_net: false,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);
