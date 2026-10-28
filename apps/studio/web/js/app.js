@@ -177,6 +177,7 @@ function showDevice(d) {
   }
   threads.value = String(d.cpuThreads >= d.cpuTotal ? 0 : d.cpuThreads);
   $("gpuChecks").checked = d.gpuChecks ?? true;
+  $("fittedReplies").checked = d.fittedReplies ?? true;
   if (d.options) {
     const fastest = d.benchmark?.result?.fastest;
     const sel = $("deviceChoice");
@@ -252,6 +253,10 @@ $("threadChoice").addEventListener("change", safe(async () => {
   try { showDevice(await invoke("set_cpu_threads", { threads: Number($("threadChoice").value) })); }
   catch (e) { if (deviceInfo) $("threadChoice").value = String(deviceInfo.cpuThreads); throw e; }
 }, "CPU threads"));
+$("fittedReplies").addEventListener("change", safe(async () => {
+  try { showDevice(await invoke("set_fitted_replies", { on: $("fittedReplies").checked })); }
+  catch (e) { if (deviceInfo) $("fittedReplies").checked = deviceInfo.fittedReplies ?? true; throw e; }
+}, "Reply limits"));
 $("gpuChecks").addEventListener("change", safe(async () => {
   try { showDevice(await invoke("set_gpu_checks", { on: $("gpuChecks").checked })); }
   catch (e) { if (deviceInfo) $("gpuChecks").checked = deviceInfo.gpuChecks ?? true; throw e; }
@@ -626,7 +631,9 @@ function onTeachEvent(e) {
       else log("INFO", `Accepted epoch ${s.epoch} written to the checkpoint folder (step ${fmt(s.step)}); the model itself is saved when the session ends.`);
     } else if (s.type === "started") {
       $("progressLine").textContent = `Baseline: held-out loss ${s.baseline.heldout_loss.toFixed(4)}, exact ${scoreCell(s.baseline)}; ${fmt(s.train_units)} units to learn, ${fmt(s.heldout_units)} held out, ${fmt(s.new_words)} new word units.`;
-      if (s.too_long) log("WARN", `${fmt(s.too_long)} of the ${fmt(s.exact_answers)} held-out answers graded word for word are longer than a reply may be (24 tokens with this model's vocabulary), so they can never be answered exactly right: their loss can still fall, but exact answers cannot rise on them. A larger vocabulary limit, or shorter answers, makes room.`);
+      const room = s.replies;
+      if (room && room.longest_answer) log("INFO", `Held-out answers take up to ${fmt(room.longest_answer)} tokens with this vocabulary (median ${fmt(room.median_answer)}); replies may use up to ${fmt(room.longest_limit)} (each reply gets room to spell its answer one letter at a time).`);
+      if (room?.too_long) log("WARN", `${fmt(room.too_long)} of the ${fmt(room.exact)} held-out answers graded word for word are longer than a reply may be (24 tokens with fitted reply limits off), so they can never be answered exactly right: their loss can still fall, but exact answers cannot rise on them. Turn on "Fit the reply limit to each answer" next to the training device.`);
     } else if (s.type === "batch") {
       progress.epoch = s.epoch;
       progress.candidate = Math.max(0, progress.foci.indexOf(s.focus));

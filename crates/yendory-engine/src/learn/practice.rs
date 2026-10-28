@@ -8,7 +8,7 @@
 //! the teacher's correction ("teacher's correction"), and a wrong answer without one on the
 //! lesson's own answer when it has one ("lesson answer"); otherwise it is not trained. Nothing
 //! is trained until the teacher has marked it.
-use super::eval::{reply, MAX_REPLY_TOKENS};
+use super::eval::{reply, reply_budget, MAX_REPLY_TOKENS};
 use super::lessons::{chat_prompt, qa, Item, Kind};
 use super::session::{teach_with, Event, SessionConfig, SessionResult};
 use crate::memory::{MemoryStore, RETRIEVE};
@@ -94,7 +94,9 @@ pub fn answer_all(
 ) -> Result<(), String> {
     for it in items.iter_mut() {
         let (p, mems) = prompt(model, &it.question, memory.as_deref_mut(), now);
-        let r = reply(model, &p, MAX_REPLY_TOKENS, Ablation::default())?;
+        // Room for the expected answer when there is one (see `eval::reply_budget`).
+        let limit = it.expected.as_deref().map_or(MAX_REPLY_TOKENS, |e| reply_budget(e, true));
+        let r = reply(model, &p, limit, Ablation::default())?;
         if after {
             it.after = Some(r);
         } else {

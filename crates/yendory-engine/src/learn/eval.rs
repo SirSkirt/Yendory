@@ -8,8 +8,38 @@ use crate::model::{Ablation, Bicameral, KvCache};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Greedy reply length limit used by the reference evaluation.
+/// Greedy reply length limit used by the reference evaluation (and the least any reply gets).
 pub const MAX_REPLY_TOKENS: usize = 24;
+
+static FITTED_REPLIES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Reply limits fitted to each answer (on by default; see [`reply_budget`]). Off: every reply
+/// stops at [`MAX_REPLY_TOKENS`] tokens, as before 0.6.7.
+pub fn set_fitted_replies(on: bool) {
+    FITTED_REPLIES.store(on, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether reply limits are fitted to each answer (see [`set_fitted_replies`]).
+pub fn fitted_replies() -> bool {
+    FITTED_REPLIES.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// The most tokens Nova may write when answering a question whose expected answer is
+/// `expected`: room to spell the answer one letter at a time, then the line break (every token
+/// is at least one letter, so a reply that is exactly right never needs more), and half as much
+/// again for answers graded by a key (the wording may differ); never less than
+/// [`MAX_REPLY_TOKENS`]. With fitted replies off: [`MAX_REPLY_TOKENS`].
+pub fn reply_budget(expected: &str, keyed: bool) -> usize {
+    if !fitted_replies() {
+        return MAX_REPLY_TOKENS;
+    }
+    let spelled = expected.len() + 1;
+    let room = if keyed { spelled + spelled / 2 } else { spelled };
+    room.clamp(MAX_REPLY_TOKENS, MAX_FITTED_REPLY)
+}
+
+/// The longest reply [`reply_budget`] gives.
+pub const MAX_FITTED_REPLY: usize = 512;
 
 /// How far (in logits) every other token must be below an answer's next token for the GPU to
 /// confirm it: far more than the GPU's and CPU's arithmetic ever differ, so an answer the GPU
@@ -30,14 +60,34 @@ impl Confirmed {
     }
 }
 
-/// Answers graded by exact match (no answer key; actions left out) and how many of them are
-/// longer than a reply may be ([`MAX_REPLY_TOKENS`] tokens with this model's vocabulary): those
-/// can never be answered exactly right, whatever the model learns.
-pub fn beyond_reply_limit(model: &Bicameral, items: &[&Item]) -> Result<(usize, usize), String> {
-    let (mut exact, mut long) = (0, 0);
-    let mut count = |answer: &str| -> Result<(), String> {
-        exact += 1;
-        long += usize::from(model.tokenizer.encode(answer)?.len() > MAX_REPLY_TOKENS);
+/// How much room replies get for a set of questions (see [`reply_budget`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReplyRoom {
+    /// Answers graded word for word (no answer key; actions left out).
+    pub exact: usize,
+    /// Of those, answers longer than a reply to them may be with this model's vocabulary: they
+    /// can never be answered exactly right (none with fitted replies).
+    pub too_long: usize,
+    /// The most tokens an expected answer takes with this vocabulary, and the median.
+    pub longest_answer: usize,
+    pub median_answer: usize,
+    /// The longest reply limit given.
+    pub longest_limit: usize,
+}
+
+/// How much room replies to `items` get, with this model's vocabulary.
+pub fn reply_room(model: &Bicameral, items: &[&Item]) -> Result<ReplyRoom, String> {
+    let mut lens = Vec::new();
+    let mut room = ReplyRoom::default();
+    let mut count = |answer: &str, keyed: bool| -> Result<(), String> {
+        let n = model.tokenizer.encode(answer)?.len();
+        let limit = reply_budget(answer, keyed);
+        room.longest_limit = room.longest_limit.max(limit);
+        lens.push(n);
+        if !keyed {
+            room.exact += 1;
+            room.too_long += usize::from(n > limit);
+        }
         Ok(())
     };
     for it in items {
@@ -46,17 +96,20 @@ pub fn beyond_reply_limit(model: &Bicameral, items: &[&Item]) -> Result<(usize, 
             Kind::Conversation if it.has_actions() => {}
             Kind::Conversation => {
                 for r in &it.replies {
-                    count(r)?;
+                    count(r, false)?;
                 }
             }
             _ => {
-                if let (None, Some(a)) = (&it.key, &it.answer) {
-                    count(a)?;
+                if let Some(a) = &it.answer {
+                    count(a, it.key.is_some())?;
                 }
             }
         }
     }
-    Ok((long, exact))
+    lens.sort_unstable();
+    room.longest_answer = lens.last().copied().unwrap_or(0);
+    room.median_answer = lens.get(lens.len() / 2).copied().unwrap_or(0);
+    Ok(room)
 }
 
 /// Answers the GPU can check: each one's (item, answer) index, and its row.
@@ -80,7 +133,7 @@ pub fn greedy_rows(model: &Bicameral, items: &[&Item]) -> Result<GreedyRows, Str
         let p = tok.encode(prompt)?;
         let a = tok.encode(expected)?;
         if p.is_empty()
-            || a.len() + 1 > MAX_REPLY_TOKENS
+            || a.len() + 1 > reply_budget(expected, false)
             || p.len() + a.len() > model.config.max_tokens
             || tok.decode(&a)? != expected
         {
@@ -221,7 +274,7 @@ fn evaluate_item(
         Kind::Conversation if it.has_actions() => {
             // Actions and replies are each checked with the lesson's own results before them.
             for (history, expected) in it.model_turns() {
-                let got = crate::nexus::next_line(model, &history, MAX_REPLY_TOKENS, abl)?;
+                let got = crate::nexus::next_line(model, &history, reply_budget(expected, false), abl)?;
                 out.push(Outcome {
                     kind: it.kind,
                     source: it.source.clone(),
@@ -237,8 +290,11 @@ fn evaluate_item(
             let mut history = String::new();
             for (j, (user, expected)) in it.users.iter().zip(&it.replies).enumerate() {
                 history.push_str(&chat_prompt(user));
-                let got =
-                    if known(j) { expected.clone() } else { reply(model, &history, MAX_REPLY_TOKENS, abl)? };
+                let got = if known(j) {
+                    expected.clone()
+                } else {
+                    reply(model, &history, reply_budget(expected, false), abl)?
+                };
                 out.push(Outcome {
                     kind: it.kind,
                     source: it.source.clone(),
@@ -256,7 +312,8 @@ fn evaluate_item(
             let (Some(q), Some(expected)) = (&it.prompt, &it.answer) else { return Ok(out) };
             // Study Mode memories retrieved for the question come before it.
             let prompt = format!("{}{}", it.context.as_deref().unwrap_or(""), chat_prompt(q));
-            let got = if known(0) { expected.clone() } else { reply(model, &prompt, MAX_REPLY_TOKENS, abl)? };
+            let budget = reply_budget(expected, it.key.is_some());
+            let got = if known(0) { expected.clone() } else { reply(model, &prompt, budget, abl)? };
             let prefers_supported = match (&it.kind, &it.contradicted) {
                 (Kind::Reasoning, Some(bad)) => Some(
                     continuation_log_prob(model, &prompt, &format!("{expected}\n"), abl)?

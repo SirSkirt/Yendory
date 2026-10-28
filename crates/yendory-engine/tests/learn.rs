@@ -150,7 +150,21 @@ fn all_lessons_match_reference_when_present() {
 
     // The published held-out results of the step-19,000 checkpoint (all 666 units).
     let started = std::time::Instant::now();
-    let report = evaluate(&step19000, &held_out(&items), Ablation::default()).unwrap();
+    // The reference stops every reply at 24 tokens; with reply limits fitted to each answer one
+    // more dialogue answer (longer than 24 tokens) is right, so this comparison uses its rule.
+    let fitted = evaluate(&step19000, &held_out(&items), Ablation::default()).unwrap();
+    yendory_engine::learn::eval::set_fitted_replies(false);
+    let report = evaluate(&step19000, &held_out(&items), Ablation::default());
+    yendory_engine::learn::eval::set_fitted_replies(true);
+    let report = report.unwrap();
+    eprintln!(
+        "with reply limits fitted to each answer: {}/{} right (reference rule: {}/{})",
+        fitted.overall().correct,
+        fitted.overall().total,
+        report.overall().correct,
+        report.overall().total
+    );
+    assert!(fitted.overall().correct >= report.overall().correct);
     let published: Value = serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
     let after = &published["held_out_after_training"];
     let round = |x: f64| (x * 1000.).round() / 1000.;

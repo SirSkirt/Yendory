@@ -306,7 +306,19 @@ plan and status: docs/NEURO.md.
 
 ## Evaluation (`learn::eval`)
 
-- **Exact match:** greedy reply (up to 24 tokens) must equal the teacher answer.
+- **Exact match:** greedy reply must equal the teacher answer.
+- **Reply limits (0.6.7, `eval::reply_budget`, `set_fitted_replies`, on by default; Studio: "Fit the
+  reply limit to each answer" next to the training device).** The reference stops every reply at
+  24 tokens, so an answer that takes more tokens with the model's vocabulary could never be right
+  (with the step-19,000 checkpoint's full vocabulary, 102 of the 104 held-out answers of the
+  built-in "Making up your mind" course take 26-56 tokens). Each reply now gets room to spell its
+  expected answer one letter at a time: its characters plus the line break (every token is at
+  least one letter, so an exactly right reply never needs more), half as much again for answers
+  graded by a key (the wording may differ), never less than 24 tokens and at most 512. Short
+  answers are graded exactly as before. The Classroom reports, at the start of each lesson, how
+  long the held-out answers are in tokens and the longest limit given (`ReplyRoom`). On the
+  step-19,000 checkpoint's 714 reference answers, one more is right (417 instead of 416); the
+  reference comparison test keeps the 24-token rule. Off: every reply stops at 24 tokens.
   Conversations are scored per Nova turn with the true earlier turns as history. In GPU
   training the GPU may confirm an answer without writing it out (`evaluate_confirmed`, see GPU
   checks under Training on the GPU); the report is the same.

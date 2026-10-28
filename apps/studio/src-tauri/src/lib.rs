@@ -543,6 +543,8 @@ struct DeviceInfo {
     cpu_total: usize,
     /// GPU checks (`yendory_engine::learn::set_gpu_checks`): on by default.
     gpu_checks: bool,
+    /// Reply limits fitted to each answer (`yendory_engine::learn::eval::set_fitted_replies`).
+    fitted_replies: bool,
 }
 
 fn settings_file(app: &AppHandle) -> Res<PathBuf> {
@@ -598,6 +600,10 @@ fn thread_choice(app: &AppHandle) -> usize {
 
 fn checks_choice(app: &AppHandle) -> bool {
     read_settings(app).get("gpuChecks").and_then(|d| d.as_bool()).unwrap_or(true)
+}
+
+fn fitted_choice(app: &AppHandle) -> bool {
+    read_settings(app).get("fittedReplies").and_then(|d| d.as_bool()).unwrap_or(true)
 }
 
 fn stored_benchmark(app: &AppHandle) -> Option<serde_json::Value> {
@@ -661,6 +667,7 @@ fn apply_device(
     use yendory_engine::learn::bench::{candidates, device_name};
     yendory_engine::learn::set_cpu_threads(threads);
     yendory_engine::learn::set_gpu_checks(checks);
+    let fitted = yendory_engine::learn::eval::fitted_replies();
     let options: Vec<DeviceOption> = candidates()
         .into_iter()
         .map(|d| {
@@ -711,11 +718,13 @@ fn apply_device(
         cpu_threads: threads,
         cpu_total: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
         gpu_checks: checks,
+        fitted_replies: fitted,
     }
 }
 
 #[tauri::command]
 async fn training_device(app: AppHandle) -> Res<DeviceInfo> {
+    yendory_engine::learn::eval::set_fitted_replies(fitted_choice(&app));
     let (choice, threads, bench) = (device_choice(&app), thread_choice(&app), stored_benchmark(&app));
     let checks = checks_choice(&app);
     tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
@@ -742,6 +751,19 @@ async fn set_cpu_threads(app: AppHandle, studio: State<'_, Studio>, threads: usi
     not_teaching(&studio)?;
     write_setting(&app, "cpuThreads", threads.into())?;
     let (choice, bench, checks) = (device_choice(&app), stored_benchmark(&app), checks_choice(&app));
+    tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Reply limits fitted to each answer on or off (see `yendory_engine::learn::eval::reply_budget`).
+#[tauri::command]
+async fn set_fitted_replies(app: AppHandle, studio: State<'_, Studio>, on: bool) -> Res<DeviceInfo> {
+    not_teaching(&studio)?;
+    write_setting(&app, "fittedReplies", on.into())?;
+    yendory_engine::learn::eval::set_fitted_replies(on);
+    let (choice, threads, bench) = (device_choice(&app), thread_choice(&app), stored_benchmark(&app));
+    let checks = checks_choice(&app);
     tauri::async_runtime::spawn_blocking(move || apply_device(&choice, threads, checks, bench))
         .await
         .map_err(|e| e.to_string())
@@ -1913,6 +1935,7 @@ pub fn run() {
             set_training_device,
             set_cpu_threads,
             set_gpu_checks,
+            set_fitted_replies,
             add_builtin_lessons,
             courses::builtin_courses,
             courses::add_builtin_course,

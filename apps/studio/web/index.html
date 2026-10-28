@@ -67,6 +67,7 @@
       <label for="threadChoice">CPU threads</label>
       <select id="threadChoice"><option value="0">All</option></select>
       <label class="check" title="In GPU training: the Classroom's losses are computed on the GPU, the GPU confirms the answers Nova certainly writes exactly (Classroom, courses, the Planner and Conversation's Classroom guard) so the CPU writes out only the rest, and Reading keeps reading while the CPU writes a check's samples. The results are the same. Off: the CPU does the checks as before."><input type="checkbox" id="gpuChecks" checked> Check answers on the GPU</label>
+      <label class="check" title="Each reply gets room to spell its expected answer one letter at a time (its characters plus the line break; half as much again for answers graded by a key), never less than 24 tokens. A right answer never needs more, so long answers can be answered right. Off: every reply stops at 24 tokens, as before."><input type="checkbox" id="fittedReplies" checked> Fit the reply limit to each answer</label>
       <span class="note" id="deviceNote">Looking for a GPU…</span>
     </div>
     <div class="line-form">
