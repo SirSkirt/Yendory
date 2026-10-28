@@ -1127,10 +1127,21 @@ from what it has read, been taught and said itself.
 
 - **Material.** Conversations between two people (SODA everyday conversations and
   Synthetic-Persona-Chat, both CC BY 4.0), downloaded with their speakers' names
-  (`soda-dialogues`, `persona-chat-dialogues`; `Name: text` lines). Conversation corpora from
-  Reading (`U:` / `N:` turns) can be practised too. A dialogue with other than two speakers is
-  not used, and one in an assistant's voice ("as an AI", "language model", "how can I assist
-  you", ...) is left out and counted. No persona or instruction is put in front of a
+  (`soda-dialogues`, `persona-chat-dialogues`; `Name: text` lines). Since 0.6.8 also
+  DailyDialog (CC BY-NC-SA 4.0) and EmpatheticDialogues (CC BY-NC 4.0), and the
+  assistant-style UltraChat (MIT) and OpenAssistant (Apache 2.0) for more material: a person and
+  a helper, kept as a conversation between two named people (`sources::any_dialogue` reads every
+  common layout: utterance lists, role/content messages, `<|im_start|>` or `### Human:` text;
+  speakers labelled user/assistant get names; system prompts are dropped, and a conversation is
+  cut before code or a turn longer than 1,200 characters). Several copies of a dataset are tried
+  in turn (`Fetch::HfFirst`). **Your own conversations** (§ 4: "Your own conversations"): a file
+  (.txt as `Name: text` lines with blank lines between conversations, or .json / .jsonl in any of
+  those layouts; `sources::conversations_from_file`) or text written or pasted on the page,
+  stored as a conversation dataset; one conversation is enough (held-out checks then come from
+  the other datasets). Conversation corpora from Reading (`U:` / `N:` turns) can be practised
+  too. A dialogue with other than two speakers is not used, and one where a speaker says it is
+  an AI or an assistant ("as an AI", "language model", "how can I assist you", ...) is left out
+  and counted (`ConversationConfig::skip_ai_voice`, on by default; off, it is practised too). No persona or instruction is put in front of a
   conversation; a dataset's situation line can be put in front as context (off by default,
   never trained).
 - **Rows.** Nova plays one speaker: that speaker's turns are `N: ...` and the other's `U: ...`.

@@ -150,6 +150,9 @@ pub struct ConverseOptions {
     reply_checks: bool,
     reading_percent: f32,
     reading_rise_percent: f32,
+    /// Leave out conversations where a speaker says it is an AI or an assistant.
+    #[serde(default = "yes")]
+    skip_ai_voice: bool,
 }
 
 impl Default for ConverseOptions {
@@ -179,6 +182,7 @@ impl Default for ConverseOptions {
             reply_checks: d.reply_checks,
             reading_percent: 100. * d.reading_share,
             reading_rise_percent: 100. * d.reading_rise,
+            skip_ai_voice: d.skip_ai_voice,
         }
     }
 }
@@ -283,6 +287,7 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
         reply_checks: o.reply_checks,
         reading_share: o.reading_percent / 100.,
         reading_rise: o.reading_rise_percent / 100.,
+        skip_ai_voice: o.skip_ai_voice,
         ..ConversationConfig::default()
     };
     Ok(ConversationJob { infos, cfg, chats: o.chats })

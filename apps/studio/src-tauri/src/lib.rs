@@ -1928,6 +1928,8 @@ pub fn run() {
             reading::corpora,
             reading::delete_corpus,
             reading::import_corpus,
+            reading::import_conversations,
+            reading::save_conversations,
             reading::download_corpus,
             reading::cancel_download,
             reading::read_corpus,

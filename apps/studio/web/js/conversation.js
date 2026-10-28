@@ -225,6 +225,7 @@
       replyChecks: $("convReplyChecks").checked,
       readingPercent: n("convReading"),
       readingRisePercent: n("convReadingRise"),
+      skipAiVoice: $("convSkipAi").checked,
     };
   }
   window.conversationOptions = async () => {
@@ -298,5 +299,21 @@
       refresh().catch(err => log("ERROR", err));
     });
     invoke("conversation_sources").then(s => { sources = s; renderSources(); }).catch(e => log("ERROR", e));
+    // Your own conversations: a file, or text written or pasted here.
+    const added = c => {
+      chosen.add(c.id);
+      $("convOwnNote").textContent = `Saved ${c.name}: ${fmt(c.documents)} conversation(s). It is ticked in the list above.`;
+      say(`Saved ${c.name}.`);
+      refresh().catch(err => log("ERROR", err));
+    };
+    $("convImport").addEventListener("click", safe(async () => {
+      const c = await invoke("import_conversations");
+      if (c) added(c);
+    }, "Add conversations"));
+    $("convOwnSave").addEventListener("click", safe(async () => {
+      const text = $("convOwnText").value;
+      if (!text.trim()) throw new Error("Write or paste some conversations first");
+      added(await invoke("save_conversations", { name: $("convOwnName").value, text }));
+    }, "Save conversations"));
   }
 })();

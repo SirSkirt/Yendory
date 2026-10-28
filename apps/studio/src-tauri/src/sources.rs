@@ -19,6 +19,9 @@ pub enum Fetch {
     JsonLines(&'static str, Convert),
     /// Project Gutenberg books by number (plain text; the Gutenberg header and licence are removed).
     Gutenberg(&'static [(u32, &'static str)]),
+    /// Rows of the first of these Hugging Face datasets (dataset, config, split) that answers
+    /// with data: the same data is published under several names, and a name can stop working.
+    HfFirst { datasets: &'static [(&'static str, &'static str, &'static str)], convert: Convert },
 }
 
 #[derive(Clone, Serialize)]
@@ -206,11 +209,86 @@ pub fn sources() -> Vec<Source> {
     ]
 }
 
-/// Conversation datasets for the Conversation stage: the same conversations as the Reading
-/// sources, kept with their speakers' names (`Name: text` lines), so Nova's speaker can be given
-/// Nova's own name. Both are conversations between two people, not an assistant and a user.
+/// Conversation datasets for the Conversation stage, as `Name: text` lines, so Nova's speaker can
+/// be given Nova's own name. SODA, Persona-Chat, DailyDialog and EmpatheticDialogues are
+/// conversations between two people; UltraChat and OpenAssistant are a person and a helper, kept
+/// as a conversation between two named people (system prompts are left out, so nothing tells
+/// either speaker what it is).
 pub fn conversation_sources() -> Vec<Source> {
     vec![
+        Source {
+            id: "daily-dialog",
+            name: "DailyDialog everyday conversations",
+            category: Category::Conversation,
+            description: "About 11,000 conversations about daily life between two people: shopping, work, plans, feelings (written by English learners' teachers, simple language; about 6 MB).",
+            page: "https://huggingface.co/datasets/li2017dailydialog/daily_dialog",
+            license: "CC BY-NC-SA 4.0 (non-commercial)",
+            attribution: "DailyDialog, Li et al. (2017)",
+            size_mb: 6,
+            default_mb: 6,
+            fetch: Fetch::HfFirst {
+                datasets: &[
+                    ("li2017dailydialog/daily_dialog", "default", "train"),
+                    ("roskoN/dailydialog", "default", "train"),
+                    ("daily_dialog", "default", "train"),
+                ],
+                convert: any_dialogue,
+            },
+        },
+        Source {
+            id: "empathetic-dialogues",
+            name: "EmpatheticDialogues",
+            category: Category::Conversation,
+            description: "About 20,000 conversations where one person tells of something that happened to them and how they felt, and the other listens and answers, each with its situation (about 10 MB).",
+            page: "https://huggingface.co/datasets/facebook/empathetic_dialogues",
+            license: "CC BY-NC 4.0 (non-commercial)",
+            attribution: "EmpatheticDialogues, Rashkin et al. (2019), Facebook AI Research",
+            size_mb: 10,
+            default_mb: 10,
+            fetch: Fetch::HfFirst {
+                datasets: &[
+                    ("Estwld/empathetic_dialogues_llm", "default", "train"),
+                    ("facebook/empathetic_dialogues", "default", "train"),
+                ],
+                convert: any_dialogue,
+            },
+        },
+        Source {
+            id: "ultrachat",
+            name: "UltraChat (assistant-style)",
+            category: Category::Conversation,
+            description: "Long conversations where one person asks about all kinds of topics and the other explains: assistant-style, longer and harder words. Kept as a conversation between two named people; long turns are cut by the practice windows. 200,000 in all; download only the first part you need.",
+            page: "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k",
+            license: "MIT",
+            attribution: "UltraChat, Ding et al. (2023); ultrachat_200k by Hugging Face H4",
+            size_mb: 1400,
+            default_mb: 40,
+            fetch: Fetch::HfFirst {
+                datasets: &[
+                    ("HuggingFaceH4/ultrachat_200k", "default", "train_sft"),
+                    ("stingning/ultrachat", "default", "train"),
+                ],
+                convert: any_dialogue,
+            },
+        },
+        Source {
+            id: "openassistant",
+            name: "OpenAssistant conversations (assistant-style)",
+            category: Category::Conversation,
+            description: "Conversations people wrote with volunteers playing a helper: questions, advice and explanations (assistant-style). Kept as a conversation between two named people (about 20 MB).",
+            page: "https://huggingface.co/datasets/OpenAssistant/oasst1",
+            license: "Apache 2.0",
+            attribution: "OpenAssistant Conversations, Kopf et al. (2023), LAION",
+            size_mb: 20,
+            default_mb: 20,
+            fetch: Fetch::HfFirst {
+                datasets: &[
+                    ("OpenAssistant/oasst_top1_2023-08-25", "default", "train"),
+                    ("timdettmers/openassistant-guanaco", "default", "train"),
+                ],
+                convert: any_dialogue,
+            },
+        },
         Source {
             id: "soda-dialogues",
             name: "SODA conversations (with speakers' names)",
@@ -241,6 +319,188 @@ pub fn conversation_sources() -> Vec<Source> {
             },
         },
     ]
+}
+
+/// Names given to the two speakers of a conversation that has none (chosen by its text).
+const PAIRS: [(&str, &str); 12] = [
+    ("Ann", "Ben"),
+    ("Cara", "Dan"),
+    ("Eva", "Finn"),
+    ("Mia", "Leo"),
+    ("Sara", "Tom"),
+    ("Zoe", "Ray"),
+    ("Lily", "Max"),
+    ("Nora", "Sam"),
+    ("Ivy", "Jack"),
+    ("Rose", "Owen"),
+    ("Kate", "Noah"),
+    ("Lucy", "Adam"),
+];
+
+/// Role labels that are not names: speakers labelled like this get names.
+const ROLES: [&str; 14] = [
+    "user",
+    "assistant",
+    "human",
+    "gpt",
+    "bot",
+    "ai",
+    "model",
+    "system",
+    "speaker",
+    "prompter",
+    "you",
+    "me",
+    "a",
+    "b",
+];
+
+/// Longest turn kept: a conversation is cut before a longer turn (and before code).
+const LONGEST_TURN: usize = 1200;
+
+/// A speaker label that can stand as a name.
+fn plain_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.len() <= 32
+        && n.split(' ').count() <= 3
+        && n.starts_with(|c: char| c.is_ascii_uppercase())
+        && n.chars().all(|c| c.is_ascii_alphabetic() || " .'-".contains(c))
+        && !ROLES.contains(&n.to_ascii_lowercase().as_str())
+}
+
+/// Turns of the `<|im_start|>role ... <|im_end|>` or `### Human: ... ### Assistant:` layouts.
+fn chat_text_turns(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if text.contains("<|im_start|>") {
+        for part in text.split("<|im_start|>").skip(1) {
+            let part = part.split("<|im_end|>").next().unwrap_or("");
+            let (role, said) = part.split_once('\n').unwrap_or((part, ""));
+            out.push((role.trim().to_string(), said.trim().to_string()));
+        }
+    } else if text.contains("### Human:") {
+        for part in text.split("### ").filter(|p| !p.trim().is_empty()) {
+            if let Some((role, said)) = part.split_once(':') {
+                out.push((role.trim().to_string(), said.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// One conversation in any common layout, as a `Situation:` line (when there is one) and
+/// `Name: text` lines. Layouts: a list of utterances (`dialog`, `dialogue`, `utterances`,
+/// `turns`, `conversation`, `conversations`, `messages`) as strings (the speakers alternate) or
+/// as objects with a role (`role`, `from`, `speaker`) and a text (`content`, `value`, `text`,
+/// `utterance`); or one `text` with `<|im_start|>` / `### Human:` turns. System turns are left
+/// out. Speakers whose labels are not names (user, assistant, ...) get names. A conversation is
+/// cut before code or a turn longer than 1,200 characters; fewer than two turns, more than two
+/// speakers or nothing recognised: none.
+pub fn any_dialogue(row: &Value) -> Vec<String> {
+    const LISTS: [&str; 7] =
+        ["dialog", "dialogue", "utterances", "turns", "conversation", "conversations", "messages"];
+    let field = |v: &Value, keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).map(|x| x.trim().to_string())
+    };
+    let mut turns: Vec<(Option<String>, String)> = Vec::new();
+    if let Some(list) = LISTS.iter().find_map(|k| row.get(*k).and_then(Value::as_array)).or(row.as_array()) {
+        for v in list {
+            match v {
+                Value::String(t) => turns.push((None, t.trim().to_string())),
+                Value::Object(_) => {
+                    let Some(text) = field(v, &["content", "value", "text", "utterance"]) else { continue };
+                    turns.push((field(v, &["role", "from", "speaker"]), text));
+                }
+                _ => {}
+            }
+        }
+    } else if let Some(text) = field(row, &["text", "chat", "conversation"]) {
+        turns = chat_text_turns(&text).into_iter().map(|(r, t)| (Some(r), t)).collect();
+    }
+    turns.retain(|(r, t)| !t.is_empty() && !r.as_deref().is_some_and(|r| r.eq_ignore_ascii_case("system")));
+    // Cut before code or an over-long turn.
+    if let Some(i) = turns.iter().position(|(_, t)| t.contains("```") || t.len() > LONGEST_TURN) {
+        turns.truncate(i);
+    }
+    if turns.len() < 2 {
+        return Vec::new();
+    }
+    // Speakers: the labels in order of appearance (alternating when there are none).
+    let mut labels: Vec<String> = Vec::new();
+    for (i, (r, _)) in turns.iter().enumerate() {
+        let r = r.clone().unwrap_or_else(|| ["1", "2"][i % 2].to_string());
+        if !labels.contains(&r) {
+            labels.push(r);
+        }
+    }
+    if labels.len() != 2 {
+        return Vec::new();
+    }
+    let all_text: usize = turns.iter().map(|(_, t)| t.len()).sum();
+    let (a, b) = PAIRS[(all_text + turns.len()) % PAIRS.len()];
+    let names: Vec<String> = if labels.iter().all(|l| plain_name(l)) {
+        labels.clone()
+    } else {
+        vec![a.to_string(), b.to_string()]
+    };
+    let mut doc = String::new();
+    if let Some(sit) = field(row, &["situation", "narrative", "context"]).filter(|x| !x.is_empty()) {
+        doc.push_str(&format!("Situation: {}\n", sit.replace('\n', " ")));
+    }
+    for (i, (r, t)) in turns.iter().enumerate() {
+        let label = r.clone().unwrap_or_else(|| ["1", "2"][i % 2].to_string());
+        let who = &names[labels.iter().position(|l| *l == label).unwrap_or(0)];
+        let said = t.split_whitespace().collect::<Vec<_>>().join(" ");
+        doc.push_str(&format!("{who}: {said}\n"));
+    }
+    vec![doc.trim_end().to_string()]
+}
+
+/// Conversations from a file of your own: JSON (a list of conversations, or an object with a
+/// list under `conversations`, `dialogues` or `data`, or one conversation), JSON lines (one
+/// conversation per line), each in any layout [`any_dialogue`] reads; or plain text, kept as it
+/// is (conversations separated by blank lines, `Name: text` or `U:` / `N:` lines). Returns the
+/// text to store (conversations separated by blank lines).
+pub fn conversations_from_file(text: &str) -> String {
+    let trimmed = text.trim_start();
+    // A turn: a string, or an object with a speaker.
+    let turn = |x: &Value| x.is_string() || ["role", "from", "speaker"].iter().any(|k| x.get(*k).is_some());
+    let one = |v: &Value| -> Vec<String> {
+        match v {
+            // A bare list of turns is one conversation.
+            Value::Array(items) if items.iter().all(turn) => {
+                any_dialogue(&serde_json::json!({ "messages": v }))
+            }
+            _ => any_dialogue(v),
+        }
+    };
+    let mut docs: Vec<String> = Vec::new();
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(Value::Array(list)) if list.iter().all(turn) => docs.extend(one(&Value::Array(list))),
+            Ok(Value::Array(list)) => list.iter().for_each(|v| docs.extend(one(v))),
+            Ok(obj) => match ["conversations", "dialogues", "data"]
+                .iter()
+                .find_map(|k| obj.get(*k).and_then(Value::as_array))
+            {
+                Some(list)
+                    if list.iter().all(|x| !x.is_string()) && list.iter().any(|x| !one(x).is_empty()) =>
+                {
+                    list.iter().for_each(|v| docs.extend(one(v)))
+                }
+                _ => docs.extend(one(&obj)),
+            },
+            // JSON lines.
+            Err(_) => {
+                for line in trimmed.lines().filter(|l| !l.trim().is_empty()) {
+                    if let Ok(v) = serde_json::from_str::<Value>(line) {
+                        docs.extend(one(&v));
+                    }
+                }
+            }
+        }
+        return docs.join("\n\n");
+    }
+    text.to_string()
 }
 
 fn s<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -572,6 +832,78 @@ mod tests {
         assert!(!docs.is_empty());
         assert!(docs.iter().all(|d| !d.contains("Gutenberg") && !d.contains("licence")));
         assert!(docs[0].starts_with("Once there was a fox number 0"));
+    }
+
+    /// Every layout the conversation datasets and your own files use becomes two named
+    /// speakers that parse as a dialogue; system prompts never come through.
+    #[test]
+    fn any_layout_becomes_a_two_person_conversation() {
+        use yendory_engine::learn::conversation::parse_dialogue;
+        let check = |v: Value, first: &str| {
+            let d = any_dialogue(&v);
+            assert_eq!(d.len(), 1, "{v}");
+            let p = parse_dialogue(&d[0]).unwrap_or_else(|| panic!("{}", d[0]));
+            assert_eq!(p.turns.len(), 2, "{}", d[0]);
+            assert_eq!(p.turns[0], first, "{}", d[0]);
+            assert!(!d[0].to_lowercase().contains("system") && !d[0].contains("helpful"), "{}", d[0]);
+            d[0].clone()
+        };
+        // DailyDialog: a list of utterances.
+        check(
+            json!({"dialog": ["Say, Jim, how about going for a few beers?", "That's a good idea."]}),
+            "Say, Jim, how about going for a few beers?",
+        );
+        // EmpatheticDialogues (LLM layout): situation and role/content messages.
+        let e = check(
+            json!({"situation": "I lost my keys.", "conversations": [{"role": "user", "content": "I lost my keys today."}, {"role": "assistant", "content": "Oh no, where did you see them last?"}]}),
+            "I lost my keys today.",
+        );
+        assert!(e.starts_with("Situation: I lost my keys."));
+        // UltraChat: messages, with a system prompt that must be left out.
+        check(
+            json!({"messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "What is rain?"}, {"role": "assistant", "content": "Water falling from clouds."}]}),
+            "What is rain?",
+        );
+        // OpenAssistant top-1: chat-markup text.
+        check(
+            json!({"text": "<|im_start|>user\nWhy is the sky blue?<|im_end|>\n<|im_start|>assistant\nBecause air scatters blue light most.<|im_end|>"}),
+            "Why is the sky blue?",
+        );
+        // Guanaco layout.
+        check(json!({"text": "### Human: Hi there.### Assistant: Hello! How are you?"}), "Hi there.");
+        // ShareGPT layout keeps plain names.
+        let named = check(
+            json!({"conversations": [{"from": "Rosa", "value": "Morning!"}, {"from": "Theo", "value": "Morning, Rosa."}]}),
+            "Morning!",
+        );
+        assert!(named.starts_with("Rosa: Morning!"));
+        // Code or an over-long turn cuts the conversation; three speakers or one turn: none.
+        assert!(any_dialogue(&json!({"dialog": ["Hi", "```rust\nfn main() {}\n```"]})).is_empty());
+        assert!(any_dialogue(&json!({"messages": [{"role": "a", "content": "x"}, {"role": "b", "content": "y"}, {"role": "c", "content": "z"}]})).is_empty());
+        assert!(any_dialogue(&json!({"dialog": ["Only one."]})).is_empty());
+        assert!(any_dialogue(&json!({"title": "not a conversation"})).is_empty());
+    }
+
+    /// Files of your own: JSON, JSON lines and plain text all give conversations.
+    #[test]
+    fn own_files_in_any_form_give_conversations() {
+        use yendory_engine::learn::conversation::parse_dialogue;
+        let count = |text: &str| {
+            conversations_from_file(text).split("\n\n").filter(|d| parse_dialogue(d).is_some()).count()
+        };
+        assert_eq!(
+            count(
+                r#"[{"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hey"}]}, ["Hello", "Hi there"]]"#
+            ),
+            2
+        );
+        assert_eq!(
+            count(r#"{"conversations": [{"dialog": ["a b", "c d"]}, {"dialog": ["e f", "g h"]}]}"#),
+            2
+        );
+        assert_eq!(count("{\"dialog\": [\"a\", \"b\"]}\n{\"dialog\": [\"c\", \"d\"]}\n"), 2);
+        assert_eq!(count("Mia: Hi!\nLeo: Hello.\n\nAnn: Rain again.\nBen: Yes."), 2);
+        assert_eq!(count(r#"[{"from": "user", "value": "x"}, {"from": "gpt", "value": "y"}]"#), 1);
     }
 
     #[test]

@@ -103,7 +103,23 @@ struct Provenance<'a> {
 fn store(app: &AppHandle, name: &str, from: &Provenance, bytes: Vec<u8>, truncated: bool) -> Res<CorpusInfo> {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let corpus = Corpus::prepare(&text);
-    if corpus.train.is_empty() || corpus.held_out.is_empty() {
+    if from.category == Category::Conversation {
+        // Conversations of your own may be few: one two-speaker conversation is enough (held-out
+        // checks then come from the other datasets practised with it).
+        let dialogues = corpus
+            .train
+            .iter()
+            .chain(&corpus.held_out)
+            .filter(|d| yendory_engine::learn::conversation::parse_dialogue(d).is_some())
+            .count();
+        if dialogues == 0 {
+            return Err(format!(
+                "{name}: no conversations found. Write each conversation as lines of `Name: what they say` \
+                 (or `U:` / `N:`), with a blank line between conversations; JSON with \
+                 role/content messages also works."
+            ));
+        }
+    } else if corpus.train.is_empty() || corpus.held_out.is_empty() {
         return Err(format!(
             "{name}: too little text ({} documents). A corpus needs at least a few dozen documents \
              (stories or paragraphs separated by blank lines).",
@@ -349,6 +365,10 @@ pub fn hf_documents(
                 }
             }
             offset += rows.len() as u64;
+            if docs.is_empty() && offset >= 300 {
+                // Nothing in this layout converts: no point reading the rest.
+                break;
+            }
             progress(docs.iter().map(|d| d.len() as u64 + 16).sum::<u64>().min(limit), Some(limit));
             let rows_total = page.get("num_rows_total").and_then(|n| n.as_u64()).unwrap_or(0);
             if offset >= rows_total {
@@ -426,6 +446,23 @@ pub fn source_text(
             hf_documents(agent, dataset, configs, split, convert, limit, cancel, progress, note)?
         }
         Fetch::JsonLines(url, convert) => jsonl_documents(agent, url, convert, limit, cancel, progress)?,
+        Fetch::HfFirst { datasets, convert } => {
+            // The first name that answers with data is used; why each other one failed is kept.
+            let mut why = Vec::new();
+            let mut found = None;
+            for (dataset, config, split) in datasets {
+                match hf_documents(agent, dataset, &[config], split, convert, limit, cancel, progress, note) {
+                    Ok((docs, cut)) if !docs.is_empty() => {
+                        found = Some((docs, cut));
+                        break;
+                    }
+                    Ok(_) => why.push(format!("{dataset}: no conversations in its rows")),
+                    Err(e) if cancel.load(Ordering::Acquire) => return Err(e),
+                    Err(e) => why.push(format!("{dataset}: {e}")),
+                }
+            }
+            found.ok_or_else(|| format!("No copy of this dataset could be read ({})", why.join("; ")))?
+        }
         Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, progress)?,
     };
     if docs.is_empty() {
@@ -542,6 +579,57 @@ pub async fn import_corpus(app: AppHandle, category: Option<Category>) -> Res<Op
     .await
     .map_err(|e| e.to_string())?
     .map(Some)
+}
+
+/// Conversations of your own from a file (.txt, .json or .jsonl; see
+/// `sources::conversations_from_file`), stored as a conversation dataset.
+#[tauri::command]
+pub async fn import_conversations(app: AppHandle) -> Res<Option<CorpusInfo>> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("Conversations (.txt, .json, .jsonl)", &["txt", "json", "jsonl"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let name = display_name(&path);
+    let bytes = read_picked(&app, &path, MAX_CORPUS_BYTES as usize)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let text = crate::sources::conversations_from_file(&String::from_utf8_lossy(&bytes));
+        store_own_conversations(&app, &name, text)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(Some)
+}
+
+/// Conversations written or pasted in the Conversation page, stored as a dataset named `name`.
+#[tauri::command]
+pub async fn save_conversations(app: AppHandle, name: String, text: String) -> Res<CorpusInfo> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.len() > 80 {
+        return Err("Give your conversations a name (up to 80 characters)".into());
+    }
+    if text.len() > MAX_CORPUS_BYTES as usize {
+        return Err("That is more text than a dataset may hold".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let text = crate::sources::conversations_from_file(&text);
+        store_own_conversations(&app, &name, text)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn store_own_conversations(app: &AppHandle, name: &str, text: String) -> Res<CorpusInfo> {
+    let from = Provenance {
+        origin: name,
+        license: "as supplied by you",
+        attribution: "",
+        category: Category::Conversation,
+    };
+    store(app, name, &from, text.into_bytes(), false)
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -255,6 +255,11 @@ pub struct ConversationConfig {
     pub reading_share: f32,
     /// The held-out loss on that text may rise at most this share above where it started.
     pub reading_rise: f32,
+    /// Leave out conversations where a speaker says it is an AI or an assistant ("as an AI",
+    /// "a language model", "how can I assist you", ...; see `assistant_voice`), so Nova never
+    /// practises saying that about herself. Assistant-style conversations without such lines
+    /// are kept either way. On by default.
+    pub skip_ai_voice: bool,
 }
 
 impl Default for ConversationConfig {
@@ -292,6 +297,7 @@ impl Default for ConversationConfig {
             reply_checks: true,
             reading_share: 0.1,
             reading_rise: 0.02,
+            skip_ai_voice: true,
         }
     }
 }
@@ -654,7 +660,7 @@ fn practices<'a>(
     let (mut left_out, mut dialogues, mut held_dialogues) = (0, 0, 0);
     for set in sets {
         for d in &set.dialogues {
-            if assistant_voice(d) {
+            if cfg.skip_ai_voice && assistant_voice(d) {
                 left_out += 1;
                 continue;
             }
@@ -1623,6 +1629,15 @@ mod tests {
         assert!(parse_dialogue("just some prose\nwith two lines").is_none());
         let a = parse_dialogue("Ann: Can you help?\nBen: As an AI, I can help you with that.").unwrap();
         assert!(assistant_voice(&a));
+        // `skip_ai_voice` leaves such a conversation out; off, it is practised like any other.
+        let plain = parse_dialogue("Ann: Can you help?\nBen: Sure, what do you need?").unwrap();
+        let sets =
+            [ConversationSet { name: "x".into(), dialogues: vec![a, plain], nova: None, hold_out: false }];
+        let on = practices(&sets, &ConversationConfig::default());
+        let off =
+            practices(&sets, &ConversationConfig { skip_ai_voice: false, ..ConversationConfig::default() });
+        assert_eq!((on.2, on.3), (1, 1), "left out, practised");
+        assert_eq!((off.2, off.3), (0, 2));
     }
 
     #[test]
