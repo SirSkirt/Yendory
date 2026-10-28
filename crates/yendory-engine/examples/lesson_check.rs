@@ -1,6 +1,6 @@
 //! Held-out answers of lesson files and of a built-in course, per lesson, with reply limits
 //! fitted to each answer and with the old 24-token limit.
-//! cargo run --release --example lesson_check -- <model> <lesson files dir> [course id]
+//! cargo run --release --example lesson_check -- <model> <lesson files dir or archive.json> [course id]
 use yendory_engine::learn::builtin::builtin_courses;
 use yendory_engine::learn::eval::{evaluate, set_fitted_replies};
 use yendory_engine::learn::lessons::{parse_lesson, Item, Kind};
@@ -10,11 +10,16 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let m = Bicameral::load(&a[1]).unwrap();
     let mut items: Vec<Item> = Vec::new();
-    let mut files: Vec<_> = std::fs::read_dir(&a[2]).unwrap().map(|e| e.unwrap().path()).collect();
-    files.sort();
-    for f in files.iter().filter(|f| f.extension().is_some_and(|x| x == "txt")) {
-        let name = f.file_name().unwrap().to_string_lossy().to_string();
-        items.extend(parse_lesson(&std::fs::read_to_string(f).unwrap(), &name).unwrap());
+    if a[2].ends_with(".json") {
+        // A Studio model's saved lessons (archive.json).
+        items = serde_json::from_slice(&std::fs::read(&a[2]).unwrap()).unwrap();
+    } else {
+        let mut files: Vec<_> = std::fs::read_dir(&a[2]).unwrap().map(|e| e.unwrap().path()).collect();
+        files.sort();
+        for f in files.iter().filter(|f| f.extension().is_some_and(|x| x == "txt")) {
+            let name = f.file_name().unwrap().to_string_lossy().to_string();
+            items.extend(parse_lesson(&std::fs::read_to_string(f).unwrap(), &name).unwrap());
+        }
     }
     if let Some(c) = a.get(3).and_then(|id| builtin_courses().into_iter().find(|c| c.id == *id)) {
         for f in &c.lessons {
