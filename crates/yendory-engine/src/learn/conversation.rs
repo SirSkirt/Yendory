@@ -1376,7 +1376,7 @@ pub fn converse(
         // A balanced candidate keeps what an accepted checkpoint must keep and has learned
         // something; among those, more context pairs, then more listening, then lower loss.
         if cfg.keep_balanced && keeps_classroom && keeps_reading && loss.is_finite() && loss < baseline_loss {
-            let better = balanced.as_ref().is_none_or(|(_, b)| {
+            let better = balanced.as_ref().map_or(true, |(_, b)| {
                 let (a, b) = (rank(&c), rank(b));
                 a.0 > b.0 || (a.0 == b.0 && (a.1 > b.1 || (a.1 == b.1 && a.2 > b.2)))
             });

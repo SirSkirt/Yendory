@@ -1423,7 +1423,6 @@ pub fn teach_rewarded(
     let mut stopped = false;
     // The earlier-lesson guards' reference (the session start, or an overridden first epoch).
     let mut guard_baseline = baseline.clone();
-    let mut base_panel_correct = base_panel_correct;
     // Back-off: the share of the scheduled learning rate used, and how often it was halved.
     let mut lr_scale =
         if cfg.resume_epochs > 0 { cfg.resume_scale.unwrap_or(1.).clamp(1e-3, 1.) } else { 1. };
