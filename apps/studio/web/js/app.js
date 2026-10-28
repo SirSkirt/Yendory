@@ -626,6 +626,7 @@ function onTeachEvent(e) {
       else log("INFO", `Accepted epoch ${s.epoch} written to the checkpoint folder (step ${fmt(s.step)}); the model itself is saved when the session ends.`);
     } else if (s.type === "started") {
       $("progressLine").textContent = `Baseline: held-out loss ${s.baseline.heldout_loss.toFixed(4)}, exact ${scoreCell(s.baseline)}; ${fmt(s.train_units)} units to learn, ${fmt(s.heldout_units)} held out, ${fmt(s.new_words)} new word units.`;
+      if (s.too_long) log("WARN", `${fmt(s.too_long)} of the ${fmt(s.exact_answers)} held-out answers graded word for word are longer than a reply may be (24 tokens with this model's vocabulary), so they can never be answered exactly right: their loss can still fall, but exact answers cannot rise on them. A larger vocabulary limit, or shorter answers, makes room.`);
     } else if (s.type === "batch") {
       progress.epoch = s.epoch;
       progress.candidate = Math.max(0, progress.foci.indexOf(s.focus));

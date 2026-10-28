@@ -595,6 +595,12 @@ pub enum Event {
         rehearsal_units: usize,
         new_words: usize,
         baseline: Score,
+        /// Held-out answers graded by exact match, and how many of them are longer than a
+        /// reply may be with the model's vocabulary (they can never be answered exactly right).
+        #[serde(default)]
+        exact_answers: usize,
+        #[serde(default)]
+        too_long: usize,
     },
     Batch {
         epoch: u32,
@@ -1244,12 +1250,15 @@ pub fn teach_rewarded(
     let dense = cfg.education.is_some();
     let (baseline, base_report, base_panel) = score(&start, &probes, dense)?;
     let base_panel_correct = correct_set(&base_panel);
+    let (too_long, exact_answers) = super::eval::beyond_reply_limit(&start, &heldout)?;
     observer(&Event::Started {
         train_units: train.len(),
         heldout_units: heldout.len(),
         rehearsal_units: archive_train.len(),
         new_words,
         baseline: baseline.clone(),
+        exact_answers,
+        too_long,
     });
 
     // Rewards: the start checkpoint's answers go into the ledger (evaluation only: nothing here

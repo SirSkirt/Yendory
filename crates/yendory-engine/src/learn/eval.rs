@@ -30,6 +30,35 @@ impl Confirmed {
     }
 }
 
+/// Answers graded by exact match (no answer key; actions left out) and how many of them are
+/// longer than a reply may be ([`MAX_REPLY_TOKENS`] tokens with this model's vocabulary): those
+/// can never be answered exactly right, whatever the model learns.
+pub fn beyond_reply_limit(model: &Bicameral, items: &[&Item]) -> Result<(usize, usize), String> {
+    let (mut exact, mut long) = (0, 0);
+    let mut count = |answer: &str| -> Result<(), String> {
+        exact += 1;
+        long += usize::from(model.tokenizer.encode(answer)?.len() > MAX_REPLY_TOKENS);
+        Ok(())
+    };
+    for it in items {
+        match it.kind {
+            Kind::Prose => {}
+            Kind::Conversation if it.has_actions() => {}
+            Kind::Conversation => {
+                for r in &it.replies {
+                    count(r)?;
+                }
+            }
+            _ => {
+                if let (None, Some(a)) = (&it.key, &it.answer) {
+                    count(a)?;
+                }
+            }
+        }
+    }
+    Ok((long, exact))
+}
+
 /// Answers the GPU can check: each one's (item, answer) index, and its row.
 pub type GreedyRows = (Vec<(usize, usize)>, Vec<super::Row>);
 

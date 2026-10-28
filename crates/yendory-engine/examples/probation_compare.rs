@@ -10,7 +10,7 @@
 //! test half.
 //!
 //! cargo run --release --example probation_compare -- <arm name> <probation epochs> <start model>
-//!     <out.json> <epochs> <seed> <threads> <earlier lesson files dir> [group course id]
+//!     <out.json> <epochs> <seed> <threads> <earlier lesson files dir> [group course id] [word limit]
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use yendory_engine::learn::builtin::builtin_courses;
@@ -94,6 +94,8 @@ fn main() {
         &a[8],
     );
     let course = a.get(9).cloned().unwrap_or_else(|| "deciding".into());
+    // Vocabulary limit (learned words) the session may grow to; none: the model's slots.
+    let word_limit = a.get(10).map(|x| x.parse::<usize>().unwrap());
     yendory_engine::learn::set_cpu_threads(threads);
     let model = Bicameral::load(start).unwrap();
     let mut earlier = Vec::new();
@@ -171,6 +173,7 @@ fn main() {
         backoff: true,
         eval_limit: None,
         probation_epochs: probation,
+        word_limit,
         epoch_hook: Some(hook),
         ..SessionConfig::default()
     };
