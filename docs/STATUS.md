@@ -114,6 +114,40 @@ and the reports are identical (step 15,000: 99 of 99 right answers confirmed; No
 97); a lesson with GPU checks on and off selects the same candidates with the same scores, and
 Reading on the GPU stops at the same check as on the CPU. The speed-up on a real graphics card
 has not been measured.
+0.7.1: **probation, measured** (`examples/probation_compare.rs`; the step-19,000 checkpoint,
+which was taught the owner's 27 lessons, learns the built-in "Making up your mind" course
+together with those lessons, with the owner's Classroom settings: learning rate 0.00005, batch 8,
+net safeguard, earlier lessons trained and guarded, recover-earlier and back-off on, up to 20
+epochs). Every lesson's held-out questions are split: half judge checkpoints, half are never
+trained on or used to choose anything (the test). A: the current rules; B: probation 3 epochs.
+
+| Test half (never trained, never judged) | A seed 7 | B seed 7 | A seed 101 | B seed 101 |
+|---|---|---|---|---|
+| New course right, of 51 (0 before) | 1 | **2** | 0 | **2** |
+| Earlier lessons right, of 344 (198 before) | 174 | **180** | 173 | **177** |
+| New-course loss (4.99 before) | 0.796 | **0.678** | 0.901 | **0.662** |
+| Probation branches | | 2 promoted (after 1 and 3 epochs), 1 dropped | | 2 promoted (after 3 and 2), 1 dropped |
+
+Vocabulary limit 1,024 and reply limits fitted to each answer in all four (with the model's full
+vocabulary and 24-token replies, no candidate of either arm was ever accepted, and the new
+course could not be answered at all: 102 of its 104 answers were longer than a reply). On both
+seeds the rejected updates that were given room recovered, were accepted later, and ended
+better on questions never used for training or judging. A third arm with no limit on probation
+accepted exactly what B did (seed 7), so more room did not help. Two seeds, one model and one
+course; the margins are a few answers. Probation stays off by default until it is confirmed on
+the owner's own model.
+
+Also found:
+- **The earlier-lessons answer check is 12 questions** (`retention_panel` 8, by kind), and one
+  answer lost there rejects a candidate. With the full vocabulary it was the most common
+  rejection, often the only one, including of candidates with more answers right overall and
+  more right on the unseen test.
+- **Growing the vocabulary costs earlier answers that no guard sees.** New word slots start
+  untrained and words once spelled letter by letter become new tokens: the earlier-lesson test
+  fell from 198 to 155 right at once, and no arm got back above 180. The guards are measured
+  from the model after growth, so they never see it.
+- **Answer churn**: every epoch loses 15-23 answers the accepted model gave and gains 11-17
+  (mostly earlier lessons trained again), so the net safeguard rejects most candidates.
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified
