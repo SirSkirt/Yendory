@@ -535,6 +535,7 @@ $("teach").addEventListener("click", safe(async () => {
     recoverEarlier: $("optRecoverEarlier").checked,
     backoff: $("optBackoff").checked,
     overrideFirstEpoch: $("optOverrideFirst").checked,
+    probationEpochs: Math.max(0, Math.min(10, Number($("optProbation").value) || 0)),
     continueRun: $("optContinue").checked,
   };
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
@@ -576,9 +577,13 @@ function learningText(r) {
 // What an epoch decided: accepted, kept training through a flat epoch, or restored.
 function epochDecision(ep) {
   if (ep.selected && ep.overridden) return `accepted ${ep.selected} by the first-epoch override (the safeguards had rejected it)`;
+  const p = ep.probation;
+  if (ep.selected && p?.state === "promoted") return `accepted ${ep.selected}: the probation branch recovered after ${p.epochs} epoch(s)`;
   if (ep.selected) return `accepted ${ep.selected}`;
   const flat = ep.flat_epochs ? ` (flat epoch ${ep.flat_epochs})` : "";
+  if (p?.state === "continued") return `rejected (${p.rejections.join(", ")}); on probation, training continues from ${p.focus} (probation epoch ${p.epoch_in_branch})${flat}`;
   if (ep.continued) return `not accepted yet; training continues from ${ep.continued}${flat}`;
+  if (p?.state === "discarded") return `probation ended after ${p.epochs} epoch(s) without a safe improvement; restored the best checkpoint${flat}`;
   if (ep.restored) return `no safe candidate; restored the best checkpoint${flat}`;
   return `no candidate accepted${flat}`;
 }

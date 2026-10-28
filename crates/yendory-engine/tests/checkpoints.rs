@@ -176,3 +176,63 @@ fn backoff_halves_the_rate_and_the_override_accepts_the_first_epoch() {
     assert!(r2.learned);
     assert!(r2.epochs[1..].iter().all(|e| !e.overridden), "only the first epoch");
 }
+
+/// Probation: with every candidate rejected, training continues from the most promising
+/// rejected one for at most `probation_epochs` epochs in a row, then the branch is discarded
+/// and training restarts from the accepted model. The accepted model never changes.
+#[test]
+fn probation_continues_rejected_candidates_then_discards_the_branch() {
+    use yendory_engine::learn::session::{EpochHook, Probation};
+    let base = SessionConfig {
+        epochs: 6,
+        patience: 6,
+        foundation: false,
+        learning_rate: 3e-3,
+        ..SessionConfig::default()
+    };
+    let taught = run(&Bicameral::with_config(Config::default(), 7), &base, &mut Vec::new()).model;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = {
+        let seen = seen.clone();
+        EpochHook(std::sync::Arc::new(move |epoch: u32, accepted: &Bicameral, working: &Bicameral| {
+            seen.lock().unwrap().push((epoch, accepted.step, working.step));
+        }))
+    };
+    let harsh = SessionConfig {
+        epochs: 5,
+        patience: 8,
+        learning_rate: 0.05,
+        seed: 3,
+        probation_epochs: 2,
+        epoch_hook: Some(hook),
+        ..base
+    };
+    let r = run(&taught, &harsh, &mut Vec::new());
+    let states: Vec<_> = r.epochs.iter().map(|e| e.probation.clone()).collect();
+    println!("{states:?}");
+    assert!(!r.learned, "steps this large make every candidate worse");
+    assert_eq!(r.model.weights, taught.weights, "the accepted model is unchanged");
+    assert_eq!(r.model.step, taught.step);
+    let continued = |e: &Option<Probation>| match e {
+        Some(Probation::Continued { epoch_in_branch, rejections, .. }) => {
+            assert!(!rejections.is_empty());
+            Some(*epoch_in_branch)
+        }
+        _ => None,
+    };
+    assert_eq!(continued(&states[0]), Some(1));
+    assert_eq!(continued(&states[1]), Some(2));
+    assert_eq!(states[2], Some(Probation::Discarded { epochs: 2 }));
+    assert!(r.epochs[2].restored && !r.epochs[0].restored && !r.epochs[1].restored);
+    assert_eq!(continued(&states[3]), Some(1), "a new branch");
+    // The working model is the branch while on probation, and the accepted model after it.
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|&(_, accepted, _)| accepted == taught.step));
+    assert!(seen[0].2 > taught.step && seen[1].2 > seen[0].2, "the branch keeps training: {seen:?}");
+    assert_eq!(seen[2].2, taught.step, "discarded: back to the accepted model");
+    // Off (the default): every epoch restarts from the accepted model, as before.
+    let off =
+        run(&taught, &SessionConfig { probation_epochs: 0, epoch_hook: None, ..harsh }, &mut Vec::new());
+    assert!(off.epochs.iter().all(|e| e.probation.is_none()));
+    assert!(off.epochs.iter().all(|e| e.continued.is_none() && !e.restored), "never left the accepted model");
+}

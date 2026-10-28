@@ -712,6 +712,30 @@ never mix with an unfinished one's. By hand: copy the newest file up a folder, r
   the safeguards reject it, and the earlier-lesson guards are measured from it afterwards. The
   epoch is marked overridden; later epochs are judged normally.
 
+### Probation (experimental, 0.6.5)
+
+`SessionConfig::probation_epochs` (0 = off, the default; Studio: Classroom and course settings,
+up to 10). Without it, an epoch whose candidates are all rejected restarts from the accepted
+model, unless `recover_earlier` keeps a candidate that was rejected **only** for earlier lessons.
+A candidate whose own held-out loss also rose, or that lost more answers than it gained, is
+always thrown away, so a change that first costs something never gets the epochs it may need to
+recover.
+
+With probation, such an epoch continues from its most promising rejected candidate (most
+held-out answers, then the lowest held-out loss; never one whose loss is not finite) for up to
+`probation_epochs` epochs in a row. Acceptance does not change: every candidate is judged
+against the accepted model by every guard, and the accepted model (with its optimizer state)
+changes only when one passes. A branch that reaches the limit without an accepted candidate is
+discarded and training restarts from the accepted model. Each epoch records what happened
+(`EpochRecord::probation`: continued, with the guards the candidate failed; promoted after n
+epochs; or discarded after n epochs). `SessionConfig::epoch_hook` lets an experiment look at the
+accepted and the working model after every epoch.
+
+`examples/probation_compare.rs` tests whether this helps: each lesson's held-out questions are
+split, one half judges checkpoints and the other half is never trained on or used to choose
+anything, so it measures generalization; the accepted and the working model are both asked it
+after every epoch. Results: docs/STATUS.md.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a

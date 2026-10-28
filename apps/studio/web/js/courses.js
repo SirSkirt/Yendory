@@ -114,7 +114,7 @@ function showCourse(c) {
   $("cFoundation").checked = s.foundation; $("cRehearsal").checked = s.rehearsal;
   $("cProtect").checked = s.protect_answers; $("cRequeue").checked = s.requeue;
   $("cTrainEarlier").checked = s.train_earlier ?? true; $("cRecoverEarlier").checked = s.recover_earlier ?? true;
-  $("cBackoff").checked = s.backoff ?? true; $("cOverrideFirst").checked = s.override_first_epoch ?? false;
+  $("cBackoff").checked = s.backoff ?? true; $("cOverrideFirst").checked = s.override_first_epoch ?? false; $("cProbation").value = s.probation_epochs ?? 0;
   refreshCoursesQuiet();
 }
 const refreshCoursesQuiet = () => refreshCourses().catch(e => log("ERROR", e));
@@ -144,14 +144,14 @@ for (const id of ["wDense", "wTransformer", "wCoop", "wWhole"]) $(id).addEventLi
 } }), "Weights"));
 for (const id of ["cExamMinOn", "cExamMin"]) $(id).addEventListener("change", safe(() => edit({ type: "examMinimum", percent: $("cExamMinOn").checked ? Number($("cExamMin").value) : null }), "Exam minimum"));
 $("cPretest").addEventListener("change", safe(() => edit({ type: "pretest", on: $("cPretest").checked }), "Pre-test"));
-for (const id of ["cEpochs", "cBatch", "cRate", "cRetries", "cFlat", "cTimeLimit", "cFoundation", "cRehearsal", "cProtect", "cRequeue", "cTrainEarlier", "cRecoverEarlier", "cBackoff", "cOverrideFirst"]) $(id).addEventListener("change", safe(() => edit({ type: "settings", settings: {
+for (const id of ["cEpochs", "cBatch", "cRate", "cRetries", "cFlat", "cTimeLimit", "cFoundation", "cRehearsal", "cProtect", "cRequeue", "cTrainEarlier", "cRecoverEarlier", "cBackoff", "cOverrideFirst", "cProbation"]) $(id).addEventListener("change", safe(() => edit({ type: "settings", settings: {
   // Settings not shown here keep their values.
   ...course.settings,
   epochs: Number($("cEpochs").value), batch_size: Number($("cBatch").value), learning_rate: Number($("cRate").value),
   retries: Number($("cRetries").value), flat_epochs: Number($("cFlat").value), time_limit_hours: $("cTimeLimit").value === "" ? null : Number($("cTimeLimit").value),
   foundation: $("cFoundation").checked, rehearsal: $("cRehearsal").checked, protect_answers: $("cProtect").checked, requeue: $("cRequeue").checked,
   train_earlier: $("cTrainEarlier").checked, recover_earlier: $("cRecoverEarlier").checked,
-  backoff: $("cBackoff").checked, override_first_epoch: $("cOverrideFirst").checked,
+  backoff: $("cBackoff").checked, override_first_epoch: $("cOverrideFirst").checked, probation_epochs: Math.max(0, Math.min(10, Number($("cProbation").value) || 0)),
 } }), "Training settings"));
 
 // ---- plans ---------------------------------------------------------------------------------

@@ -401,6 +401,7 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         recover_earlier: s.recover_earlier,
         backoff: s.backoff,
         override_first_epoch: s.override_first_epoch,
+        probation_epochs: s.probation_epochs.min(10),
         ..SessionConfig::default()
     }
 }

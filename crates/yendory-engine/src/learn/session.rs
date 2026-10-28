@@ -154,6 +154,37 @@ pub struct SessionConfig {
     /// their held-out loss and answers pass the earlier-lesson guards.
     #[serde(default)]
     pub train_earlier: bool,
+    /// Experimental (0 = off): probation. When no candidate of an epoch is safe (and none is
+    /// kept by `recover_earlier`), training may continue from the most promising rejected
+    /// candidate (most held-out answers, then the lowest held-out loss; never one whose loss is
+    /// not finite) for up to this many epochs in a row, instead of restarting from the accepted
+    /// model, so a change that first costs something has room to recover. Nothing about
+    /// acceptance changes: every candidate is still judged against the accepted model by every
+    /// guard, and the accepted model (with its optimizer state) changes only when one passes.
+    /// After this many epochs without an accepted candidate, the branch is discarded and
+    /// training restarts from the accepted model. Every step is recorded (`EpochRecord::probation`).
+    #[serde(default)]
+    pub probation_epochs: u32,
+    /// For experiments: called at the end of every epoch with the epoch, the accepted model and
+    /// the working model training continues from. Not saved with settings.
+    #[serde(skip)]
+    pub epoch_hook: Option<EpochHook>,
+}
+
+/// See `SessionConfig::epoch_hook`.
+#[derive(Clone)]
+pub struct EpochHook(pub std::sync::Arc<EpochFn>);
+/// The epoch, the accepted model and the working model.
+pub type EpochFn = dyn Fn(u32, &Bicameral, &Bicameral) + Send + Sync;
+impl std::fmt::Debug for EpochHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EpochHook")
+    }
+}
+impl PartialEq for EpochHook {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 fn default_pass_mark() -> f32 {
     0.5
@@ -234,6 +265,8 @@ impl Default for SessionConfig {
             resume_scale: None,
             backoff: false,
             override_first_epoch: false,
+            probation_epochs: 0,
+            epoch_hook: None,
         }
     }
 }
@@ -534,6 +567,23 @@ pub struct EpochRecord {
     /// The selected candidate was accepted by `override_first_epoch` despite the safeguards.
     #[serde(default)]
     pub overridden: bool,
+    /// Probation (`probation_epochs`): what happened to the branch this epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probation: Option<Probation>,
+}
+
+/// One epoch of probation (see `SessionConfig::probation_epochs`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Probation {
+    /// Training continues from a rejected candidate: its focus, the guards it failed (names
+    /// and reasons) and its probation epoch (1 = the branch starts).
+    Continued { focus: String, epoch_in_branch: u32, rejections: Vec<Rejection>, reasons: Vec<String> },
+    /// A candidate of the branch passed every guard and was accepted, after this many epochs.
+    Promoted { epochs: u32 },
+    /// The branch reached its limit (or its best candidate's loss was not finite) without an
+    /// accepted candidate: training restarts from the accepted model.
+    Discarded { epochs: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1260,9 +1310,13 @@ pub fn teach_rewarded(
         if cfg.resume_epochs > 0 { cfg.resume_scale.unwrap_or(1.).clamp(1e-3, 1.) } else { 1. };
     let mut backoffs = (-lr_scale.log2()).round().max(0.) as u32;
     let first_epoch = cfg.resume_epochs.min(cfg.epochs.saturating_sub(1)) + 1;
+    // Probation: epochs in a row the working model has continued from a rejected candidate.
+    let mut on_probation = 0u32;
 
     'epochs: for epoch in first_epoch..=cfg.epochs {
         let overriding = cfg.override_first_epoch && epoch == first_epoch;
+        // The most promising candidate is also wanted for probation.
+        let probing = cfg.probation_epochs > 0;
         let fallback: std::cell::RefCell<Option<Best>> = std::cell::RefCell::new(None);
         // One batch plan per epoch, shared by every candidate.
         let mut plan_rng = Rng::new(cfg.seed.wrapping_mul(0x9E37_79B9).wrapping_add(epoch as u64));
@@ -1414,7 +1468,7 @@ pub fn teach_rewarded(
                         epoch,
                         baseline: &guard_baseline,
                         base_panel_correct: &base_panel_correct,
-                        fallback: overriding.then_some(&fallback),
+                        fallback: (overriding || probing).then_some(&fallback),
                     };
                     j.judge(
                         p.ci,
@@ -1446,7 +1500,7 @@ pub fn teach_rewarded(
                         epoch,
                         baseline: &guard_baseline,
                         base_panel_correct: &base_panel_correct,
-                        fallback: overriding.then_some(&fallback),
+                        fallback: (overriding || probing).then_some(&fallback),
                     };
                     j.judge(
                         ci,
@@ -1471,7 +1525,7 @@ pub fn teach_rewarded(
                     epoch,
                     baseline: &guard_baseline,
                     base_panel_correct: &base_panel_correct,
-                    fallback: overriding.then_some(&fallback),
+                    fallback: (overriding || probing).then_some(&fallback),
                 };
                 j.judge(
                     p.ci,
@@ -1505,7 +1559,7 @@ pub fn teach_rewarded(
                 epoch,
                 baseline: &guard_baseline,
                 base_panel_correct: &base_panel_correct,
-                fallback: overriding.then_some(&fallback),
+                fallback: (overriding || probing).then_some(&fallback),
             };
             j.judge(
                 records.len(),
@@ -1525,7 +1579,7 @@ pub fn teach_rewarded(
 
         // Override (first epoch): its best candidate is accepted despite the safeguards.
         let mut overridden = false;
-        if best.is_none() {
+        if best.is_none() && overriding {
             if let Some(fb) = fallback.borrow_mut().take() {
                 records[fb.0].reasons.push("accepted anyway: first-epoch override".into());
                 best = Some(fb);
@@ -1533,18 +1587,39 @@ pub fn teach_rewarded(
             }
         }
         let (mut continued, mut restored) = (None, false);
+        let mut probation = None;
         if best.is_none() {
-            match plateau.take() {
-                Some((ci, cand, _, _, _)) => {
+            let promising = fallback.borrow_mut().take().filter(|b| b.2.heldout_loss.is_finite());
+            match (plateau.take(), promising) {
+                (Some((ci, cand, _, _, _)), _) => {
                     records[ci].continued = true;
                     continued = Some(records[ci].focus.clone());
                     working = cand;
                 }
-                None => {
+                (None, Some((ci, cand, ..))) if probing && on_probation < cfg.probation_epochs => {
+                    on_probation += 1;
+                    records[ci].continued = true;
+                    continued = Some(records[ci].focus.clone());
+                    probation = Some(Probation::Continued {
+                        focus: records[ci].focus.clone(),
+                        epoch_in_branch: on_probation,
+                        rejections: records[ci].rejections.clone(),
+                        reasons: records[ci].reasons.clone(),
+                    });
+                    working = cand;
+                }
+                (None, _) => {
+                    if on_probation > 0 {
+                        probation = Some(Probation::Discarded { epochs: on_probation });
+                        on_probation = 0;
+                    }
                     restored = working.step != accepted.step;
                     working = accepted.clone();
                 }
             }
+        } else if on_probation > 0 {
+            probation = Some(Probation::Promoted { epochs: on_probation });
+            on_probation = 0;
         }
         let selected = best.map(|(ci, cand, s, correct, report)| {
             records[ci].selected = true;
@@ -1593,8 +1668,12 @@ pub fn teach_rewarded(
             flat_epochs: stale,
             sample_replies,
             overridden,
+            probation,
         };
         observer(&Event::Epoch(record.clone()));
+        if let Some(h) = &cfg.epoch_hook {
+            (h.0)(epoch, &accepted, &working);
+        }
         // Back-off: no epoch accepted yet and the last epochs' candidates were worse than the
         // accepted model: smaller steps.
         let worse = |r: &CandidateRecord| {

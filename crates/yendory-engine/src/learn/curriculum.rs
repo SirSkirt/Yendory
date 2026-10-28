@@ -252,6 +252,9 @@ pub struct CourseSettings {
     /// Accept each lesson session's first epoch even if the safeguards reject it (see
     /// `SessionConfig::override_first_epoch`).
     pub override_first_epoch: bool,
+    /// Experimental (0 = off): keep training from a rejected epoch for up to this many epochs
+    /// before restarting from the accepted model (see `SessionConfig::probation_epochs`).
+    pub probation_epochs: u32,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -276,6 +279,7 @@ impl Default for CourseSettings {
             recover_earlier: true,
             backoff: true,
             override_first_epoch: false,
+            probation_epochs: 0,
         }
     }
 }

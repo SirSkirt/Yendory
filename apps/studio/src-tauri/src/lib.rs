@@ -1358,6 +1358,9 @@ struct TeachOptions {
     /// Accept the first epoch even if the safeguards reject it.
     #[serde(default)]
     override_first_epoch: bool,
+    /// Experimental: epochs of probation (0 = off; see `SessionConfig::probation_epochs`).
+    #[serde(default)]
+    probation_epochs: u32,
     /// Continue the interrupted run a restored checkpoint came from (its epochs, learning rate
     /// and schedule), when there is one.
     #[serde(default = "yes")]
@@ -1515,6 +1518,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
         checkpoint_dir: Some(checkpoints_dir(&app, &meta.id)?),
         backoff: options.backoff,
         override_first_epoch: options.override_first_epoch,
+        probation_epochs: options.probation_epochs.min(10),
         ..SessionConfig::default()
     };
     // Continuing a restored checkpoint's interrupted run: its schedule, not a new one.

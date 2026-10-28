@@ -106,6 +106,8 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         resume_scale: None,
         backoff: false,
         override_first_epoch: false,
+        probation_epochs: 0,
+        epoch_hook: None,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);
