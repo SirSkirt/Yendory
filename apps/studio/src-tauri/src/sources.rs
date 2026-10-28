@@ -391,6 +391,20 @@ fn chat_text_turns(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Text written with spaces before punctuation (DailyDialog: "Say , Jim , how about ... ?")
+/// written the usual way ("Say, Jim, how about ...?"), so that is not what Nova learns.
+fn tidy(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ' ' && chars.peek().is_some_and(|n| ",.?!;:".contains(*n)) && !out.is_empty() {
+            continue;
+        }
+        out.push(c);
+    }
+    out.replace(" n't", "n't").replace(" ' s ", "'s ")
+}
+
 /// One conversation in any common layout, as a `Situation:` line (when there is one) and
 /// `Name: text` lines. Layouts: a list of utterances (`dialog`, `dialogue`, `utterances`,
 /// `turns`, `conversation`, `conversations`, `messages`) as strings (the speakers alternate) or
@@ -453,7 +467,7 @@ pub fn any_dialogue(row: &Value) -> Vec<String> {
     for (i, (r, t)) in turns.iter().enumerate() {
         let label = r.clone().unwrap_or_else(|| ["1", "2"][i % 2].to_string());
         let who = &names[labels.iter().position(|l| *l == label).unwrap_or(0)];
-        let said = t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let said = tidy(&t.split_whitespace().collect::<Vec<_>>().join(" "));
         doc.push_str(&format!("{who}: {said}\n"));
     }
     vec![doc.trim_end().to_string()]
@@ -881,7 +895,7 @@ mod tests {
         };
         // DailyDialog: a list of utterances.
         check(
-            json!({"dialog": ["Say, Jim, how about going for a few beers?", "That's a good idea."]}),
+            json!({"dialog": ["Say , Jim , how about going for a few beers ?", "That's a good idea ."]}),
             "Say, Jim, how about going for a few beers?",
         );
         // EmpatheticDialogues (LLM layout): situation and role/content messages.
