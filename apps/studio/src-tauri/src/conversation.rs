@@ -15,6 +15,8 @@ use yendory_engine::learn::listening::ContextScore;
 /// Read text rehearsed and guarded during practice, at most (documents, bytes).
 const READING_DOCS: usize = 3000;
 const READING_BYTES: usize = 3 << 20;
+/// Conversation datasets practised in one run (downloads and your own together).
+const MAX_DATASETS: usize = 32;
 
 /// A source of conversations, as recorded with the model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -263,10 +265,16 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
                 .into(),
         );
     }
-    if o.corpus_ids.is_empty() || o.corpus_ids.len() > 8 {
+    if o.corpus_ids.is_empty() {
         return Err(
-            "Choose 1 to 8 conversation datasets (your chats alone are too few to check progress)".into()
+            "Tick at least one conversation dataset (your chats alone are too few to check progress)".into(),
         );
+    }
+    if o.corpus_ids.len() > MAX_DATASETS {
+        return Err(format!(
+            "{} conversation datasets are ticked; practise with at most {MAX_DATASETS} at a time",
+            o.corpus_ids.len()
+        ));
     }
     let infos = o.corpus_ids.iter().map(|id| load_info(app, id)).collect::<Res<Vec<_>>>()?;
     if let Some(i) = infos.iter().find(|i| i.category != Category::Conversation) {
