@@ -383,6 +383,34 @@ pub fn hf_documents(
     Ok((docs, truncated))
 }
 
+/// A dataset's training split as its dataset-viewer lists it (config, split): "train" (or
+/// "train_sft"), the "default" config first. `None` when the dataset has no such split or the
+/// viewer does not answer.
+fn hf_train_split(
+    agent: &ureq::Agent,
+    dataset: &str,
+    cancel: &AtomicBool,
+    note: &mut dyn FnMut(Option<String>),
+) -> Option<(String, String)> {
+    let url = format!("https://datasets-server.huggingface.co/splits?dataset={dataset}");
+    let page = get_json(agent, &url, cancel, &mut Pacer::new(), note).ok()?;
+    let splits: Vec<(String, String)> = page
+        .get("splits")?
+        .as_array()?
+        .iter()
+        .filter_map(|s| Some((s.get("config")?.as_str()?.to_string(), s.get("split")?.as_str()?.to_string())))
+        .collect();
+    let rank = |(c, s): &(String, String)| {
+        let split = match s.as_str() {
+            "train" => 0,
+            "train_sft" => 1,
+            _ => 2,
+        };
+        (split, usize::from(c != "default"))
+    };
+    splits.into_iter().filter(|x| rank(x).0 < 2).min_by_key(rank)
+}
+
 /// Documents from a JSON-lines file.
 fn jsonl_documents(
     agent: &ureq::Agent,
@@ -451,7 +479,27 @@ pub fn source_text(
             let mut why = Vec::new();
             let mut found = None;
             for (dataset, config, split) in datasets {
-                match hf_documents(agent, dataset, &[config], split, convert, limit, cancel, progress, note) {
+                let mut tried =
+                    hf_documents(agent, dataset, &[config], split, convert, limit, cancel, progress, note);
+                // Refused: the dataset may publish other config or split names; use its own.
+                if tried.as_ref().is_err_and(|e| e.contains("404")) && !cancel.load(Ordering::Acquire) {
+                    if let Some((c, s)) = hf_train_split(agent, dataset, cancel, note) {
+                        if (c.as_str(), s.as_str()) != (*config, *split) {
+                            tried = hf_documents(
+                                agent,
+                                dataset,
+                                &[&c],
+                                &s,
+                                convert,
+                                limit,
+                                cancel,
+                                progress,
+                                note,
+                            );
+                        }
+                    }
+                }
+                match tried {
                     Ok((docs, cut)) if !docs.is_empty() => {
                         found = Some((docs, cut));
                         break;

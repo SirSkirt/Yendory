@@ -229,10 +229,14 @@ pub fn conversation_sources() -> Vec<Source> {
             fetch: Fetch::HfFirst {
                 datasets: &[
                     ("li2017dailydialog/daily_dialog", "default", "train"),
-                    ("roskoN/dailydialog", "default", "train"),
+                    ("roskoN/dailydialog", "full", "train"),
+                    ("frankdarkluo/DailyDialog", "default", "train"),
+                    ("ConvLab/dailydialog", "default", "train"),
+                    ("OpenRL/daily_dialog", "default", "train"),
+                    ("Aeala/daily_dialog", "default", "train"),
                     ("daily_dialog", "default", "train"),
                 ],
-                convert: any_dialogue,
+                convert: english_dialogue,
             },
         },
         Source {
@@ -250,7 +254,7 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("Estwld/empathetic_dialogues_llm", "default", "train"),
                     ("facebook/empathetic_dialogues", "default", "train"),
                 ],
-                convert: any_dialogue,
+                convert: english_dialogue,
             },
         },
         Source {
@@ -268,14 +272,14 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("HuggingFaceH4/ultrachat_200k", "default", "train_sft"),
                     ("stingning/ultrachat", "default", "train"),
                 ],
-                convert: any_dialogue,
+                convert: english_dialogue,
             },
         },
         Source {
             id: "openassistant",
             name: "OpenAssistant conversations (assistant-style)",
             category: Category::Conversation,
-            description: "Conversations people wrote with volunteers playing a helper: questions, advice and explanations (assistant-style). Kept as a conversation between two named people (about 20 MB).",
+            description: "Conversations people wrote with volunteers playing a helper: questions, advice and explanations (assistant-style). Only the English ones are kept (the dataset has many languages), as a conversation between two named people (about 20 MB).",
             page: "https://huggingface.co/datasets/OpenAssistant/oasst1",
             license: "Apache 2.0",
             attribution: "OpenAssistant Conversations, Kopf et al. (2023), LAION",
@@ -286,7 +290,7 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("OpenAssistant/oasst_top1_2023-08-25", "default", "train"),
                     ("timdettmers/openassistant-guanaco", "default", "train"),
                 ],
-                convert: any_dialogue,
+                convert: english_dialogue,
             },
         },
         Source {
@@ -453,6 +457,33 @@ pub fn any_dialogue(row: &Value) -> Vec<String> {
         doc.push_str(&format!("{who}: {said}\n"));
     }
     vec![doc.trim_end().to_string()]
+}
+
+/// [`any_dialogue`], keeping only conversations in English (a downloaded dataset may mix
+/// languages): almost all letters ASCII and enough of the commonest English words.
+pub fn english_dialogue(row: &Value) -> Vec<String> {
+    any_dialogue(row).into_iter().filter(|d| english(d)).collect()
+}
+
+/// Whether text reads as English (see [`english_dialogue`]).
+pub fn english(text: &str) -> bool {
+    const COMMON: [&str; 40] = [
+        "the", "a", "an", "to", "and", "i", "you", "is", "it", "of", "in", "that", "what", "for", "my", "do",
+        "are", "be", "have", "this", "with", "can", "on", "not", "me", "your", "was", "so", "but", "we",
+        "how", "he", "she", "they", "at", "if", "or", "about", "there", "will",
+    ];
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count().max(1);
+    let foreign = text.chars().filter(|c| c.is_alphabetic() && !c.is_ascii()).count();
+    // The speaker names at the start of each line are left out of the word count.
+    let words: Vec<String> = text
+        .lines()
+        .map(|l| l.split_once(": ").map_or(l, |(_, t)| t))
+        .flat_map(|l| l.split(|c: char| !c.is_ascii_alphabetic() && c != '\''))
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let common = words.iter().filter(|w| COMMON.contains(&w.as_str())).count();
+    foreign * 50 <= letters && !words.is_empty() && common * 100 >= words.len() * 15
 }
 
 /// Conversations from a file of your own: JSON (a list of conversations, or an object with a
@@ -882,6 +913,17 @@ mod tests {
         assert!(any_dialogue(&json!({"messages": [{"role": "a", "content": "x"}, {"role": "b", "content": "y"}, {"role": "c", "content": "z"}]})).is_empty());
         assert!(any_dialogue(&json!({"dialog": ["Only one."]})).is_empty());
         assert!(any_dialogue(&json!({"title": "not a conversation"})).is_empty());
+    }
+
+    /// Downloaded conversations in other languages are left out; English ones are kept.
+    #[test]
+    fn only_english_conversations_are_kept_from_mixed_datasets() {
+        let it = json!({"text": "<|im_start|>user\nConsigliami 5 nomi per il mio cucciolo di dobberman<|im_end|>\n<|im_start|>assistant\nEcco 5 nomi per il tuo cucciolo di dobermann: Zeus, Apollo, Thor<|im_end|>"});
+        assert!(!any_dialogue(&it).is_empty() && english_dialogue(&it).is_empty());
+        let de = json!({"dialog": ["Wie geht es dir heute?", "Mir geht es gut, danke. Und dir?"]});
+        assert!(english_dialogue(&de).is_empty());
+        let en = json!({"dialog": ["Do you want to go to the park with me?", "Yes, that is a good idea. What time?"]});
+        assert_eq!(english_dialogue(&en).len(), 1);
     }
 
     /// Files of your own: JSON, JSON lines and plain text all give conversations.

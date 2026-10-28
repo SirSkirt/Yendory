@@ -1133,8 +1133,10 @@ from what it has read, been taught and said itself.
   a helper, kept as a conversation between two named people (`sources::any_dialogue` reads every
   common layout: utterance lists, role/content messages, `<|im_start|>` or `### Human:` text;
   speakers labelled user/assistant get names; system prompts are dropped, and a conversation is
-  cut before code or a turn longer than 1,200 characters). Several copies of a dataset are tried
-  in turn (`Fetch::HfFirst`). **Your own conversations** (§ 4: "Your own conversations"): a file
+  cut before code or a turn longer than 1,200 characters; only English conversations are kept from
+  downloads, `sources::english_dialogue`, since OpenAssistant mixes languages). Several copies of
+  a dataset are tried in turn (`Fetch::HfFirst`), each with its own config and split names looked
+  up when the expected ones are refused. **Your own conversations** (§ 4: "Your own conversations"): a file
   (.txt as `Name: text` lines with blank lines between conversations, or .json / .jsonl in any of
   those layouts; `sources::conversations_from_file`) or text written or pasted on the page,
   stored as a conversation dataset; one conversation is enough (held-out checks then come from
