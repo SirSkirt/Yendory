@@ -11,7 +11,7 @@ not covered yet.
 |---|---|---|
 | `models/<id>/model.nnova2` | when a check **accepts** a checkpoint | the accepted model (unchanged by anything below) |
 | `models/<id>/runs/<run>/run.json` | at the start, at every recovery point, at the end | the run record: kind, model, the settings it was started with, datasets with SHA-256, progress, status, the two newest recovery points with their files' SHA-256 |
-| `models/<id>/runs/<run>/slot-a/`, `slot-b/` | every *n* minutes (§ 1 Models, "Recovery point every", default 10) and when the run is stopped | `working.bin`: the working model with its AdamW moments and step; `state.json`: the run's position; `extra.bin`: Conversation's best balanced checkpoint, when that option is on |
+| `models/<id>/runs/<run>/slot-a/`, `slot-b/` | every *n* minutes (§ 1 Models, "Recovery point every", default 10), when Conversation moves to a new curriculum stage, and when the run is stopped (also when Studio is closed while it trains) | `working.bin`: the working model with its AdamW moments and step; `state.json`: the run's position; `extra.bin`: Conversation's best balanced checkpoint, when that option is on |
 
 The run's position (`learn::corpus::ReadingState`, `learn::conversation::ConversationState`) is
 everything the run needs to carry on as if it had never stopped: the step reached, the random
@@ -41,10 +41,18 @@ recovery point and progress and its datasets, and offers:
 
 - **Continue training**: opens the model and continues from the recovery point, with the run's
   own settings (not the page's current ones) and seed;
+- **Start a new run…**: discards it (after asking) and opens its page to set up a new run;
 - **Decide later**: it stays in § 1 Models, *Unfinished training*;
 - **Discard…** (asks first): deletes its recovery points; the model keeps everything accepted.
 
-Studio never continues or discards a run by itself. A stopped run (Stop pressed) has a recovery
+The dialog says how much work is repeated (nothing when the point was saved as the run stopped;
+otherwise at most one interval) and checks the recovery points against their checksums before
+offering to continue. Studio never continues or discards a run by itself.
+
+Closing Studio while it trains stops the run at the next safe point (Reading and Conversation
+save a recovery point there; the Classroom keeps its accepted epochs), then closes; the run stays
+marked as interrupted, so the next start offers to continue it with nothing repeated. A crash, a
+forced restart or a power cut does not depend on this: the last interval recovery point is used. A stopped run (Stop pressed) has a recovery
 point too and can be continued the same way. While a model has an unfinished run, other training
 on that model is refused with a message (it would make the recovery point no longer fit the
 model); continue or discard it first.

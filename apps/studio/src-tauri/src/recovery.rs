@@ -396,12 +396,16 @@ pub(crate) fn live_run<S>(
 
 /// Ends a live run's record from the run's outcome (`Ok(stopped)` or the error).
 pub(crate) fn close_run(app: &AppHandle, live: &LiveRun, outcome: Result<bool, &str>) {
+    let studio = app.state::<Studio>();
+    let closing = studio.closing.load(Ordering::Acquire);
     match outcome {
         Ok(false) => live.end(RunStatus::Finished, None),
+        // Stopped because Studio is closing: still an interrupted run (with a recovery point
+        // from the moment it stopped), offered at the next start.
+        Ok(true) if closing => live.end(RunStatus::Running, None),
         Ok(true) => live.end(RunStatus::Stopped, None),
         Err(e) => live.end(RunStatus::Failed, Some(e.into())),
     }
-    let studio = app.state::<Studio>();
     let mut run = studio.run.lock().unwrap();
     if run.as_deref() == Some(live.id().as_str()) {
         *run = None;
@@ -418,6 +422,38 @@ pub(crate) struct UnfinishedRun {
     /// computer restarted.
     pub interrupted: bool,
     pub resumable: bool,
+    /// With `verify`: the recovery points checked against their checksums.
+    pub check: Option<String>,
+}
+
+/// Checks a slot's files against their sums (without loading the model).
+fn slot_intact(model_dir: &Path, r: &RunRecord, info: &SlotInfo) -> Result<(), String> {
+    let dir = run_dir(model_dir, &r.id)?.join(format!("slot-{}", info.slot));
+    for f in &info.files {
+        let bytes = std::fs::read(dir.join(&f.name)).map_err(|e| format!("{}: {e}", f.name))?;
+        if bytes.len() as u64 != f.bytes || sha256_hex(&bytes) != f.sha256 {
+            return Err(format!("{} does not match its checksum", f.name));
+        }
+    }
+    Ok(())
+}
+
+/// A line on the state of a run's recovery points.
+pub(crate) fn check_points(model_dir: &Path, r: &RunRecord) -> String {
+    let Some(newest) = &r.snapshot else { return "No recovery point.".into() };
+    match slot_intact(model_dir, r, newest) {
+        Ok(()) => format!("Recovery point checked: intact (step {}).", newest.step),
+        Err(e) => match r.previous.as_ref().map(|p| (p, slot_intact(model_dir, r, p))) {
+            Some((p, Ok(()))) => format!(
+                "The newest recovery point is damaged ({e}); the one before it (step {}) is intact and will be used.",
+                p.step
+            ),
+            Some((_, Err(e2))) => {
+                format!("Both recovery points are damaged ({e}; {e2}). The accepted model is not affected.")
+            }
+            None => format!("The recovery point is damaged ({e}). The accepted model is not affected."),
+        },
+    }
 }
 
 /// Unfinished runs of every model (not the one training now: `live` is its record, or the model
@@ -427,6 +463,7 @@ pub(crate) fn unfinished(
     app: &AppHandle,
     live: Option<&str>,
     training: Option<&str>,
+    verify: bool,
 ) -> Res<Vec<UnfinishedRun>> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(models_dir(app)?) else { return Ok(out) };
@@ -436,9 +473,11 @@ pub(crate) fn unfinished(
             if !r.unfinished() || Some(r.id.as_str()) == live || current {
                 continue;
             }
+            let check = verify.then(|| check_points(&e.path(), &r));
             out.push(UnfinishedRun {
                 interrupted: r.status == RunStatus::Running,
                 resumable: r.resumable(),
+                check,
                 record: r,
             });
         }
@@ -473,14 +512,18 @@ pub(crate) fn plan_step_run(model_dir: &Path, plan_id: &str, step_id: &str) -> O
 }
 
 #[tauri::command]
-pub fn unfinished_runs(app: AppHandle, studio: State<Studio>) -> Res<Vec<UnfinishedRun>> {
+pub fn unfinished_runs(
+    app: AppHandle,
+    studio: State<Studio>,
+    verify: Option<bool>,
+) -> Res<Vec<UnfinishedRun>> {
     let live = studio.run.lock().unwrap().clone();
     let training = if studio.teaching.load(Ordering::Acquire) {
         studio.active.lock().unwrap().as_ref().map(|a| a.meta.id.clone())
     } else {
         None
     };
-    unfinished(&app, live.as_deref(), training.as_deref())
+    unfinished(&app, live.as_deref(), training.as_deref(), verify.unwrap_or(false))
 }
 
 /// A Classroom session that did not finish: accepted epochs wait in the model's `checkpoints/`
@@ -731,6 +774,7 @@ mod tests {
         assert_eq!((s.state, slot.step, skipped), (2, 20, None));
         assert_eq!(s.model.weights, b.weights);
         assert_eq!(s.extra.unwrap().weights, a.weights);
+        assert!(check_points(&dir, &saved).contains("intact (step 20)"));
         // Damage the newest: the previous one is used, and says why.
         let bad = dir.join("runs").join(&r.id).join("slot-b").join("working.bin");
         let mut bytes = std::fs::read(&bad).unwrap();
@@ -740,6 +784,7 @@ mod tests {
         let (s, slot, skipped): (Resume<u64>, _, _) = load_snapshot(&dir, &saved).unwrap();
         assert_eq!((s.state, slot.step), (1, 10));
         assert!(skipped.unwrap().contains("damaged"));
+        assert!(check_points(&dir, &saved).contains("(step 10) is intact and will be used"));
         assert_eq!(s.model.weights, a.weights);
         // Both damaged: an error that says the accepted model is safe.
         let bad = dir.join("runs").join(&r.id).join("slot-a").join("state.json");

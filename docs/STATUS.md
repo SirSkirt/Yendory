@@ -187,6 +187,12 @@ recovery point falls back to the one before it, and both damaged is reported wit
 model untouched. Not checked here: a real power cut or a Windows restart during training (the
 writes are flushed and renamed, but only the owner's PC can show it); continuing a run on a GPU
 (agrees to rounding, not bit for bit).
+0.8.2: recovery finished for this stage and settings (docs/SETTINGS.md). Verified by tests: an
+old settings file is upgraded with a copy kept and doing it again changes nothing; a damaged file
+falls back to the backup and is kept, never written over; with neither, defaults and nothing is
+written at start-up; a newer version's settings are kept; recovery points are checked against
+their checksums for the start-up dialog. Not checked here: closing the window during training (the
+stop, the recovery point and the close are wired, but only run in the app).
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

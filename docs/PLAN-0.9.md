@@ -69,6 +69,13 @@ asked is there.
   read back from disk). Classroom's own epoch checkpoints are announced at start-up too, and a
   recovery point is skipped (and reported) when it would leave too little free disk space.
 
+- **0.8.2, stage 1 finished and stage 2 (settings)**: a recovery point when Studio is closed while
+  it trains (the run is then offered as interrupted, with nothing to repeat) and at each new
+  Conversation stage; the start-up dialog checks the recovery points' checksums, says how much
+  work is repeated and offers *Start a new run*. Settings (docs/SETTINGS.md): versioned file with
+  a backup, a damaged file never written over, the ticked conversation datasets and the
+  Classroom's lesson list kept, restored values checked.
+
 ## Blockers and limits
 
 - **Updater secret**: the builds did not receive `TAURI_SIGNING_PRIVATE_KEY`. It must be a

@@ -84,6 +84,10 @@ impl Timer {
         (self.every.steps > 0 && step >= self.last_step + self.every.steps)
             || (self.every.seconds > 0 && self.last.elapsed() >= Duration::from_secs(self.every.seconds))
     }
+    /// Snapshots are taken on an interval (not only when stopped).
+    pub(crate) fn enabled(&self) -> bool {
+        self.every.steps > 0 || self.every.seconds > 0
+    }
     pub(crate) fn reset(&mut self, step: u64) {
         self.last = Instant::now();
         self.last_step = step;

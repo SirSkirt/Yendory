@@ -34,6 +34,7 @@ mod recovery;
 mod reflection;
 mod review;
 mod rewards;
+mod settings;
 mod sources;
 mod study;
 mod update;
@@ -150,6 +151,8 @@ struct Studio {
     downloads: Mutex<reading::DownloadQueue>,
     /// The run record of the reading or conversation training now (recovery.rs).
     run: Mutex<Option<String>>,
+    /// Studio is closing: training was asked to stop at a safe point (with a recovery point).
+    closing: AtomicBool,
     cancel_download: Arc<AtomicBool>,
     /// A chat reply is being written (one at a time), and the request to stop it.
     chatting: AtomicBool,
@@ -565,31 +568,18 @@ struct DeviceInfo {
     fitted_replies: bool,
 }
 
-fn settings_file(app: &AppHandle) -> Res<PathBuf> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("settings.json"))
-}
-
+/// The settings (settings.rs: versioned, with a backup; a damaged file is never written over).
 fn read_settings(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
-    settings_file(app)
-        .ok()
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default()
+    settings::read(app)
 }
 
 fn write_setting(app: &AppHandle, key: &str, value: serde_json::Value) -> Res<()> {
-    // One writer at a time, so two settings saved together both stay.
-    static LOCK: Mutex<()> = Mutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut settings = read_settings(app);
-    settings.insert(key.into(), value);
-    write_atomic(&settings_file(app)?, &serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
+    settings::write(app, key, value)
 }
 
 /// Form settings the pages remember between runs (only these keys; other settings have their
-/// own commands).
-const PAGE_SETTINGS: &[&str] = &["reading", "classroom", "conversation"];
+/// own commands). `conversationDatasets`: the conversation datasets ticked.
+const PAGE_SETTINGS: &[&str] = &["reading", "classroom", "conversation", "conversationDatasets"];
 
 #[tauri::command]
 fn page_settings(app: AppHandle, page: String) -> Option<serde_json::Value> {
@@ -1300,6 +1290,34 @@ fn files_from(name: &str, bytes: Vec<u8>) -> Res<Vec<CourseFile>> {
     Ok(out)
 }
 
+/// The Classroom's lesson list is kept between runs of Studio (`classroom_lessons.json`).
+fn lessons_file(app: &AppHandle) -> Res<PathBuf> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("classroom_lessons.json"))
+}
+
+fn save_lessons(app: &AppHandle, studio: &Studio) {
+    let lessons = studio.lessons.lock().unwrap().clone();
+    let saved = lessons_file(app).and_then(|p| {
+        std::fs::create_dir_all(p.parent().unwrap_or(&p)).map_err(|e| e.to_string())?;
+        write_atomic(&p, &serde_json::to_vec(&lessons).map_err(|e| e.to_string())?)
+    });
+    if let Err(e) = saved {
+        let _ = app.emit("device-notice", format!("The Classroom's lesson list could not be saved: {e}"));
+    }
+}
+
+fn load_lessons(app: &AppHandle) {
+    let Ok(path) = lessons_file(app) else { return };
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    match serde_json::from_slice::<Vec<CourseFile>>(&bytes) {
+        Ok(files) => *app.state::<Studio>().lessons.lock().unwrap() = files,
+        // Kept for the owner; the list starts empty.
+        Err(_) => {
+            let _ = std::fs::rename(&path, path.with_extension(format!("damaged-{}.json", now())));
+        }
+    }
+}
+
 fn lesson_previews(studio: &Studio) -> Vec<LessonPreview> {
     let taught = studio.active.lock().unwrap().as_ref().map(|a| a.meta.taught.clone()).unwrap_or_default();
     studio.lessons.lock().unwrap().iter().map(|f| preview(f, &taught)).collect()
@@ -1326,12 +1344,13 @@ async fn add_lessons(app: AppHandle, studio: State<'_, Studio>) -> Res<Vec<Lesso
     lessons.extend(added);
     yendory_engine::learn::course::sort_files(&mut lessons);
     drop(lessons);
+    save_lessons(&app, &studio);
     Ok(lesson_previews(&studio))
 }
 
 /// Adds a built-in course's lessons to the Classroom list.
 #[tauri::command]
-fn add_builtin_lessons(studio: State<Studio>, id: String) -> Res<Vec<LessonPreview>> {
+fn add_builtin_lessons(app: AppHandle, studio: State<Studio>, id: String) -> Res<Vec<LessonPreview>> {
     not_teaching(&studio)?;
     let (_, files) = courses::builtin_files(&id)?;
     let mut lessons = studio.lessons.lock().unwrap();
@@ -1342,6 +1361,7 @@ fn add_builtin_lessons(studio: State<Studio>, id: String) -> Res<Vec<LessonPrevi
     }
     yendory_engine::learn::course::sort_files(&mut lessons);
     drop(lessons);
+    save_lessons(&app, &studio);
     Ok(lesson_previews(&studio))
 }
 
@@ -1351,7 +1371,7 @@ fn lessons(studio: State<Studio>) -> Vec<LessonPreview> {
 }
 
 #[tauri::command]
-fn remove_lesson(studio: State<Studio>, index: Option<usize>) -> Res<Vec<LessonPreview>> {
+fn remove_lesson(app: AppHandle, studio: State<Studio>, index: Option<usize>) -> Res<Vec<LessonPreview>> {
     not_teaching(&studio)?;
     let mut lessons = studio.lessons.lock().unwrap();
     match index {
@@ -1362,6 +1382,7 @@ fn remove_lesson(studio: State<Studio>, index: Option<usize>) -> Res<Vec<LessonP
         None => lessons.clear(),
     }
     drop(lessons);
+    save_lessons(&app, &studio);
     Ok(lesson_previews(&studio))
 }
 
@@ -2027,7 +2048,37 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Studio::default())
+        // Closing Studio while it trains: training stops at the next safe point (Reading and
+        // Conversation save a recovery point, the Classroom keeps its accepted epochs), then the
+        // window closes. The run stays marked as interrupted, so the next start offers to
+        // continue it. A crash or power cut does not depend on this.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle().clone();
+                let studio = app.state::<Studio>();
+                if studio.teaching.load(Ordering::Acquire) && !studio.closing.swap(true, Ordering::AcqRel) {
+                    api.prevent_close();
+                    studio.stop.store(true, Ordering::Release);
+                    let _ = app.emit("closing", ());
+                    let window = window.clone();
+                    std::thread::spawn(move || {
+                        let started = std::time::Instant::now();
+                        let studio = app.state::<Studio>();
+                        while studio.teaching.load(Ordering::Acquire)
+                            && started.elapsed() < std::time::Duration::from_secs(300)
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                        let _ = window.close();
+                    });
+                }
+            }
+        })
         .setup(|app| {
+            // The settings file brought to this version's layout (a copy of the old one kept).
+            settings::migrate(app.handle());
+            // The Classroom's lesson list as it was left.
+            load_lessons(app.handle());
             // The saved training memory settings, before any training starts.
             memory::apply_stored(app.handle());
             // A Hugging Face token given earlier (for gated datasets).
@@ -2039,6 +2090,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            settings::settings_notices,
             recovery::unfinished_runs,
             recovery::interrupted_classroom,
             recovery::resume_run,

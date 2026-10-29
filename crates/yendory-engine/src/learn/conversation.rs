@@ -1798,6 +1798,8 @@ pub fn converse_with(
         }
     };
     let mut timer = Timer::new(recovery.every, first);
+    // A new curriculum stage is a boundary worth a snapshot of its own (with interval snapshots).
+    let mut snap_stage = curriculum.stage;
     let mut done = first;
     let mut ended = false;
     std::thread::scope(|scope| -> Result<(), String> {
@@ -1810,13 +1812,15 @@ pub fn converse_with(
         // never waits).
         for step in first..steps {
             // A recovery snapshot, between checks (never while one is being measured).
-            if recovery.wanted() && step > first && pending.is_none() && timer.due(step) {
+            let new_stage = timer.enabled() && curriculum.stage != snap_stage;
+            if recovery.wanted() && step > first && pending.is_none() && (timer.due(step) || new_stage) {
                 trainer.sync(&mut current)?;
                 let state =
                     state_at(&j, step, &rng, tokens, (since, since_n), due, &curriculum, &pool, rebuild);
                 let extra = j.balanced.as_ref().map(|(m, _)| m);
                 recovery.take(Snapshot { model: &current, extra, state: &state, stopped: false })?;
                 timer.reset(step);
+                snap_stage = curriculum.stage;
             }
             done = step;
             if stop.load(Ordering::Acquire) {

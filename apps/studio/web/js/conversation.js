@@ -42,7 +42,7 @@
     }
     for (const c of material.corpora) {
       const box = el("input", { type: "checkbox", checked: chosen.has(c.id) ? "" : null, disabled: teaching ? "" : null,
-        onchange: e => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); note(); } });
+        onchange: e => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); note(); saveChoice(); } });
       body.append(el("tr", {},
         el("td", {}, box),
         el("td", {}, c.name, c.attribution ? el("div", { class: "note" }, "Credit: " + c.attribution) : "",
@@ -84,13 +84,29 @@
       : "None of the text this model read is on this device, so no reading is rehearsed or guarded (download or import it again on § 2 to include it).";
   }
 
+  // The ticked datasets are kept between runs of Studio: the ticked ones and the ones known
+  // then (a dataset added since is ticked, as a new dataset always was).
+  let savedChoice;
+  const saveChoice = () => invoke("save_page_settings", { page: "conversationDatasets",
+    settings: { ids: [...chosen], seen: material.corpora.map(c => c.id) } }).catch(e => log("ERROR", e));
   async function refresh() {
     material = await invoke("conversation_material");
+    if (savedChoice === undefined) {
+      savedChoice = await invoke("page_settings", { page: "conversationDatasets" }).catch(() => null);
+      if (Array.isArray(savedChoice?.ids) && Array.isArray(savedChoice?.seen)) {
+        for (const c of material.corpora) {
+          if (savedChoice.ids.includes(c.id) || !savedChoice.seen.includes(c.id)) chosen.add(c.id);
+        }
+      } else {
+        savedChoice = null;
+      }
+    }
     for (const id of [...chosen]) if (!material.corpora.some(c => c.id === id)) chosen.delete(id);
     // A new dataset is chosen by default.
-    if (!chosen.size) for (const c of material.corpora) chosen.add(c.id);
+    if (!chosen.size && !savedChoice) for (const c of material.corpora) chosen.add(c.id);
     renderMaterial();
     renderHistory();
+    saveChoice();
   }
 
   function renderHistory() {

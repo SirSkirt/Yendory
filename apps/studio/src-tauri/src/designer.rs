@@ -208,6 +208,8 @@ pub fn design_to_classroom(app: AppHandle, studio: State<Studio>, id: String) ->
     let name = file.name.clone();
     lessons.push(file);
     yendory_engine::learn::course::sort_files(&mut lessons);
+    drop(lessons);
+    save_lessons(&app, &studio);
     Ok(format!("{name} is in the Classroom list: {} units taught, {} held out", ex.taught, ex.held_out))
 }
 

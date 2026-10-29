@@ -781,6 +781,18 @@ function formState(root) {
   }
   return out;
 }
+function keptValueFits(e, v) {
+  if (e.type === "checkbox") return typeof v === "boolean";
+  if (e.tagName === "SELECT") return [...e.options].some(o => o.value === String(v));
+  if (e.type === "number") {
+    const n = Number(v);
+    if (v === "" || !Number.isFinite(n)) return false;
+    if (e.min !== "" && n < Number(e.min)) return false;
+    if (e.max !== "" && n > Number(e.max)) return false;
+    return true;
+  }
+  return typeof v === "string";
+}
 async function restorePageSettings() {
   for (const [page, id] of Object.entries(KEPT_PAGES)) {
     const root = $(id);
@@ -789,6 +801,9 @@ async function restorePageSettings() {
     for (const [key, v] of Object.entries(saved || {})) {
       const e = root.querySelector("#" + CSS.escape(key));
       if (!e || e.type === "password" || e.type === "file") continue;
+      // Only values the control can hold: a choice that still exists, a number in range. Anything
+      // else keeps the control's default (and is reported), never a blank or broken value.
+      if (!keptValueFits(e, v)) { log("WARN", `Saved setting ${key} = ${JSON.stringify(v)} no longer fits; its default is used`); continue; }
       if (e.type === "checkbox") e.checked = !!v; else e.value = v;
       e.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -1316,6 +1331,7 @@ $("refreshHistory").addEventListener("click", safe(loadHistory, "Library"));
 
 // ---- unfinished training (recovery points) --------------------------------------------------
 const RUN_KIND = { reading: "Reading", conversation: "Conversation practice" };
+let recoveryMinutes = 10;
 function runDetails(r) {
   const pct = r.steps ? ` (${Math.round(100 * r.step / r.steps)}%)` : "";
   const state = r.interrupted ? "Interrupted (Studio closed, crashed or the computer restarted while it trained)"
@@ -1325,6 +1341,9 @@ function runDetails(r) {
     `Started ${when(r.started)} with Studio ${r.appVersion}${r.resumed ? `; continued ${r.resumed} time(s)` : ""}.`,
     r.snapshot ? `Last recovery point: ${when(r.snapshot.time)}, after step ${fmt(r.snapshot.step)} of ${fmt(r.steps)}${pct}, ${fmt(r.tokens)} tokens.`
       : "It ended before its first recovery point, so there is nothing to continue; the accepted model is safe.",
+    r.snapshot ? (r.snapshot.stopped ? "Nothing needs repeating: the recovery point was saved when it stopped."
+      : r.interrupted ? `The training after that point is repeated: at most about ${recoveryMinutes} minute(s) at the current setting (checks the run made after it are made again).` : "") : "",
+    r.check || "",
     r.datasets.length ? `Datasets: ${r.datasets.map(d => d.name).join(", ")}.` : "",
     r.plan ? `A step of the plan "${r.plan.planName}": Resume on the Planner continues it.` : "",
     r.failedSaves ? `${r.failedSaves} recovery point(s) could not be saved (${r.saveError}).` : "",
@@ -1361,7 +1380,8 @@ async function continueRun(r) {
   refreshUnfinished(false).catch(e => log("ERROR", e));
 }
 async function refreshUnfinished(startup) {
-  const runs = await invoke("unfinished_runs");
+  recoveryMinutes = await invoke("recovery_minutes").catch(() => recoveryMinutes);
+  const runs = await invoke("unfinished_runs", { verify: !!startup });
   $("unfinishedBox").hidden = !runs.length;
   $("unfinishedList").replaceChildren(...runs.map(r => {
     const cont = el("button", { type: "button", class: "primary small" }, r.plan ? "Open the Planner" : "Continue");
@@ -1379,13 +1399,19 @@ async function refreshUnfinished(startup) {
     const content = el("div", {}, el("p", {}, el("b", {}, `${RUN_KIND[r.kind] || r.kind} of ${r.modelName}`), ` — ${r.label}`),
       ...runDetails(r).map(t => el("p", { class: "note" }, t)),
       el("p", { class: "note" }, "Continuing uses the run's own settings and data (both are checked first) and its optimizer state, so it carries on where the recovery point was. The accepted model stays as it is until a check accepts a better one."));
-    const buttons = r.resumable && !r.plan ? [["later", "Decide later"], ["discard", "Discard…"], ["continue", "Continue training", true]]
+    const buttons = r.resumable && !r.plan ? [["later", "Decide later"], ["discard", "Discard…"], ["new", "Start a new run…"], ["continue", "Continue training", true]]
       : r.plan ? [["later", "Decide later"], ["discard", "Discard…"], ["plan", "Open the Planner", true]]
       : [["later", "Decide later"], ["discard", "Discard…", true]];
     const choice = await choose("Interrupted training detected", content, buttons);
     if (choice === "continue") { await continueRun(r); break; }
     if (choice === "plan") { await continueRun(r); break; }
     if (choice === "discard") await discardRun(r);
+    if (choice === "new" && await discardRun(r)) {
+      showActive(await invoke("open_model", { id: r.modelId }));
+      go(r.kind === "conversation" ? "conversation" : "reading");
+      say("The interrupted run is discarded. Set up the new run on this page and start it.");
+      break;
+    }
   }
   // Classroom sessions keep their own recovery (accepted epochs in the model's checkpoints).
   for (const c of await invoke("interrupted_classroom").catch(() => [])) {
@@ -1445,6 +1471,13 @@ async function boot() {
   await tauri.event.listen("benchmark-progress", ev => { $("benchNote").textContent = `Benchmarking: ${ev.payload}…`; });
   await tauri.event.listen("device-notice", ev => onDeviceNotice(ev.payload));
   await tauri.event.listen("recovery-notice", ev => { log("WARN", ev.payload); say(ev.payload); });
+  // Closing while training: the run stops at a safe point and saves a recovery point first.
+  await tauri.event.listen("closing", () => {
+    document.body.append(el("div", { class: "modal" }, el("div", { class: "modal-box", role: "alertdialog" },
+      el("h3", {}, "Saving before closing…"),
+      el("p", {}, "Training stops at the next safe point and saves a recovery point; Studio then closes. Next time it offers to continue where it stopped."))));
+  });
+  for (const n of await invoke("settings_notices").catch(() => [])) { log("WARN", n); say(n); }
   invoke("recovery_minutes").then(m => { $("recoveryMinutes").value = m; }).catch(e => log("ERROR", e));
   sourcesList = await invoke("corpus_sources");
   renderSources();
