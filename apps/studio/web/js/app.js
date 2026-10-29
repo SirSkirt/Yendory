@@ -1491,6 +1491,29 @@ $("recoveryMinutes").addEventListener("change", safe(async () => {
   say(v ? `A recovery point is saved every ${v} minutes while reading or practising conversations.` : "Recovery points are saved only when a run is stopped.");
 }, "Recovery"));
 
+// ---- switches that only work together ---------------------------------------------------------
+// A switch never sits on without effect: one that needs another is kept consistent with it, and
+// one that cannot act is disabled with the reason beside it.
+(() => {
+  const answers = $("optEarlierAnswers"), every = $("optEarlierEvery");
+  answers.addEventListener("change", () => {
+    if (answers.checked && !every.checked) { every.checked = true; every.dispatchEvent(new Event("change", { bubbles: true })); say("Judging earlier lessons by their answers needs the check of every earlier lesson, so that is on too."); }
+  });
+  every.addEventListener("change", () => {
+    if (!every.checked && answers.checked) { answers.checked = false; answers.dispatchEvent(new Event("change", { bubbles: true })); say("Judging earlier lessons by their answers is off too: it works only with the check of every earlier lesson."); }
+  });
+  const listening = $("convListening"), understanding = $("convUnderstanding");
+  const why = el("span", { class: "note" });
+  understanding.parentElement.append(" ", why);
+  const sync = () => {
+    const off = !(Number(listening.value) > 0);
+    understanding.disabled = off;
+    why.textContent = off ? "(needs listening practice above 0%: it is part of it)" : "";
+  };
+  for (const ev of ["input", "change"]) listening.addEventListener(ev, sync);
+  sync();
+})();
+
 // ---- start ---------------------------------------------------------------------------------
 async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
