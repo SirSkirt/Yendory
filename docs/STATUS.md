@@ -174,6 +174,26 @@ whether the examples and understanding practice raise the understanding tests on
 model (needs a conversation run on a GPU); LMSYS-Chat-1M downloaded with a real token (the
 gated rows could not be fetched here; its layout and flags are tested on rows in its published
 format).
+0.8.1: recovery (docs/RECOVERY.md; the first stage of 0.9, docs/PLAN-0.9.md). Reading and
+Conversation save recovery points (the working model with its optimizer state and the run's
+position) on an interval and when stopped, in two checksummed slots, with a run record; Studio
+asks about an interrupted run at start-up and never continues or discards one by itself.
+Verified by tests: a reading or conversation run stopped, or killed after any recovery point, and
+continued ends with the same weights, optimizer state and checks as an uninterrupted run, bit for
+bit on the CPU (`tests/recovery.rs`, Conversation across a curriculum stage change; Studio's files
+read back from disk after a simulated crash); a checkpoint accepted after the last recovery point
+is kept; a recovery point is refused for other settings, other data or a changed model; a damaged
+recovery point falls back to the one before it, and both damaged is reported with the accepted
+model untouched. Not checked here: a real power cut or a Windows restart during training (the
+writes are flushed and renamed, but only the owner's PC can show it); continuing a run on a GPU
+(agrees to rounding, not bit for bit).
+Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
+lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
+rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers
+(22 with 0.02), 73 of 150 earlier answers (72), 13 of 42 context pairs (11), and 4 of 6 epochs
+accepted (3). Epoch 5, which 0.02 rejected, was accepted; epoch 6 was rejected because it lost two
+held-out answers. One run of 51 and 150 questions: a hint, not proof. The default stays 0.02 (it
+is a setting: "Earlier lessons' held-out loss may rise by" in the Classroom).
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

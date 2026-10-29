@@ -6,8 +6,8 @@ use super::*;
 use crate::reading::{corpora, corpus_path, load_info, CorpusInfo};
 use crate::sources::{conversation_sources as dataset_sources, Source};
 use yendory_engine::learn::conversation::{
-    converse as practise, parse_dialogue, ConversationCheck, ConversationConfig, ConversationEvent,
-    ConversationSet, UnderstandingScore,
+    converse_with as practise, parse_dialogue, ConversationCheck, ConversationConfig, ConversationEvent,
+    ConversationSet, ConversationState, UnderstandingScore,
 };
 use yendory_engine::learn::corpus::{normalize_ascii, split_documents, Category};
 use yendory_engine::learn::listening::ContextScore;
@@ -242,6 +242,9 @@ pub(crate) struct ConversationJob {
     infos: Vec<CorpusInfo>,
     cfg: ConversationConfig,
     chats: bool,
+    /// The options as given, and a description (for the run record).
+    options: serde_json::Value,
+    pub(crate) label: String,
 }
 
 /// Checks the options (and that the datasets are on this device).
@@ -324,7 +327,9 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
         understanding_tests: o.understanding_tests.min(50),
         ..ConversationConfig::default()
     };
-    Ok(ConversationJob { infos, cfg, chats: o.chats })
+    let label = conversation_label(app, o);
+    let options = serde_json::to_value(o).map_err(|e| e.to_string())?;
+    Ok(ConversationJob { infos, cfg, chats: o.chats, options, label })
 }
 
 /// A short description of a conversation run, for plans.
@@ -362,6 +367,10 @@ fn reading_documents(app: &AppHandle, meta: &Meta) -> Vec<String> {
 
 /// Runs conversation practice on the open model (on the calling thread), saving every accepted
 /// checkpoint and recording the run. `emit` receives every event.
+///
+/// The run has a record and recovery points (recovery.rs); with `ctx.resume` it continues a run
+/// from its recovery point, with that run's own settings.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_conversation(
     app: &AppHandle,
     job: &ConversationJob,
@@ -370,10 +379,36 @@ pub(crate) fn run_conversation(
     archive: Vec<Item>,
     stop: &AtomicBool,
     emit: &dyn Fn(&ConversationEvent),
+    mut ctx: recovery::RunContext<ConversationState>,
+) -> Res<ConverseFinished> {
+    let datasets = job
+        .infos
+        .iter()
+        .map(|i| recovery::DatasetRef { name: i.name.clone(), sha256: i.sha256.clone() })
+        .collect();
+    let (live, resume) =
+        recovery::live_run(app, "conversation", &meta, &job.label, &job.options, datasets, &mut ctx)?;
+    let out = guarded(|| converse_in(app, job, meta, model, archive, stop, emit, &live, resume));
+    recovery::close_run(app, &live, out.as_ref().map(|f| f.stopped).map_err(String::as_str));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn converse_in(
+    app: &AppHandle,
+    job: &ConversationJob,
+    meta: Meta,
+    model: Bicameral,
+    archive: Vec<Item>,
+    stop: &AtomicBool,
+    emit: &dyn Fn(&ConversationEvent),
+    live: &recovery::LiveRun,
+    resume: Option<yendory_engine::learn::recovery::Resume<ConversationState>>,
 ) -> Res<ConverseFinished> {
     let studio = app.state::<Studio>();
     let id = meta.id.clone();
-    let cfg = &job.cfg;
+    // A continued run keeps the settings it was started with (its seed among them).
+    let cfg = &resume.as_ref().map_or_else(|| job.cfg.clone(), |r| r.state.cfg.clone());
     let sources: Vec<ConversationSource> = job
         .infos
         .iter()
@@ -387,7 +422,8 @@ pub(crate) fn run_conversation(
     append_history(
         app,
         &id,
-        serde_json::json!({"type": "conversation_started", "time": now(), "sources": sources, "chats": job.chats, "settings": cfg}),
+        serde_json::json!({"type": "conversation_started", "time": now(), "sources": sources, "chats": job.chats, "settings": cfg,
+            "run": live.id(), "resumedFrom": resume.as_ref().map(|r| r.state.step)}),
     );
     let current = Arc::new(Mutex::new(meta.clone()));
     let mut sets = Vec::new();
@@ -438,7 +474,30 @@ pub(crate) fn run_conversation(
         }
         Ok(())
     };
-    let r = practise(&model, &sets, &archive, &reading, cfg, &mut observer, &mut on_accepted, stop)?;
+    let mut on_snapshot = |s: yendory_engine::learn::recovery::Snapshot<'_, ConversationState>| {
+        live.snapshot(app, &s, (s.state.step, s.state.steps, s.state.tokens));
+        Ok(())
+    };
+    let mut recovery = yendory_engine::learn::recovery::Recovery {
+        every: yendory_engine::learn::recovery::RecoveryEvery {
+            seconds: recovery::interval_minutes(app) * 60,
+            steps: 0,
+        },
+        on_snapshot: Some(&mut on_snapshot),
+        resume,
+    };
+    let r = practise(
+        &model,
+        &sets,
+        &archive,
+        &reading,
+        cfg,
+        &mut observer,
+        &mut on_accepted,
+        stop,
+        &mut recovery,
+    )?;
+    drop(recovery);
     drop(sets);
     let mut meta = current.lock().unwrap().clone();
     // The best balanced checkpoint, when it differs from the one kept: a model of its own beside
@@ -490,7 +549,7 @@ pub(crate) fn run_conversation(
         app,
         &id,
         serde_json::json!({"type": "conversation_finished", "time": now(), "accepted": r.accepted,
-            "tokens": r.tokens, "stopped": r.stopped, "stuck": r.stuck}),
+            "tokens": r.tokens, "stopped": r.stopped, "stuck": r.stuck, "run": live.id()}),
     );
     Ok(ConverseFinished {
         model: Some(meta),
@@ -512,6 +571,18 @@ pub fn converse(app: AppHandle, studio: State<Studio>, options: ConverseOptions)
     let (meta, model, archive) =
         with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
     no_waiting_checkpoints(&app, &meta.id)?;
+    recovery::no_unfinished_runs(&app, &meta.id, None)?;
+    start_conversation(app, &studio, job, (meta, model, archive), recovery::RunContext::new())
+}
+
+/// Starts conversation practice (new, or continuing a run) on its own thread.
+pub(crate) fn start_conversation(
+    app: AppHandle,
+    studio: &Studio,
+    job: ConversationJob,
+    (meta, model, archive): (Meta, Bicameral, Vec<Item>),
+    ctx: recovery::RunContext<ConversationState>,
+) -> Res<()> {
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching or reading".into());
     }
@@ -523,8 +594,8 @@ pub fn converse(app: AppHandle, studio: State<Studio>, options: ConverseOptions)
         let emit = |e: &ConversationEvent| {
             let _ = app.emit("converse-event", e);
         };
-        let finished = guarded(|| run_conversation(&app, &job, meta, model, archive, &stop, &emit))
-            .unwrap_or_else(|e| {
+        let finished =
+            run_conversation(&app, &job, meta, model, archive, &stop, &emit, ctx).unwrap_or_else(|e| {
                 append_history(
                     &app,
                     &id,

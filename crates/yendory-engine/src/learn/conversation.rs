@@ -63,6 +63,7 @@ use super::listening::{
     context_practice, context_tests, practice_of, score, understanding_tests, ContextScore, ContextTest,
     Probe, Skill as ListeningSkill,
 };
+use super::recovery::{same_shape, Fingerprint, Recovery, Snapshot, Timer};
 use super::{batch_loss, encode_item, lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
@@ -448,6 +449,9 @@ pub enum ConversationEvent {
         examples: usize,
         steps: u64,
         stages: Vec<String>,
+        /// The run continues from a recovery snapshot taken after this many steps.
+        #[serde(default)]
+        resumed_from: Option<u64>,
     },
     Batch {
         step: u64,
@@ -1044,6 +1048,7 @@ fn measure_pool(
 }
 
 /// The practice pool: conversations drawn by how hard Nova finds them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Pool {
     /// (practice index, loss, weight).
     entries: Vec<(usize, f32, f32)>,
@@ -1118,6 +1123,7 @@ impl Pool {
 }
 
 /// The curriculum's state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Curriculum {
     stage: usize,
     /// The stage's held-out loss when it began, and its best since.
@@ -1217,6 +1223,83 @@ fn reading_rows(
     Ok((train, probes))
 }
 
+/// The measurements before practice, which the judge compares every check with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConversationBaseline {
+    pub stage_losses: Vec<f32>,
+    pub listening: Option<f32>,
+    pub classroom: Vec<bool>,
+    pub reading: Option<f32>,
+    pub context: Option<ContextScore>,
+    pub understanding: Option<UnderstandingScore>,
+    pub reply_checks: Option<ReplyChecks>,
+}
+
+/// Where a conversation run was when a recovery snapshot was taken (with its working model,
+/// and the balanced checkpoint as the snapshot's second model): enough to continue it from the
+/// same batch, with the same random draws, curriculum stage, practice pool and judge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConversationState {
+    /// The run's settings; a run resumes only with the same.
+    pub cfg: ConversationConfig,
+    /// Fingerprint of the conversations, earlier lessons and reading text.
+    pub data: u64,
+    pub step: u64,
+    pub steps: u64,
+    pub tokens: u64,
+    pub rng: u64,
+    /// The model's optimizer step when the run started, and the accepted checkpoint's.
+    pub start_step: u64,
+    pub accepted_step: Option<u64>,
+    pub baseline: ConversationBaseline,
+    pub best_loss: f32,
+    pub misses: usize,
+    pub best_check: Option<ConversationCheck>,
+    pub balanced_check: Option<ConversationCheck>,
+    pub checks: Vec<ConversationCheck>,
+    pub stuck: Option<String>,
+    pub since: f64,
+    pub since_n: usize,
+    /// A check fell due and had not run yet.
+    pub due: bool,
+    /// The curriculum stage the run is in.
+    pub stage: usize,
+    curriculum: Curriculum,
+    pool: Option<Pool>,
+    /// A new stage's practice pool is still to be measured.
+    rebuild: Option<usize>,
+}
+
+/// The judge's record during a conversation run.
+struct ConversationJudge {
+    best: Option<(Bicameral, ConversationCheck)>,
+    balanced: Option<(Bicameral, ConversationCheck)>,
+    best_loss: f32,
+    misses: usize,
+    checks: Vec<ConversationCheck>,
+    stuck: Option<String>,
+}
+
+/// Fingerprint of a conversation run's data.
+fn conversation_fingerprint(sets: &[ConversationSet], earlier: &[Item], reading: &[String]) -> u64 {
+    let mut f = Fingerprint::new();
+    for set in sets {
+        f.text(&format!("{} {:?} {}", set.name, set.nova, set.hold_out));
+        for d in &set.dialogues {
+            f.text(&format!("{d:?}"));
+        }
+    }
+    f.text("");
+    for i in earlier {
+        f.text(&format!("{i:?}"));
+    }
+    f.text("");
+    for r in reading {
+        f.text(r);
+    }
+    f.value()
+}
+
 /// Practises conversations: trains on rows of the training conversations (and earlier lessons,
 /// read text and listening practice), checks the held-out conversations, the Classroom
 /// questions, the read text and the context tests at regular intervals, and keeps the best
@@ -1233,6 +1316,25 @@ pub fn converse(
     observer: &mut dyn FnMut(&ConversationEvent),
     on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
     stop: &AtomicBool,
+) -> Result<ConversationResult, String> {
+    converse_with(model, sets, earlier, reading, cfg, observer, on_accepted, stop, &mut Recovery::none())
+}
+
+/// [`converse`] with recovery snapshots (`recovery.every`, and when stopped) and, with
+/// `recovery.resume`, continuing a run from its snapshot. `model` is then the model as it is
+/// saved now: the run's accepted checkpoint, or the model it started from when none was
+/// accepted. A snapshot of other settings or other data is refused.
+#[allow(clippy::too_many_arguments)]
+pub fn converse_with(
+    model: &Bicameral,
+    sets: &[ConversationSet],
+    earlier: &[Item],
+    reading: &[String],
+    cfg: &ConversationConfig,
+    observer: &mut dyn FnMut(&ConversationEvent),
+    on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
+    stop: &AtomicBool,
+    recovery: &mut Recovery<'_, ConversationState>,
 ) -> Result<ConversationResult, String> {
     if cfg.batch_size == 0 || !(cfg.learning_rate > 0. && cfg.learning_rate.is_finite()) || cfg.tokens == 0 {
         return Err("Invalid conversation settings".into());
@@ -1254,7 +1356,30 @@ pub fn converse(
             "No held-out conversations to check progress: choose a larger conversation dataset".into()
         );
     }
-    let mut current = model.clone();
+    let resume = recovery.resume.take();
+    let data = if recovery.wanted() || resume.is_some() {
+        conversation_fingerprint(sets, earlier, reading)
+    } else {
+        0
+    };
+    if let Some(r) = &resume {
+        if r.state.cfg != *cfg {
+            return Err("This conversation run was saved with other settings; start a new run".into());
+        }
+        if r.state.data != data {
+            return Err(
+                "The conversations or lessons changed since this run was saved; start a new run".into()
+            );
+        }
+        if !same_shape(&r.model, model) || r.extra.as_ref().is_some_and(|b| !same_shape(b, model)) {
+            return Err("This recovery snapshot does not match the model; start a new run".into());
+        }
+    }
+    let start_step = resume.as_ref().map_or(model.step, |r| r.state.start_step);
+    let mut current = match &resume {
+        Some(r) => r.model.clone(),
+        None => model.clone(),
+    };
     let mut rng = Rng::new(cfg.seed);
     let nova_label = if cfg.own_name.is_empty() { "Nova".to_string() } else { cfg.own_name.clone() };
     let listening_practice = if cfg.context_practice <= 0. {
@@ -1350,7 +1475,21 @@ pub fn converse(
         check_prompts,
         samples,
     };
-    let baseline = fixed.measure(current.clone(), 0, 0, 0., None)?;
+    let baseline = match &resume {
+        Some(r) => r.state.baseline.clone(),
+        None => {
+            let m = fixed.measure(current.clone(), 0, 0, 0., None)?;
+            ConversationBaseline {
+                stage_losses: m.stage_losses,
+                listening: m.listening,
+                classroom: m.classroom,
+                reading: m.reading,
+                context: m.context,
+                understanding: m.understanding,
+                reply_checks: m.reply_checks,
+            }
+        }
+    };
     let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
     let baseline_loss = mean(&baseline.stage_losses);
     let baseline_right: Vec<bool> = baseline.classroom.clone();
@@ -1368,6 +1507,9 @@ pub fn converse(
     }
     let per_row = (lengths.iter().sum::<usize>() / lengths.len().max(1)).max(8) as u64;
     let steps = cfg.tokens.div_ceil(per_row * cfg.batch_size as u64).max(1);
+    if resume.as_ref().is_some_and(|r| r.state.steps != steps || r.state.step > steps) {
+        return Err("This recovery snapshot does not match the run's length; start a new run".into());
+    }
     observer(&ConversationEvent::Started {
         dialogues,
         held_out_dialogues: held_dialogues,
@@ -1387,15 +1529,19 @@ pub fn converse(
         examples: example_practice.len(),
         steps,
         stages: STAGES.iter().map(|s| s.0.to_string()).collect(),
+        resumed_from: resume.as_ref().map(|r| r.state.step),
     });
     let first_stage = if cfg.curriculum { 0 } else { STAGES.len() - 1 };
-    let mut curriculum = Curriculum {
-        stage: first_stage,
-        start_loss: baseline.stage_losses[first_stage],
-        best_loss: baseline.stage_losses[first_stage],
-        stale: 0,
-        backoffs: 0,
-        lr_scale: 1.,
+    let mut curriculum = match &resume {
+        Some(r) => r.state.curriculum.clone(),
+        None => Curriculum {
+            stage: first_stage,
+            start_loss: baseline.stage_losses[first_stage],
+            best_loss: baseline.stage_losses[first_stage],
+            stale: 0,
+            backoffs: 0,
+            lr_scale: 1.,
+        },
     };
     // Nova's loss on a new pool of conversations for a stage: on the GPU when training is there.
     let new_pool = |trainer: &super::Trainer,
@@ -1413,11 +1559,44 @@ pub fn converse(
         Ok(Some(Pool::new(measure_pool(Some(trainer), model, cfg, &train, &ids, windows[stage])?, cfg)))
     };
     let mut trainer = super::Trainer::new(&current);
-    let mut pool = new_pool(&trainer, &current, curriculum.stage, &mut rng)?;
-
-    let mut best: Option<(Bicameral, ConversationCheck)> = None;
-    // `keep_balanced`: the best balanced checkpoint so far and its rank.
-    let mut balanced: Option<(Bicameral, ConversationCheck)> = None;
+    let mut pool = match &resume {
+        Some(r) => {
+            rng = Rng::new(r.state.rng);
+            r.state.pool.clone()
+        }
+        None => new_pool(&trainer, &current, curriculum.stage, &mut rng)?,
+    };
+    // The judge (with `keep_balanced`'s best balanced checkpoint), as it was at the snapshot.
+    let mut j = ConversationJudge {
+        best: None,
+        balanced: None,
+        best_loss: baseline_loss,
+        misses: 0,
+        checks: Vec::new(),
+        stuck: None,
+    };
+    let (mut tokens, mut since, mut since_n, mut first, mut due) = (0u64, 0f64, 0usize, 0u64, false);
+    let mut rebuild: Option<usize> = None;
+    let mut newer = None;
+    let mut accepted_step = None;
+    if let Some(r) = resume {
+        let s = r.state;
+        (j.best_loss, j.misses, j.checks, j.stuck) = (s.best_loss, s.misses, s.checks, s.stuck);
+        j.balanced = r.extra.zip(s.balanced_check);
+        let expected = s.accepted_step.unwrap_or(s.start_step);
+        if model.step == expected {
+            j.best = s.best_check.filter(|_| s.accepted_step.is_some()).map(|c| (model.clone(), c));
+        } else if model.step > r.model.step {
+            // A checkpoint accepted after the snapshot (saved before the run was interrupted):
+            // measured again below and kept as the best.
+            newer = Some(model.clone());
+        } else {
+            return Err("The model was changed after this run was saved; start a new run".into());
+        }
+        accepted_step = j.best.as_ref().map(|(m, _)| m.step);
+        (tokens, since, since_n, due, rebuild) = (s.tokens, s.since, s.since_n, s.due, s.rebuild);
+        first = s.step;
+    }
     let rank = |c: &ConversationCheck| {
         (
             c.context.as_ref().map_or(0, |x| x.passed),
@@ -1425,19 +1604,14 @@ pub fn converse(
             -c.held_out_loss,
         )
     };
-    let mut best_loss = baseline_loss;
-    let mut checks = Vec::new();
-    let mut misses = 0;
     let (mut stopped, mut early_stop) = (false, false);
-    let mut stuck = None;
-    let mut tokens = 0u64;
-    let (mut since, mut since_n) = (0f64, 0usize);
     let warmup = (steps / 20).clamp(1, 200);
     let eval_every = (steps / cfg.evaluations.max(1) as u64).max(1);
 
     // Judges a measured checkpoint: accepted or not, then the curriculum's decision. Returns
     // true when the run should end.
-    let mut judge = |m: Measured,
+    let mut judge = |j: &mut ConversationJudge,
+                     m: Measured,
                      curriculum: &mut Curriculum,
                      pool: &mut Option<Pool>,
                      rebuild: &mut Option<usize>,
@@ -1447,6 +1621,7 @@ pub fn converse(
         let lost = baseline_right.iter().zip(&m.classroom).filter(|(b, n)| **b && !**n).count();
         let gained = baseline_right.iter().zip(&m.classroom).filter(|(b, n)| !**b && **n).count();
         let correct = m.classroom.iter().filter(|&&r| r).count();
+        let best_loss = j.best_loss;
         let improves = loss.is_finite() && loss < best_loss - cfg.min_loss_improvement;
         let keeps_classroom = lost <= allowed_lost;
         let reading_limit = baseline_reading.map(|b| b * (1. + cfg.reading_rise));
@@ -1497,25 +1672,25 @@ pub fn converse(
         // A balanced candidate keeps what an accepted checkpoint must keep and has learned
         // something; among those, more context pairs, then more listening, then lower loss.
         if cfg.keep_balanced && keeps_classroom && keeps_reading && loss.is_finite() && loss < baseline_loss {
-            let better = balanced.as_ref().map_or(true, |(_, b)| {
+            let better = j.balanced.as_ref().map_or(true, |(_, b)| {
                 let (a, b) = (rank(&c), rank(b));
                 a.0 > b.0 || (a.0 == b.0 && (a.1 > b.1 || (a.1 == b.1 && a.2 > b.2)))
             });
             if better {
                 c.balanced = true;
-                balanced = Some((m.model.clone(), c.clone()));
+                j.balanced = Some((m.model.clone(), c.clone()));
             }
         }
         if accepted {
-            best_loss = loss;
+            j.best_loss = loss;
             on_accepted(&m.model)?;
-            best = Some((m.model.clone(), c.clone()));
-            misses = 0;
+            j.best = Some((m.model.clone(), c.clone()));
+            j.misses = 0;
         } else {
-            misses += 1;
+            j.misses += 1;
         }
         observer(&ConversationEvent::Checked(c.clone()));
-        checks.push(c);
+        j.checks.push(c);
         let mut end = false;
         if cfg.curriculum {
             match curriculum.decide(m.stage_losses[curriculum.stage], cfg) {
@@ -1544,34 +1719,120 @@ pub fn converse(
                     });
                 }
                 Step::Stop(why) => {
-                    stuck = Some(why);
+                    j.stuck = Some(why);
                     end = true;
                 }
             }
         }
         // Early stopping applies in the last stage (earlier stages end by the curriculum).
         let last = curriculum.stage + 1 >= STAGES.len();
-        Ok(end || (last && misses >= cfg.patience.max(1)))
+        Ok(end || (last && j.misses >= cfg.patience.max(1)))
     };
 
+    if let Some(newer) = newer {
+        let m = fixed.measure(newer.clone(), newer.step.saturating_sub(start_step), tokens, 0., None)?;
+        let loss = mean(&m.stage_losses);
+        let lost = baseline_right.iter().zip(&m.classroom).filter(|(b, n)| **b && !**n).count();
+        let gained = baseline_right.iter().zip(&m.classroom).filter(|(b, n)| !**b && **n).count();
+        let c = ConversationCheck {
+            step: m.step,
+            tokens,
+            train_loss: 0.,
+            held_out_loss: loss,
+            best_loss: loss,
+            stage: curriculum.stage,
+            stage_losses: m.stage_losses,
+            listening: m.listening,
+            classroom_correct: m.classroom.iter().filter(|&&r| r).count(),
+            classroom_total,
+            classroom_lost: lost,
+            classroom_gained: gained,
+            reading_loss: m.reading,
+            context: m.context,
+            understanding: m.understanding,
+            reply_checks: m.reply_checks,
+            learning_rate_scale: curriculum.lr_scale,
+            accepted: true,
+            reason: None,
+            samples: m.samples,
+            balanced: false,
+        };
+        (j.best_loss, j.misses) = (loss, 0);
+        accepted_step = Some(newer.step);
+        j.best = Some((newer, c));
+    }
+    // The run's state for a recovery snapshot after `step` steps.
+    let state_at = |j: &ConversationJudge,
+                    step: u64,
+                    rng: &Rng,
+                    tokens: u64,
+                    since: (f64, usize),
+                    due: bool,
+                    curriculum: &Curriculum,
+                    pool: &Option<Pool>,
+                    rebuild: Option<usize>|
+     -> ConversationState {
+        ConversationState {
+            cfg: cfg.clone(),
+            data,
+            step,
+            steps,
+            tokens,
+            rng: rng.state(),
+            start_step,
+            accepted_step: j.best.as_ref().map(|(m, _)| m.step).or(accepted_step),
+            baseline: baseline.clone(),
+            best_loss: j.best_loss,
+            misses: j.misses,
+            best_check: j.best.as_ref().map(|(_, c)| c.clone()),
+            balanced_check: j.balanced.as_ref().map(|(_, c)| c.clone()),
+            checks: j.checks.clone(),
+            stuck: j.stuck.clone(),
+            since: since.0,
+            since_n: since.1,
+            due,
+            stage: curriculum.stage,
+            curriculum: curriculum.clone(),
+            pool: pool.clone(),
+            rebuild,
+        }
+    };
+    let mut timer = Timer::new(recovery.every, first);
+    let mut done = first;
+    let mut ended = false;
     std::thread::scope(|scope| -> Result<(), String> {
         let mut pending: Option<std::thread::ScopedJoinHandle<'_, Result<Measured, String>>> = None;
         let join = |h: std::thread::ScopedJoinHandle<'_, Result<Measured, String>>| {
             h.join().map_err(|_| "A conversation check failed".to_string())?
         };
-        // A check fell due while the previous one was still being measured on the CPU: training
-        // carries on, and the check starts as soon as that one is judged (the GPU never waits).
-        let mut due = false;
-        let mut rebuild: Option<usize> = None;
-        for step in 0..steps {
+        // A check fell due while the previous one was still being measured on the CPU (`due`):
+        // training carries on, and the check starts as soon as that one is judged (the GPU
+        // never waits).
+        for step in first..steps {
+            // A recovery snapshot, between checks (never while one is being measured).
+            if recovery.wanted() && step > first && pending.is_none() && timer.due(step) {
+                trainer.sync(&mut current)?;
+                let state =
+                    state_at(&j, step, &rng, tokens, (since, since_n), due, &curriculum, &pool, rebuild);
+                let extra = j.balanced.as_ref().map(|(m, _)| m);
+                recovery.take(Snapshot { model: &current, extra, state: &state, stopped: false })?;
+                timer.reset(step);
+            }
+            done = step;
             if stop.load(Ordering::Acquire) {
                 stopped = true;
                 break;
             }
             let mut check_now = false;
             if pending.as_ref().is_some_and(|h| h.is_finished()) {
-                if judge(join(pending.take().unwrap())?, &mut curriculum, &mut pool, &mut rebuild, observer)?
-                {
+                if judge(
+                    &mut j,
+                    join(pending.take().unwrap())?,
+                    &mut curriculum,
+                    &mut pool,
+                    &mut rebuild,
+                    observer,
+                )? {
                     early_stop = true;
                     break;
                 }
@@ -1697,6 +1958,7 @@ pub fn converse(
                     scope.spawn(move || fixed.measure(snapshot, step + 1, tokens, train_loss, Some(part))),
                 );
             } else if judge(
+                &mut j,
                 fixed.measure(snapshot, step + 1, tokens, train_loss, None)?,
                 &mut curriculum,
                 &mut pool,
@@ -1707,9 +1969,13 @@ pub fn converse(
                 break;
             }
         }
+        if !stopped {
+            done = steps;
+        }
         if let Some(h) = pending.take() {
-            if judge(join(h)?, &mut curriculum, &mut pool, &mut rebuild, observer)? && !stopped {
-                early_stop = true;
+            if judge(&mut j, join(h)?, &mut curriculum, &mut pool, &mut rebuild, observer)? {
+                ended = true;
+                early_stop |= !stopped;
             }
         }
         // The last check fell due while another was being measured: it runs now.
@@ -1717,6 +1983,7 @@ pub fn converse(
             trainer.sync(&mut current)?;
             let train_loss = (since / since_n.max(1) as f64) as f32;
             if judge(
+                &mut j,
                 fixed.measure(current.clone(), steps, tokens, train_loss, None)?,
                 &mut curriculum,
                 &mut pool,
@@ -1728,6 +1995,14 @@ pub fn converse(
         }
         Ok(())
     })?;
+    // Stopped by the user: a snapshot to continue from later.
+    if stopped && !ended && recovery.wanted() {
+        trainer.sync(&mut current)?;
+        let state = state_at(&j, done, &rng, tokens, (since, since_n), due, &curriculum, &pool, rebuild);
+        let extra = j.balanced.as_ref().map(|(m, _)| m);
+        recovery.take(Snapshot { model: &current, extra, state: &state, stopped: true })?;
+    }
+    let ConversationJudge { best, balanced, best_loss, checks, stuck, .. } = j;
     let accepted = best.is_some();
     let stage = curriculum.stage;
     observer(&ConversationEvent::Finished {

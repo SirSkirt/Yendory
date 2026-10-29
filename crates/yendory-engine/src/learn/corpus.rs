@@ -8,6 +8,7 @@
 //! and the model returned is the best accepted checkpoint (the input model unchanged when no
 //! checkpoint ever improved on it).
 use super::lessons::{grow_vocabulary_from_texts, is_held_out};
+use super::recovery::{same_shape, Fingerprint, Recovery, Snapshot, Timer};
 use super::{lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
@@ -246,6 +247,9 @@ pub enum PretrainEvent {
         /// The corpora read (one for a single corpus).
         #[serde(default)]
         parts: Vec<PartInfo>,
+        /// The run continues from a recovery snapshot taken after this many steps.
+        #[serde(default)]
+        resumed_from: Option<u64>,
     },
     Batch {
         step: u64,
@@ -307,6 +311,63 @@ pub struct PretrainResult {
     pub evaluations: Vec<Evaluation>,
     pub stopped: bool,
     pub early_stop: bool,
+}
+
+/// Where a reading was when a recovery snapshot was taken (with its working model): enough to
+/// continue it from the same batch, with the same random draws and the same judge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReadingState {
+    /// The reading's settings; a run resumes only with the same.
+    pub cfg: PretrainConfig,
+    /// Fingerprint of the corpora read (names, shares, stages and every document).
+    pub data: u64,
+    /// Steps done, and the run's steps.
+    pub step: u64,
+    pub steps: u64,
+    pub tokens: u64,
+    /// The random generator's state.
+    pub rng: u64,
+    /// Interleaving: how far each corpus is behind its share.
+    pub owed: Vec<f32>,
+    pub new_words: usize,
+    /// The model's optimizer step when the run started, and the accepted checkpoint's (if one
+    /// was accepted): a resumed run checks that it is given that model.
+    pub start_step: u64,
+    pub accepted_step: Option<u64>,
+    pub baseline_loss: f32,
+    pub baseline_dense_reliance: f32,
+    pub best_loss: f32,
+    pub best_reliance: f32,
+    pub misses: usize,
+    /// Training loss since the last check (sum and count).
+    pub since_eval: f64,
+    pub since_n: usize,
+    /// A check fell due and had not run yet.
+    pub due: bool,
+    pub evaluations: Vec<Evaluation>,
+}
+
+/// The judge's record during a reading.
+struct ReadingJudge {
+    best: Option<Bicameral>,
+    best_loss: f32,
+    best_reliance: f32,
+    misses: usize,
+    evaluations: Vec<Evaluation>,
+}
+
+/// Fingerprint of a reading's corpora (to resume only on the same data).
+fn parts_fingerprint(parts: &[MixPart]) -> u64 {
+    let mut f = Fingerprint::new();
+    for p in parts {
+        f.text(&p.name);
+        f.text(&format!("{:?} {} {:?}", p.category, p.share.to_bits(), p.stage));
+        for d in p.corpus.train.iter().chain(&p.corpus.held_out) {
+            f.text(d);
+        }
+        f.text("");
+    }
+    f.value()
 }
 
 /// Encodes documents into one token stream, each document followed by a blank line.
@@ -477,6 +538,22 @@ pub fn pretrain_mix(
     on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
     stop: &AtomicBool,
 ) -> Result<PretrainResult, String> {
+    pretrain_mix_with(model, parts, cfg, observer, on_accepted, stop, &mut Recovery::none())
+}
+
+/// [`pretrain_mix`] with recovery snapshots (`recovery.every`, and when stopped) and, with
+/// `recovery.resume`, continuing a run from its snapshot. `model` is then the model as it is
+/// saved now: the run's accepted checkpoint, or the model it started from when none was
+/// accepted. A snapshot of other settings or other corpora is refused.
+pub fn pretrain_mix_with(
+    model: &Bicameral,
+    parts: &[MixPart],
+    cfg: &PretrainConfig,
+    observer: &mut dyn FnMut(&PretrainEvent),
+    on_accepted: &mut dyn FnMut(&Bicameral) -> Result<(), String>,
+    stop: &AtomicBool,
+    recovery: &mut Recovery<'_, ReadingState>,
+) -> Result<PretrainResult, String> {
     if parts.is_empty() {
         return Err("Choose at least one corpus to read".into());
     }
@@ -503,9 +580,34 @@ pub fn pretrain_mix(
     let total_share: f32 = parts.iter().map(|p| p.share).sum();
     let shares: Vec<f32> = parts.iter().map(|p| p.share / total_share).collect();
     let bicameral = parts.iter().any(|p| p.stage.is_some());
-    let mut current = model.clone();
-    let mut new_words = 0;
-    if cfg.grow_vocabulary {
+    let resume = recovery.resume.take();
+    let data = if recovery.wanted() || resume.is_some() { parts_fingerprint(parts) } else { 0 };
+    if let Some(r) = &resume {
+        let s = &r.state;
+        if s.cfg != *cfg {
+            return Err("This reading was saved with other settings; start a new reading".into());
+        }
+        if s.data != data {
+            return Err("The corpora changed since this reading was saved; start a new reading".into());
+        }
+        // The working model has the run's vocabulary; the saved model is the run's accepted
+        // checkpoint (same shape) or the model it started from (vocabulary not yet grown).
+        let mut a = r.model.config.clone();
+        let mut b = model.config.clone();
+        (a.vocab, b.vocab) = (0, 0);
+        let fits = if s.accepted_step.is_some() { same_shape(&r.model, model) } else { a == b };
+        if !fits || s.owed.len() != parts.len() || s.step > s.steps {
+            return Err("This recovery snapshot does not match the model; start a new reading".into());
+        }
+    }
+    let start_step = resume.as_ref().map_or(model.step, |r| r.state.start_step);
+    let mut current = match &resume {
+        Some(r) => r.model.clone(),
+        None => model.clone(),
+    };
+    let mut new_words = resume.as_ref().map_or(0, |r| r.state.new_words);
+    // A resumed run's working model already has the words this run learned.
+    if cfg.grow_vocabulary && resume.is_none() {
         let limit = cfg.word_limit.unwrap_or(current.word_capacity());
         let cap = cfg.max_words.min(limit).max(current.tokenizer.words().len());
         let words = grow_vocabulary_from_texts(
@@ -551,6 +653,9 @@ pub fn pretrain_mix(
     let steps = cfg.tokens.div_ceil(tokens_per_step).max(1);
     let warmup = (steps / 20).clamp(1, 200);
     let eval_every = (steps / cfg.evaluations.max(1) as u64).max(1);
+    if resume.as_ref().is_some_and(|r| r.state.steps != steps) {
+        return Err("This recovery snapshot does not match the reading's length; start a new reading".into());
+    }
 
     // Held-out loss and Dense reliance of every part; the overall values are share-weighted.
     type Check = (f32, f32, Vec<(f32, f32)>);
@@ -564,7 +669,41 @@ pub fn pretrain_mix(
         let rel = per.iter().zip(&shares).map(|((_, r), s)| r * s).sum();
         Ok((loss, rel, per))
     };
-    let (baseline_loss, baseline_dense_reliance, _) = check(&current)?;
+    let (baseline_loss, baseline_dense_reliance) = match &resume {
+        Some(r) => (r.state.baseline_loss, r.state.baseline_dense_reliance),
+        None => {
+            let (l, r, _) = check(&current)?;
+            (l, r)
+        }
+    };
+    // The judge, as it was when the snapshot was taken. A checkpoint accepted after the
+    // snapshot (saved before the run was interrupted) is measured again and kept as the best.
+    let mut j = ReadingJudge {
+        best: None,
+        best_loss: baseline_loss,
+        best_reliance: baseline_dense_reliance,
+        misses: 0,
+        evaluations: Vec::new(),
+    };
+    let mut accepted_step = None;
+    if let Some(r) = &resume {
+        let s = &r.state;
+        (j.best_loss, j.best_reliance, j.misses) = (s.best_loss, s.best_reliance, s.misses);
+        j.evaluations = s.evaluations.clone();
+        let expected = s.accepted_step.unwrap_or(s.start_step);
+        if model.step == expected {
+            if s.accepted_step.is_some() {
+                j.best = Some(model.clone());
+            }
+        } else if model.step > r.model.step && same_shape(&r.model, model) {
+            let (l, rel, _) = check(model)?;
+            (j.best_loss, j.best_reliance, j.misses) = (l, rel, 0);
+            j.best = Some(model.clone());
+        } else {
+            return Err("The model was changed after this reading was saved; start a new reading".into());
+        }
+        accepted_step = j.best.as_ref().map(|m| m.step);
+    }
     observer(&PretrainEvent::Started {
         train_documents: infos.iter().map(|i| i.train_documents).sum(),
         held_out_documents: infos.iter().map(|i| i.held_out_documents).sum(),
@@ -575,23 +714,30 @@ pub fn pretrain_mix(
         baseline_loss,
         baseline_dense_reliance,
         parts: infos,
+        resumed_from: resume.as_ref().map(|r| r.state.step),
     });
-    let mut best_reliance = baseline_dense_reliance;
 
-    let mut rng = Rng::new(cfg.seed);
-    let mut best: Option<Bicameral> = None;
-    let mut best_loss = baseline_loss;
-    let mut evaluations = Vec::new();
-    let (mut since_eval, mut since_n) = (0f64, 0usize);
-    let mut misses = 0;
+    let mut rng = Rng::new(resume.as_ref().map_or(cfg.seed, |r| r.state.rng));
+    let (mut since_eval, mut since_n) =
+        resume.as_ref().map_or((0., 0), |r| (r.state.since_eval, r.state.since_n));
     let (mut stopped, mut early_stop) = (false, false);
-    let mut tokens = 0u64;
+    let mut tokens = resume.as_ref().map_or(0, |r| r.state.tokens);
     // Interleaving: each step takes the corpus furthest behind its share.
-    let mut owed = vec![0f32; parts.len()];
+    let mut owed = resume.as_ref().map_or_else(|| vec![0f32; parts.len()], |r| r.state.owed.clone());
+    let first = resume.as_ref().map_or(0, |r| r.state.step);
+    let mut due = resume.as_ref().is_some_and(|r| r.state.due);
+    drop(resume);
+    let mut done = first;
+    let mut timer = Timer::new(recovery.every, first);
+    let mut ended = false;
     // Judges a measured checkpoint in order: accept it if it is better (and, in bicameral
     // reading, still uses Dense), report it, and say whether reading should stop early.
-    let mut judge = |m: Measured, observer: &mut dyn FnMut(&PretrainEvent)| -> Result<bool, String> {
+    let mut judge = |j: &mut ReadingJudge,
+                     m: Measured,
+                     observer: &mut dyn FnMut(&PretrainEvent)|
+     -> Result<bool, String> {
         let (held_out_loss, reliance, per) = m.check;
+        let (best_loss, best_reliance) = (j.best_loss, j.best_reliance);
         // Bicameral reading: a checkpoint that stopped using Dense is not accepted.
         let keeps_dense = !bicameral
             || best_reliance <= GUARDED_RELIANCE
@@ -608,13 +754,13 @@ pub fn pretrain_mix(
             ))
         };
         if accepted {
-            best_loss = held_out_loss;
-            best_reliance = reliance;
+            j.best_loss = held_out_loss;
+            j.best_reliance = reliance;
             on_accepted(&m.model)?;
-            best = Some(m.model);
-            misses = 0;
+            j.best = Some(m.model);
+            j.misses = 0;
         } else {
-            misses += 1;
+            j.misses += 1;
         }
         let part_evals: Vec<PartEvaluation> = parts
             .iter()
@@ -635,7 +781,7 @@ pub fn pretrain_mix(
             tokens: m.tokens,
             train_loss: m.train_loss,
             held_out_loss,
-            best_loss,
+            best_loss: j.best_loss,
             accepted,
             dense_reliance: reliance,
             sample_prompt: part_evals[0].sample_prompt.clone(),
@@ -644,8 +790,39 @@ pub fn pretrain_mix(
             reason,
         };
         observer(&PretrainEvent::Evaluated(e.clone()));
-        evaluations.push(e);
-        Ok(misses >= cfg.patience.max(1))
+        j.evaluations.push(e);
+        Ok(j.misses >= cfg.patience.max(1))
+    };
+    // The run's state for a recovery snapshot after `step` steps.
+    let state_at = |j: &ReadingJudge,
+                    step: u64,
+                    rng: &Rng,
+                    tokens: u64,
+                    owed: &[f32],
+                    since: (f64, usize),
+                    due: bool|
+     -> ReadingState {
+        ReadingState {
+            cfg: cfg.clone(),
+            data,
+            step,
+            steps,
+            tokens,
+            rng: rng.state(),
+            owed: owed.to_vec(),
+            new_words,
+            start_step,
+            accepted_step: j.best.as_ref().map(|m| m.step).or(accepted_step),
+            baseline_loss,
+            baseline_dense_reliance,
+            best_loss: j.best_loss,
+            best_reliance: j.best_reliance,
+            misses: j.misses,
+            since_eval: since.0,
+            since_n: since.1,
+            due,
+            evaluations: j.evaluations.clone(),
+        }
     };
     // Measures a checkpoint: held-out losses, Dense reliance and a sample per corpus.
     let measure = |model: Bicameral,
@@ -670,17 +847,16 @@ pub fn pretrain_mix(
     let mut trainer = super::Trainer::new(&current);
     std::thread::scope(|scope| -> Result<(), String> {
         let mut pending: Option<std::thread::ScopedJoinHandle<'_, Result<Measured, String>>> = None;
-        let mut due = false;
         let join = |h: std::thread::ScopedJoinHandle<'_, Result<Measured, String>>| {
             h.join().map_err(|_| "A held-out check failed".to_string())?
         };
-        for step in 0..steps {
+        for step in first..steps {
             if stop.load(Ordering::Acquire) {
                 stopped = true;
                 break;
             }
             let checked = pending.as_ref().is_some_and(|h| h.is_finished());
-            if checked && judge(join(pending.take().unwrap())?, observer)? {
+            if checked && judge(&mut j, join(pending.take().unwrap())?, observer)? {
                 early_stop = true;
                 break;
             }
@@ -720,7 +896,7 @@ pub fn pretrain_mix(
             if due && (pending.is_none() || step + 1 == steps || !super::gpu_checks()) {
                 due = false;
                 if let Some(h) = pending.take() {
-                    if judge(join(h)?, observer)? {
+                    if judge(&mut j, join(h)?, observer)? {
                         early_stop = true;
                         break;
                     }
@@ -751,20 +927,37 @@ pub fn pretrain_mix(
                     pending = Some(
                         scope.spawn(move || measure(snapshot, step + 1, tokens, train_loss, Some(measured))),
                     );
-                } else if judge(measure(snapshot, step + 1, tokens, train_loss, None)?, observer)? {
+                } else if judge(&mut j, measure(snapshot, step + 1, tokens, train_loss, None)?, observer)? {
                     early_stop = true;
                     break;
                 }
             }
+            done = step + 1;
+            // A recovery snapshot, between checks (never while one is being measured).
+            if recovery.wanted() && pending.is_none() && done < steps && timer.due(done) {
+                trainer.sync(&mut current)?;
+                let state = state_at(&j, done, &rng, tokens, &owed, (since_eval, since_n), due);
+                recovery.take(Snapshot { model: &current, extra: None, state: &state, stopped: false })?;
+                timer.reset(done);
+            }
         }
         if let Some(h) = pending.take() {
             // The last checkpoint (or the one being checked when reading stopped) still counts.
-            if judge(join(h)?, observer)? && !stopped {
-                early_stop = true;
+            if judge(&mut j, join(h)?, observer)? {
+                ended = true;
+                early_stop |= !stopped;
             }
         }
         Ok(())
     })?;
+    // Stopped by the user: a snapshot to continue from later (unless the last check ended the
+    // run anyway).
+    if stopped && !ended && recovery.wanted() {
+        trainer.sync(&mut current)?;
+        let state = state_at(&j, done, &rng, tokens, &owed, (since_eval, since_n), due);
+        recovery.take(Snapshot { model: &current, extra: None, state: &state, stopped: true })?;
+    }
+    let ReadingJudge { best, best_loss, evaluations, .. } = j;
     let accepted = best.is_some();
     observer(&PretrainEvent::Finished { accepted, best_loss, tokens, stopped, early_stop });
     Ok(PretrainResult {

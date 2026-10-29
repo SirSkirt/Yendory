@@ -19,6 +19,7 @@ pub mod listening;
 pub mod memory;
 pub mod practice;
 pub mod program;
+pub mod recovery;
 pub mod reflect;
 pub mod review;
 pub mod reward;
@@ -39,6 +40,10 @@ pub struct Rng(u64);
 impl Rng {
     pub fn new(seed: u64) -> Self {
         Rng(seed)
+    }
+    /// The generator's state; `Rng::new(state)` carries on from it (recovery snapshots).
+    pub fn state(&self) -> u64 {
+        self.0
     }
     pub fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);

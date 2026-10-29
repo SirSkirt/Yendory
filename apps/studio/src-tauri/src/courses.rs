@@ -1027,6 +1027,7 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
         Ok((a.meta.clone(), a.model.clone(), a.archive.clone()))
     })?;
     no_waiting_checkpoints(&app, &meta.id)?;
+    recovery::no_unfinished_runs(&app, &meta.id, Some(&plan.id))?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching".into());
     }
@@ -1073,7 +1074,7 @@ pub fn start_plan(app: AppHandle, studio: State<Studio>, id: String) -> Res<Plan
 #[allow(clippy::too_many_arguments)]
 fn run_step(
     app: &AppHandle,
-    plan_id: &str,
+    (plan_id, plan_name): (&str, &str),
     step_id: &str,
     step: &PlanStep,
     meta: &Meta,
@@ -1102,9 +1103,36 @@ fn run_step(
         end_step: 0,
         finished: now(),
     };
+    // The step's own unfinished run continues from its recovery point (Resume on the Planner is
+    // the owner's go-ahead); one that never reached a recovery point starts again.
+    let dir = model_dir(app, &meta.id)?;
+    let plan_ref =
+        recovery::PlanRef { plan_id: plan_id.into(), step_id: step_id.into(), plan_name: plan_name.into() };
+    // A step changed since its run stopped starts again with its new settings.
+    let options_now = match step {
+        PlanStep::Reading { options, .. } => serde_json::to_value(options),
+        PlanStep::Conversation { options, .. } => serde_json::to_value(options),
+    }
+    .ok();
+    let earlier = recovery::plan_step_run(&dir, plan_id, step_id);
+    let fits = |r: &recovery::RunRecord| r.resumable() && Some(&r.options) == options_now.as_ref();
+    if let Some(mut r) = earlier.clone().filter(|r| !fits(r)) {
+        let why = if r.resumable() {
+            "the plan's step was changed, so it starts again"
+        } else {
+            "interrupted before its first recovery point"
+        };
+        recovery::end(&dir, &mut r, recovery::RunStatus::Discarded, Some(why.into()))?;
+    }
+    let earlier = earlier.filter(fits);
     match step {
         PlanStep::Reading { options, .. } => {
             let job = super::reading::reading_job(app, options, meta.word_limit)?;
+            let mut ctx = recovery::RunContext { plan: Some(plan_ref), resume: None };
+            if let Some(r) = earlier {
+                let (resume, ..) = recovery::load_snapshot(&dir, &r)?;
+                ctx.resume = Some((r, resume));
+            }
             let throttle = std::cell::RefCell::new(BatchThrottle::default());
             let emit = |e: &yendory_engine::learn::corpus::PretrainEvent| {
                 if let yendory_engine::learn::corpus::PretrainEvent::Batch { step, steps, .. } = e {
@@ -1114,12 +1142,16 @@ fn run_step(
                 }
                 send(serde_json::to_value(e).unwrap_or_default());
             };
-            let f =
-                guarded(|| super::reading::run_reading(app, &job, meta.clone(), model.clone(), stop, &emit))?;
+            let f = super::reading::run_reading(app, &job, meta.clone(), model.clone(), stop, &emit, ctx)?;
             Ok(result(f.accepted, f.tokens, f.baseline_loss, f.best_loss, f.stopped, None))
         }
         PlanStep::Conversation { options, .. } => {
             let job = super::conversation::conversation_job(app, options)?;
+            let mut ctx = recovery::RunContext { plan: Some(plan_ref), resume: None };
+            if let Some(r) = earlier {
+                let (resume, ..) = recovery::load_snapshot(&dir, &r)?;
+                ctx.resume = Some((r, resume));
+            }
             let throttle = std::cell::RefCell::new(BatchThrottle::default());
             let emit = |e: &yendory_engine::learn::conversation::ConversationEvent| {
                 if let yendory_engine::learn::conversation::ConversationEvent::Batch { step, steps, .. } = e {
@@ -1129,17 +1161,16 @@ fn run_step(
                 }
                 send(serde_json::to_value(e).unwrap_or_default());
             };
-            let f = guarded(|| {
-                super::conversation::run_conversation(
-                    app,
-                    &job,
-                    meta.clone(),
-                    model.clone(),
-                    archive.to_vec(),
-                    stop,
-                    &emit,
-                )
-            })?;
+            let f = super::conversation::run_conversation(
+                app,
+                &job,
+                meta.clone(),
+                model.clone(),
+                archive.to_vec(),
+                stop,
+                &emit,
+                ctx,
+            )?;
             Ok(result(f.accepted, f.tokens, f.baseline_loss, f.best_loss, f.stopped, f.stuck))
         }
     }
@@ -1173,7 +1204,7 @@ fn run_plan(
                 );
                 break;
             }
-            let outcome = run_step(app, &plan.id, &entry, &step, &meta, &model, &archive, stop);
+            let outcome = run_step(app, (&plan.id, &plan.name), &entry, &step, &meta, &model, &archive, stop);
             // The step saved what it accepted on the open model: continue from there.
             let studio = app.state::<Studio>();
             if let Ok((m, a, mm)) =
@@ -1191,7 +1222,7 @@ fn run_plan(
                     if stopped {
                         plan.status = PlanStatus::Stopped;
                         plan.message = Some(format!(
-                            "Stopped during {}; Resume runs this step again from the best checkpoint it kept",
+                            "Stopped during {}; Resume continues this step from where it stopped",
                             step.label()
                         ));
                         break;

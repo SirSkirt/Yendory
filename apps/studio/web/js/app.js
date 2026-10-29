@@ -493,6 +493,7 @@ function setTeaching(on) {
   renderLessons();
   renderCorpora();
   window.onTeachingChanged?.(on);
+  if (!on) window.refreshUnfinished?.(false).catch(e => log("ERROR", e));
 }
 
 let progress = { files: 1, index: 0, epochs: 1, candidates: 1, candidate: 0, epoch: 1 };
@@ -552,6 +553,7 @@ function teachOptions() {
 $("teach").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
   const options = teachOptions();
+  if (!await window.beforeNewRun()) return;
   progress = { rateSet: options.learningRate, files: lessonsList.length, done: 0, index: 0, epochs: options.epochs, candidates: stageFoci(options.education, options.foundation).length, foci: stageFoci(options.education, options.foundation), candidate: 0, epoch: 1, attempt: "" };
   for (const k of Object.keys(fileState)) delete fileState[k];
   $("candidateTable").tBodies[0].replaceChildren();
@@ -1054,6 +1056,7 @@ window.readingOptions = readingOptions;
 $("read").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
   const options = readingOptions();
+  if (!await window.beforeNewRun()) return;
   const parts = chosen();
   readParts = parts;
   $("evalTable").tBodies[0].replaceChildren();
@@ -1081,6 +1084,13 @@ function onReadEvent(e) {
     // Shown in the Reading card; also kept in the diagnostics log.
     log("INFO", `Reading: ${fmt(e.train_documents)} documents (${fmt(e.train_tokens)} tokens), ${fmt(e.held_out_documents)} held out; ${fmt(e.new_words)} new word units; ${fmt(e.steps)} steps${parts ? " · " + parts : ""}. Starting held-out loss ${e.baseline_loss.toFixed(4)}.`);
     $("evalTable").tBodies[0].append(el("tr", {}, el("td", { class: "num" }, "0"), el("td", {}, ""), el("td", { class: "num" }, e.baseline_loss.toFixed(4)), el("td", { class: "num" }, (e.baseline_dense_reliance ?? 0).toFixed(3)), el("td", {}, "starting point"), el("td", {}, "")));
+    if (e.resumed_from != null) {
+      // A continued run: the checks before its recovery point, then a marker.
+      for (const ev of pendingReadPrevious || []) onReadEvent({ type: "evaluated", ...ev });
+      pendingReadPrevious = null;
+      $("evalTable").tBodies[0].append(el("tr", {}, el("td", { colspan: 6, class: "note" }, `Continued from the recovery point after step ${fmt(e.resumed_from)} of ${fmt(e.steps)}`)));
+      log("INFO", `Reading continues from its recovery point after step ${fmt(e.resumed_from)}.`);
+    }
   } else if (e.type === "batch") {
   } else if (e.type === "evaluated") {
     $("evalTable").tBodies[0].append(el("tr", { class: e.accepted ? "current-row" : "" },
@@ -1304,6 +1314,118 @@ async function loadHistory() {
 }
 $("refreshHistory").addEventListener("click", safe(loadHistory, "Library"));
 
+// ---- unfinished training (recovery points) --------------------------------------------------
+const RUN_KIND = { reading: "Reading", conversation: "Conversation practice" };
+function runDetails(r) {
+  const pct = r.steps ? ` (${Math.round(100 * r.step / r.steps)}%)` : "";
+  const state = r.interrupted ? "Interrupted (Studio closed, crashed or the computer restarted while it trained)"
+    : r.status === "stopped" ? "Stopped" : r.status === "failed" ? `Ended with an error: ${r.error}` : r.status;
+  const lines = [
+    `${state}.`,
+    `Started ${when(r.started)} with Studio ${r.appVersion}${r.resumed ? `; continued ${r.resumed} time(s)` : ""}.`,
+    r.snapshot ? `Last recovery point: ${when(r.snapshot.time)}, after step ${fmt(r.snapshot.step)} of ${fmt(r.steps)}${pct}, ${fmt(r.tokens)} tokens.`
+      : "It ended before its first recovery point, so there is nothing to continue; the accepted model is safe.",
+    r.datasets.length ? `Datasets: ${r.datasets.map(d => d.name).join(", ")}.` : "",
+    r.plan ? `A step of the plan "${r.plan.planName}": Resume on the Planner continues it.` : "",
+    r.failedSaves ? `${r.failedSaves} recovery point(s) could not be saved (${r.saveError}).` : "",
+  ];
+  return lines.filter(Boolean);
+}
+async function discardRun(r) {
+  const yes = await askYes(`Discard the unfinished ${RUN_KIND[r.kind] || r.kind} of ${r.modelName}? Its recovery points are deleted and it cannot be continued. The model keeps everything it accepted so far.`);
+  if (!yes) return false;
+  await invoke("discard_run", { modelId: r.modelId, runId: r.id });
+  say("Discarded the unfinished run; the accepted model is unchanged.");
+  return true;
+}
+let pendingReadPrevious = null;
+async function continueRun(r) {
+  if (r.plan) { go("planner"); say(`Resume the plan "${r.plan.planName}" to continue its step from the recovery point.`); return; }
+  if (teaching) throw new Error("Wait until the training now running has finished (or stop it) first");
+  const info = await invoke("resume_run", { modelId: r.modelId, runId: r.id });
+  showActive(info.meta);
+  if (info.note) log("WARN", info.note);
+  if (info.kind === "reading") {
+    go("reading");
+    $("evalTable").tBodies[0].replaceChildren();
+    $("readEntry").hidden = false;
+    cpuFallback = false;
+    $("readTitle").textContent = `${info.meta.name} continues ${info.label.replace(/^Reading: /, "")} from step ${fmt(info.step)} of ${fmt(info.steps)}${deviceLabel()}`;
+    pendingReadPrevious = info.previous || [];
+    readStart = 0;
+    setTeaching(true);
+    say("Continuing the reading from its recovery point…");
+  } else {
+    window.resumeConversation?.(info);
+  }
+  refreshUnfinished(false).catch(e => log("ERROR", e));
+}
+async function refreshUnfinished(startup) {
+  const runs = await invoke("unfinished_runs");
+  $("unfinishedBox").hidden = !runs.length;
+  $("unfinishedList").replaceChildren(...runs.map(r => {
+    const cont = el("button", { type: "button", class: "primary small" }, r.plan ? "Open the Planner" : "Continue");
+    cont.disabled = (!r.resumable && !r.plan) || teaching;
+    cont.addEventListener("click", safe(() => continueRun(r), "Continue"));
+    const drop = el("button", { type: "button", class: "small quiet" }, "Discard…");
+    drop.disabled = teaching;
+    drop.addEventListener("click", safe(async () => { if (await discardRun(r)) await refreshUnfinished(false); }, "Discard"));
+    return el("div", { class: "run-card" }, el("b", {}, `${RUN_KIND[r.kind] || r.kind} · ${r.modelName}`), ` — ${r.label}`,
+      ...runDetails(r).map(t => el("div", { class: "note" }, t)), el("div", { class: "actions" }, cont, drop));
+  }));
+  if (!startup) return;
+  // An interrupted run is never continued or discarded without asking.
+  for (const r of runs.filter(x => x.interrupted)) {
+    const content = el("div", {}, el("p", {}, el("b", {}, `${RUN_KIND[r.kind] || r.kind} of ${r.modelName}`), ` — ${r.label}`),
+      ...runDetails(r).map(t => el("p", { class: "note" }, t)),
+      el("p", { class: "note" }, "Continuing uses the run's own settings and data (both are checked first) and its optimizer state, so it carries on where the recovery point was. The accepted model stays as it is until a check accepts a better one."));
+    const buttons = r.resumable && !r.plan ? [["later", "Decide later"], ["discard", "Discard…"], ["continue", "Continue training", true]]
+      : r.plan ? [["later", "Decide later"], ["discard", "Discard…"], ["plan", "Open the Planner", true]]
+      : [["later", "Decide later"], ["discard", "Discard…", true]];
+    const choice = await choose("Interrupted training detected", content, buttons);
+    if (choice === "continue") { await continueRun(r); break; }
+    if (choice === "plan") { await continueRun(r); break; }
+    if (choice === "discard") await discardRun(r);
+  }
+  // Classroom sessions keep their own recovery (accepted epochs in the model's checkpoints).
+  for (const c of await invoke("interrupted_classroom").catch(() => [])) {
+    const content = el("div", {}, el("p", {}, `${c.modelName} has ${c.checkpoints} accepted epoch checkpoint(s) from a Classroom session that did not finish (newest ${when(c.newest)}).`),
+      el("p", { class: "note" }, "Open the model to restore the newest checkpoint (the next run can continue the interrupted schedule) or to discard them. Nothing is changed until you choose."));
+    const choice = await choose("Interrupted Classroom session", content, [["later", "Decide later"], ["open", "Open the model", true]]);
+    if (choice === "open") {
+      if (teaching) break;
+      showActive(await invoke("open_model", { id: c.modelId }));
+      go("models");
+      break;
+    }
+  }
+  await refreshUnfinished(false);
+}
+window.refreshUnfinished = refreshUnfinished;
+// Before new training on the open model: an unfinished run of it (stopped, interrupted or failed)
+// is continued or discarded first, as the owner chooses. Resolves true to go on with the new run.
+window.beforeNewRun = async () => {
+  const runs = (await invoke("unfinished_runs")).filter(r => r.modelId === active?.id);
+  for (const r of runs) {
+    const content = el("div", {}, el("p", {}, `${active.name} has an unfinished ${(RUN_KIND[r.kind] || r.kind).toLowerCase()}: ${r.label}.`),
+      ...runDetails(r).map(t => el("p", { class: "note" }, t)),
+      el("p", { class: "note" }, "New training would change the model under it, so it could no longer be continued. Discarding deletes only its recovery points; the model keeps everything it accepted."));
+    const buttons = [["cancel", "Cancel"], ["discard", "Discard it and start the new run"]];
+    if (r.resumable || r.plan) buttons.push(["continue", r.plan ? "Open the Planner" : "Continue it instead", true]);
+    const choice = await choose("Unfinished training", content, buttons);
+    if (choice === "continue") { await continueRun(r); return false; }
+    if (choice !== "discard") return false;
+    await invoke("discard_run", { modelId: r.modelId, runId: r.id });
+  }
+  if (runs.length) await refreshUnfinished(false);
+  return true;
+};
+$("recoveryMinutes").addEventListener("change", safe(async () => {
+  const v = Number($("recoveryMinutes").value);
+  $("recoveryMinutes").value = await invoke("set_recovery_minutes", { minutes: Math.max(0, Math.min(240, Math.round(v))) });
+  say(v ? `A recovery point is saved every ${v} minutes while reading or practising conversations.` : "Recovery points are saved only when a run is stopped.");
+}, "Recovery"));
+
 // ---- start ---------------------------------------------------------------------------------
 async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
@@ -1322,6 +1444,8 @@ async function boot() {
   invoke("download_queue").then(renderDownloadQueue).catch(e => log("ERROR", e));
   await tauri.event.listen("benchmark-progress", ev => { $("benchNote").textContent = `Benchmarking: ${ev.payload}…`; });
   await tauri.event.listen("device-notice", ev => onDeviceNotice(ev.payload));
+  await tauri.event.listen("recovery-notice", ev => { log("WARN", ev.payload); say(ev.payload); });
+  invoke("recovery_minutes").then(m => { $("recoveryMinutes").value = m; }).catch(e => log("ERROR", e));
   sourcesList = await invoke("corpus_sources");
   renderSources();
   familiesList = await invoke("practice_families");
@@ -1341,5 +1465,6 @@ async function boot() {
   await refreshModels();
   await refreshLessons();
   say(`Yendory Studio ${s.engine} · every reply and measurement comes from the model itself.`);
+  await refreshUnfinished(!s.teaching).catch(e => log("ERROR", e));
 }
 document.addEventListener("DOMContentLoaded", safe(boot, "Startup"));

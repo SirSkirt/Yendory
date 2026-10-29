@@ -30,6 +30,7 @@ mod memory;
 mod neuro;
 mod practice;
 mod reading;
+mod recovery;
 mod reflection;
 mod review;
 mod rewards;
@@ -147,6 +148,8 @@ struct Studio {
     stop: Arc<AtomicBool>,
     /// The download running and the ones waiting their turn (one runs at a time).
     downloads: Mutex<reading::DownloadQueue>,
+    /// The run record of the reading or conversation training now (recovery.rs).
+    run: Mutex<Option<String>>,
     cancel_download: Arc<AtomicBool>,
     /// A chat reply is being written (one at a time), and the request to stop it.
     chatting: AtomicBool,
@@ -190,13 +193,23 @@ fn model_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
     Ok(models_dir(app)?.join(id))
 }
 
+/// Writes a file so that a crash or power loss leaves either the old file or the new one, never
+/// a mix: a temporary file is written and flushed to the disk, then renamed over the old one (on
+/// Linux and macOS the folder is flushed too, so the rename itself is on the disk).
 fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension("tmp");
     let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     drop(f);
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
 }
 
 fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
@@ -431,6 +444,7 @@ fn model_cost(size: String, limit: Option<usize>, context: usize) -> Res<ModelCo
 #[tauri::command]
 fn set_context(app: AppHandle, studio: State<Studio>, id: String, context: usize) -> Res<Meta> {
     not_teaching(&studio)?;
+    recovery::no_unfinished_runs(&app, &id, None)?;
     let mut guard = studio.active.lock().unwrap();
     let active = guard.as_mut().filter(|a| a.meta.id == id).ok_or("Open the model first")?;
     let model = active
@@ -483,6 +497,7 @@ async fn measure_context(studio: State<'_, Studio>, size: String, context: usize
 #[tauri::command]
 fn set_word_limit(app: AppHandle, studio: State<Studio>, id: String, limit: Option<usize>) -> Res<Meta> {
     not_teaching(&studio)?;
+    recovery::no_unfinished_runs(&app, &id, None)?;
     set_limit(&app, &studio, &id, limit)
 }
 
@@ -979,9 +994,14 @@ async fn measure_speed(app: AppHandle, studio: State<'_, Studio>, size: String) 
 
 #[tauri::command]
 fn open_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<Meta> {
-    not_teaching(&studio)?;
-    let dir = model_dir(&app, &id)?;
-    let mut meta = load_meta(&app, &id)?;
+    open_model_in(&app, &studio, &id)
+}
+
+/// Opens a model (it becomes the active one).
+fn open_model_in(app: &AppHandle, studio: &Studio, id: &str) -> Res<Meta> {
+    not_teaching(studio)?;
+    let dir = model_dir(app, id)?;
+    let mut meta = load_meta(app, id)?;
     let model = Bicameral::load(dir.join("model.nnova2"))?;
     meta.slots = model.word_capacity();
     meta.context = model.config.max_tokens;
@@ -1575,6 +1595,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     let (meta, model, archive) =
         with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone(), a.archive.clone())))?;
     no_waiting_checkpoints(&app, &meta.id)?;
+    recovery::no_unfinished_runs(&app, &meta.id, None)?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching".into());
     }
@@ -2018,6 +2039,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            recovery::unfinished_runs,
+            recovery::interrupted_classroom,
+            recovery::resume_run,
+            recovery::discard_run,
+            recovery::recovery_minutes,
+            recovery::set_recovery_minutes,
             chat::chats,
             chat::chat_open,
             chat::chat_new,

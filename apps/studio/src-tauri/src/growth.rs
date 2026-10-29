@@ -401,6 +401,8 @@ pub fn expand_model(
 ) -> Res<GrowthView> {
     let (rows, tokens) = batch(rows, tokens);
     not_teaching(&studio)?;
+    let id = with_active(&studio, |a| Ok(a.meta.id.clone()))?;
+    recovery::no_unfinished_runs(&app, &id, None)?;
     let mut guard = studio.active.lock().unwrap();
     let a = guard.as_mut().ok_or("Open or create a model first")?;
     if a.meta.growth.mode == GrowthMode::Off {
@@ -431,6 +433,8 @@ pub fn expand_model(
 #[tauri::command]
 pub fn roll_back_growth(app: AppHandle, studio: State<Studio>) -> Res<GrowthView> {
     not_teaching(&studio)?;
+    let id = with_active(&studio, |a| Ok(a.meta.id.clone()))?;
+    recovery::no_unfinished_runs(&app, &id, None)?;
     let mut guard = studio.active.lock().unwrap();
     let a = guard.as_mut().ok_or("Open or create a model first")?;
     let dir = model_dir(&app, &a.meta.id)?;

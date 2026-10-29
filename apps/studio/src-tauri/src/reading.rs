@@ -8,7 +8,7 @@ use crate::sources::{conversation_sources, gutenberg_book, screen_of, sources, C
 use std::time::Duration;
 use yendory_engine::learn::autogrow::Check;
 use yendory_engine::learn::corpus::{
-    pretrain_mix, Category, Corpus, MixPart, PretrainConfig, PretrainEvent, END_OF_TEXT,
+    pretrain_mix_with, Category, Corpus, MixPart, PretrainConfig, PretrainEvent, ReadingState, END_OF_TEXT,
 };
 use yendory_engine::learn::generate::{generate, Family, GenerateConfig};
 
@@ -1049,9 +1049,12 @@ pub(crate) struct ReadFinished {
 /// A reading checked and ready to run.
 pub(crate) struct ReadingJob {
     infos: Vec<(CorpusInfo, f32, Option<EducationStage>)>,
-    cfg: PretrainConfig,
+    pub(crate) cfg: PretrainConfig,
     mode: &'static str,
     records: Vec<ReadPartRecord>,
+    /// The options as given, and a description (for the run record).
+    options: serde_json::Value,
+    pub(crate) label: String,
 }
 
 /// Checks reading options (and that the corpora are on this device) for a model.
@@ -1105,7 +1108,9 @@ pub(crate) fn reading_job(
             attribution: i.attribution.clone(),
         })
         .collect();
-    Ok(ReadingJob { infos, cfg, mode, records })
+    let label = reading_label(app, options);
+    let options = serde_json::to_value(options).map_err(|e| e.to_string())?;
+    Ok(ReadingJob { infos, cfg, mode, records, options, label })
 }
 
 /// A short description of a reading, for plans.
@@ -1120,6 +1125,9 @@ pub(crate) fn reading_label(app: &AppHandle, options: &ReadOptions) -> String {
 
 /// Runs a reading on the open model (on the calling thread), saving every accepted checkpoint,
 /// recording it in the model's metadata and history. `emit` receives every event.
+///
+/// The run has a record and recovery points (recovery.rs); with `ctx.resume` it continues a run
+/// from its recovery point, with that run's own settings.
 pub(crate) fn run_reading(
     app: &AppHandle,
     job: &ReadingJob,
@@ -1127,15 +1135,42 @@ pub(crate) fn run_reading(
     model: Bicameral,
     stop: &AtomicBool,
     emit: &dyn Fn(&PretrainEvent),
+    mut ctx: recovery::RunContext<ReadingState>,
+) -> Res<ReadFinished> {
+    let datasets = job
+        .infos
+        .iter()
+        .map(|(i, ..)| recovery::DatasetRef { name: i.name.clone(), sha256: i.sha256.clone() })
+        .collect();
+    let (live, resume) =
+        recovery::live_run(app, "reading", &meta, &job.label, &job.options, datasets, &mut ctx)?;
+    let out = guarded(|| read_with(app, job, meta, model, stop, emit, &live, resume));
+    recovery::close_run(app, &live, out.as_ref().map(|f| f.stopped).map_err(String::as_str));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_with(
+    app: &AppHandle,
+    job: &ReadingJob,
+    meta: Meta,
+    model: Bicameral,
+    stop: &AtomicBool,
+    emit: &dyn Fn(&PretrainEvent),
+    live: &recovery::LiveRun,
+    resume: Option<yendory_engine::learn::recovery::Resume<ReadingState>>,
 ) -> Res<ReadFinished> {
     let studio = app.state::<Studio>();
     let id = meta.id.clone();
+    // A continued run keeps the settings it was started with (its seed among them).
+    let cfg = resume.as_ref().map_or_else(|| job.cfg.clone(), |r| r.state.cfg.clone());
     let corpora: Vec<&CorpusInfo> = job.infos.iter().map(|(i, _, _)| i).collect();
     append_history(
         app,
         &meta.id,
         serde_json::json!({"type": "reading_started", "time": now(), "corpus": corpora.first(), "corpora": corpora,
-            "parts": job.records, "mode": job.mode, "options": job.cfg}),
+            "parts": job.records, "mode": job.mode, "options": cfg, "run": live.id(),
+            "resumedFrom": resume.as_ref().map(|r| r.state.step)}),
     );
     let current = Arc::new(Mutex::new(meta.clone()));
     let mut parts = Vec::new();
@@ -1173,7 +1208,20 @@ pub(crate) fn run_reading(
         }
         Ok(())
     };
-    let r = pretrain_mix(&model, &parts, &job.cfg, &mut observer, &mut on_accepted, stop)?;
+    let mut on_snapshot = |s: yendory_engine::learn::recovery::Snapshot<'_, ReadingState>| {
+        live.snapshot(app, &s, (s.state.step, s.state.steps, s.state.tokens));
+        Ok(())
+    };
+    let mut recovery = yendory_engine::learn::recovery::Recovery {
+        every: yendory_engine::learn::recovery::RecoveryEvery {
+            seconds: recovery::interval_minutes(app) * 60,
+            steps: 0,
+        },
+        on_snapshot: Some(&mut on_snapshot),
+        resume,
+    };
+    let r = pretrain_mix_with(&model, &parts, &cfg, &mut observer, &mut on_accepted, stop, &mut recovery)?;
+    drop(recovery);
     drop(parts);
     let mut meta = current.lock().unwrap().clone();
     meta.read.push(ReadRecord {
@@ -1204,14 +1252,8 @@ pub(crate) fn run_reading(
                 .map(|e| Check { train_loss: e.train_loss, held_out_loss: e.held_out_loss })
                 .collect();
             let dir = model_dir(app, &meta.id)?;
-            decision = growth::automatic_after_reading(
-                &dir,
-                a,
-                &checks,
-                r.early_stop,
-                job.cfg.batch_size,
-                job.cfg.window,
-            );
+            decision =
+                growth::automatic_after_reading(&dir, a, &checks, r.early_stop, cfg.batch_size, cfg.window);
             meta = a.meta.clone();
         }
     }
@@ -1219,7 +1261,7 @@ pub(crate) fn run_reading(
         app,
         &id,
         serde_json::json!({"type": "reading_finished", "time": now(), "accepted": r.accepted,
-            "tokens": r.tokens, "stopped": r.stopped, "error": null}),
+            "tokens": r.tokens, "stopped": r.stopped, "error": null, "run": live.id()}),
     );
     Ok(ReadFinished {
         growth: decision,
@@ -1238,6 +1280,19 @@ pub(crate) fn run_reading(
 pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) -> Res<()> {
     let (meta, model) = with_active(&studio, |a| Ok((a.meta.clone(), a.model.clone())))?;
     let job = reading_job(&app, &options, meta.word_limit)?;
+    recovery::no_unfinished_runs(&app, &meta.id, None)?;
+    start_reading(app, &studio, job, meta, model, recovery::RunContext::new())
+}
+
+/// Starts a reading (new, or continuing a run) on its own thread.
+pub(crate) fn start_reading(
+    app: AppHandle,
+    studio: &Studio,
+    job: ReadingJob,
+    meta: Meta,
+    model: Bicameral,
+    ctx: recovery::RunContext<ReadingState>,
+) -> Res<()> {
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Already teaching or reading".into());
     }
@@ -1249,7 +1304,7 @@ pub fn read_corpus(app: AppHandle, studio: State<Studio>, options: ReadOptions) 
         let emit = |e: &PretrainEvent| {
             let _ = app.emit("read-event", e);
         };
-        let finished = guarded(|| run_reading(&app, &job, meta, model, &stop, &emit)).unwrap_or_else(|e| {
+        let finished = run_reading(&app, &job, meta, model, &stop, &emit, ctx).unwrap_or_else(|e| {
             append_history(
                 &app,
                 &id,

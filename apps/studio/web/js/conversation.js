@@ -166,6 +166,7 @@
       (r.wrong_name ? ` · other name ${r.wrong_name}` : "") + (r.assistant ? ` · assistant's voice ${r.assistant}` : ""));
   }
   let baseline = null;
+  let pendingPrevious = null;
   function onEvent(e) {
     if (e.type === "started") {
       baseline = e;
@@ -188,6 +189,13 @@
         el("td", { class: "num" }, e.classroom_total ? `${fmt(e.baseline_classroom)} / ${fmt(e.classroom_total)}` : "—"),
         el("td", { class: "num" }, e.baseline_reading != null ? e.baseline_reading.toFixed(3) : "—"),
         el("td", {}, "starting point"), el("td", {}, checksView(e.baseline_reply_checks))));
+      if (e.resumed_from != null) {
+        // A continued run: the checks before its recovery point, then a marker.
+        for (const c of pendingPrevious || []) onEvent({ type: "checked", ...c });
+        pendingPrevious = null;
+        body.prepend(el("tr", {}, el("td", { colspan: 10, class: "note" }, `Continued from the recovery point after step ${fmt(e.resumed_from)} of ${fmt(e.steps)}`)));
+        log("INFO", `Conversation practice continues from its recovery point after step ${fmt(e.resumed_from)}.`);
+      }
     } else if (e.type === "batch") {
       $("convBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
       const secs = (Date.now() - started) / 1000;
@@ -270,7 +278,9 @@
 
   $("converse").addEventListener("click", safe(async () => {
     if (!active) throw new Error("Open or create a model first");
-    await invoke("converse", { options: options() });
+    const o = options();
+    if (!await window.beforeNewRun()) return;
+    await invoke("converse", { options: o });
     started = Date.now();
     setTeaching(true);
     $("stopConverse").disabled = false;
@@ -281,6 +291,20 @@
     $("convChecks").tBodies[0].replaceChildren();
     say("Practising conversations…");
   }, "Conversation"));
+  // Continuing a run from its recovery point (§ 1 Models, Unfinished training).
+  window.resumeConversation = info => {
+    go("conversation");
+    started = Date.now();
+    setTeaching(true);
+    $("stopConverse").disabled = false;
+    $("convEntry").hidden = false;
+    $("convBar").style.width = (100 * info.step / Math.max(1, info.steps)).toFixed(1) + "%";
+    $("convTitle").textContent = `Continuing: ${info.label} (from step ${fmt(info.step)} of ${fmt(info.steps)})`;
+    $("convLine").textContent = "Reading the datasets and checking that they match the recovery point.";
+    $("convChecks").tBodies[0].replaceChildren();
+    pendingPrevious = info.previous || [];
+    say("Continuing conversation practice from its recovery point…");
+  };
   $("stopConverse").addEventListener("click", safe(async () => { await invoke("stop_teaching"); say("Stopping after this batch…"); }, "Stop"));
   $("convCancelDownload").addEventListener("click", () => invoke("cancel_download").catch(e => log("ERROR", e)));
   $("convAddCourse").addEventListener("click", () => {

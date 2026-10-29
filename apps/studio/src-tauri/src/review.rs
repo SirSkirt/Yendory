@@ -269,6 +269,7 @@ pub fn train_review(
         return Err("This review was already trained".into());
     }
     let (items, meta, model, archive) = ready(&app, &studio, &s)?;
+    recovery::no_unfinished_runs(&app, &meta.id, None)?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Wait until teaching or reading has finished".into());
     }

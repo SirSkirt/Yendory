@@ -41,6 +41,17 @@
       <span class="note" id="updateNote">Studio looks for a newer build when it starts. Updating installs over this version and keeps your models, datasets, chats and settings.</span>
     </div>
 
+    <div class="entry" id="unfinishedBox" hidden>
+      <h3>Unfinished training</h3>
+      <p class="note">Reading and Conversation save a recovery point on an interval and when stopped: the working model with its optimizer state and the run's position (step, random draws, best loss, curriculum stage). Continuing picks the run up where that point was, with the settings it was started with; the accepted model is never replaced by a recovery point. Nothing here continues or is deleted unless you choose it.</p>
+      <div id="unfinishedList"></div>
+    </div>
+    <div class="line-form">
+      <label for="recoveryMinutes">Recovery point every</label>
+      <input type="number" id="recoveryMinutes" min="0" max="240" step="1" value="10" class="inline-num">
+      <span class="note">minutes while reading or practising conversations (0: only when stopped). A recovery point is about the size of the model file (which holds the optimizer state too); a run keeps two.</span>
+    </div>
+
     <div class="entry" id="activeEntry" hidden>
       <h3 id="activeName">—</h3>
       <table class="figures">

@@ -232,6 +232,31 @@ function modal(message, withInput, initial) {
     if (input) { input.focus(); input.select(); } else ok.focus();
   });
 }
+/** A dialog with a title, content and buttons ([key, label, primary?]); resolves the key of the
+ *  button chosen, or null (Escape or a click outside). */
+function choose(title, content, buttons) {
+  return new Promise(resolve => {
+    const before = document.activeElement;
+    const btns = buttons.map(([key, label, primary]) => {
+      const b = el("button", primary ? { class: "primary" } : {}, label);
+      b.addEventListener("click", () => done(key));
+      return b;
+    });
+    const overlay = el("div", { class: "modal" }, el("div", { class: "modal-box wide", role: "dialog", "aria-modal": "true" },
+      el("h3", {}, title), content, el("div", { class: "actions" }, ...btns)));
+    const done = key => {
+      overlay.remove();
+      document.removeEventListener("keydown", esc, true);
+      before?.focus?.();
+      resolve(key);
+    };
+    const esc = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); } };
+    overlay.addEventListener("click", e => { if (e.target === overlay) done(null); });
+    document.addEventListener("keydown", esc, true);
+    document.body.append(overlay);
+    (btns.find((_, i) => buttons[i][2]) || btns[0])?.focus();
+  });
+}
 /** Resolves true (OK) or false (Cancel). */
 const askYes = message => modal(message, false);
 /** Resolves the text entered, or null (Cancel). */

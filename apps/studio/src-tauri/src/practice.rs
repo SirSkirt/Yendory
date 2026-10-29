@@ -329,6 +329,7 @@ pub fn train_practice(
     if meta.id != s.model_id {
         return Err(format!("Open {} first: it gave these answers", s.model_name));
     }
+    recovery::no_unfinished_runs(&app, &meta.id, None)?;
     if studio.teaching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("Wait until teaching or reading has finished".into());
     }

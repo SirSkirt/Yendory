@@ -462,6 +462,10 @@ table { border-collapse: collapse; width: 100%; }
 .modal-box p { margin: 0 0 12px; font: 15px/1.5 var(--serif); }
 .modal-box input { width: 100%; margin-bottom: 6px; }
 .modal-box .actions { justify-content: flex-end; margin-bottom: 0; }
+.modal-box.wide { max-width: 640px; max-height: 90vh; overflow: auto; }
+.modal-box h3 { margin: 0 0 8px; }
+.run-card { border-top: 1px solid var(--rule); padding: 8px 0; }
+.run-card .actions { margin: 6px 0 0; }
 
 /* Rewards page */
 .rw-checks label.check { display: block; margin: 8px 0; max-width: 90ch; }
