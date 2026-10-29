@@ -50,6 +50,10 @@ pub struct CorpusInfo {
     /// (`<id>.flagged.txt`) for when that filter is switched off.
     #[serde(default)]
     pub(crate) flagged: Option<FlaggedPart>,
+    /// Imported on the Datasets page (0.8.8): where it came from, how it was mapped, and what the
+    /// import left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) import: Option<crate::imports::ImportProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -182,6 +186,7 @@ fn store(
         added: now(),
         unfiltered: filter.is_some(),
         filter,
+        import: None,
         flagged: (!flagged.is_empty()).then(|| FlaggedPart {
             documents: String::from_utf8_lossy(&flagged).matches(END_OF_TEXT).count() + 1,
             bytes: flagged.len() as u64,
@@ -250,6 +255,29 @@ pub(crate) fn conversation_documents(
         report.flagged += flagged_count;
     }
     Ok((kept, Some(report)))
+}
+
+/// Stores an imported dataset (imports.rs) with where it came from.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn store_imported(
+    app: &AppHandle,
+    name: &str,
+    origin: &str,
+    license: &str,
+    category: Category,
+    bytes: Vec<u8>,
+    truncated: bool,
+    filter: Option<FilterReport>,
+    provenance: crate::imports::ImportProvenance,
+) -> Res<CorpusInfo> {
+    let from = Provenance { origin, license, attribution: "", category };
+    let mut info = store(app, name, &from, bytes, truncated, filter, Vec::new())?;
+    info.import = Some(provenance);
+    write_atomic(
+        &corpus_path(app, &info.id, "json")?,
+        &serde_json::to_vec_pretty(&info).map_err(|e| e.to_string())?,
+    )?;
+    Ok(info)
 }
 
 pub(crate) fn load_info(app: &AppHandle, id: &str) -> Res<CorpusInfo> {
@@ -337,7 +365,7 @@ fn find_last(data: &[u8], needle: &[u8]) -> Option<usize> {
     data.windows(needle.len()).rposition(|w| w == needle)
 }
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
         .timeout_connect(Duration::from_secs(30))

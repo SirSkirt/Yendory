@@ -1,6 +1,6 @@
 [package]
 name = "yendory-studio"
-version = "0.8.7"
+version = "0.8.8"
 description = "Yendory Studio: create, teach, examine and export Bicameral AI models"
 edition = "2021"
 publish = false
@@ -26,6 +26,9 @@ ureq = "2"
 # Hugging Face datasets read from their Parquet files (src/hfparquet.rs). Pure-Rust codecs only
 # (the converted files Hugging Face publishes use Snappy).
 parquet = { version = "57", default-features = false, features = ["snap", "lz4", "flate2-rust_backened", "json"] }
+# Imported datasets (src/imports.rs): CSV / TSV, and gzip-compressed files (pure Rust).
+csv = "1"
+flate2 = "1"
 # Free disk space, checked before a recovery point is written (src/recovery.rs).
 sysinfo = { version = "0.37", default-features = false, features = ["disk"] }
 yendory-engine = { path = "../../../crates/yendory-engine", features = ["gpu"] }

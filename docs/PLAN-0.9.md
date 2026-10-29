@@ -91,6 +91,10 @@ asked is there.
 - **0.8.7, stage 4 (download queue)**: saved and restored paused, pause / resume / reorder / retry
   / clear finished; with 0.8.3's resumable Parquet downloads.
 
+- **0.8.8, stage 5 (imports)**: § 14 Datasets: Hugging Face datasets, links and local files /
+  ZIPs; inspection, column mapping with preview, validation with counts, provenance; scripts never
+  run (docs/IMPORTING.md).
+
 ## Blockers and limits
 
 - **Updater secret**: fixed; builds are signed since 0.8.2.

@@ -238,6 +238,15 @@ or cancelled downloads, clear finished ones (docs/HUGGINGFACE.md). Tests: the sa
 trip and restore (paused, interrupted item first, nothing starting by itself; resuming when chosen;
 a damaged file set aside), pause back to the front, reorder, failed / cancelled / done outcomes,
 retry rules.
+0.8.8: importing datasets by hand (docs/IMPORTING.md, § 14 Datasets). Tests: format and split
+from names, Hugging Face links and revisions; JSON lines (a bad line counted, not fatal), JSON
+(arrays and objects holding one), CSV with quoted commas, TSV, text and gzip read to records;
+messages / prompt-response / turn-list / one-row-per-turn layouts to conversations, roles named or
+left out, every rejection reason counted; ZIP entries read safely and a `../` entry refusing the
+archive; scripts' data links found without running them; splits never mixed; the page's mapping
+JSON. Network check: UltraChat listed with licence and splits; DailyDialog's script noted, not run,
+its http link named but not downloaded; SODA's test split (Parquet conversion) mapped 50 of 50
+records to conversations. Not checked here: a ZIP or file picked on Android.
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

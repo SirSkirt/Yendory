@@ -27,6 +27,7 @@
     <button type="button" data-page="brain"><span>11</span>Brain</button>
     <button type="button" data-page="library"><span>12</span>Library</button>
     <button type="button" data-page="chat"><span>13</span>Chat</button>
+    <button type="button" data-page="datasets"><span>14</span>Datasets</button>
   </nav>
 </header>
 
@@ -1063,6 +1064,72 @@
       </aside>
     </div>
   </section>
+  <!-- § 14 Datasets -->
+  <section class="page" id="page-datasets" hidden>
+    <h2><span class="sec">§ 14</span> Datasets</h2>
+    <p class="lede">Import a dataset of your choosing: from Hugging Face, from a file's link, or from files on this device (also inside a ZIP). Parquet, JSON, JSON lines, CSV, TSV and plain text (each also as .gz). You choose what becomes a document and see it before anything is saved. Downloaded code (Python loading scripts) is never run.</p>
+    <div class="entry">
+      <h3>1. Where from</h3>
+      <div class="line-form">
+        <label for="impSource">Hugging Face dataset or a file's link</label>
+        <input type="text" id="impSource" placeholder="owner/name, https://huggingface.co/datasets/…, or https://…/file.jsonl" style="min-width: 28em">
+        <label for="impRevision">Revision</label>
+        <input type="text" id="impRevision" placeholder="main" class="inline-num" style="width: 7em">
+        <button type="button" id="impInspect" class="primary">Inspect</button>
+        <button type="button" id="impLocal">Files on this device…</button>
+      </div>
+      <p class="note" id="impWait"></p>
+    </div>
+    <div class="entry" id="impFilesBox" hidden>
+      <h3>2. Files</h3>
+      <p id="impInfo"></p>
+      <ul class="note" id="impNotes"></ul>
+      <table class="ledger" id="impFiles"><thead><tr><th>Use</th><th>File</th><th>Split</th><th>Format</th><th class="num">Size</th></tr></thead><tbody></tbody></table>
+      <p class="note">Tick files of one split (train, validation or test are imported as separate datasets, never mixed).</p>
+      <div class="actions"><button type="button" id="impSample" class="primary">Read the chosen files</button></div>
+    </div>
+    <div class="entry" id="impMapBox" hidden>
+      <h3>3. Columns and what becomes a document</h3>
+      <table class="ledger compact" id="impColumns"><thead><tr><th>Column</th><th>Kind</th><th>Example</th></tr></thead><tbody></tbody></table>
+      <div class="line-form">
+        <label for="impCategory">The dataset is</label>
+        <select id="impCategory">
+          <option value="conversation">conversations (§ 4)</option>
+          <option value="general">text to read: stories, prose (§ 2)</option>
+          <option value="knowledge">text to read: facts, explanations (§ 2)</option>
+          <option value="reasoning">text to read: problems with worked answers (§ 2)</option>
+        </select>
+        <label for="impLayout">Each record holds</label>
+        <select id="impLayout">
+          <option value="messages">a list of messages (role and text)</option>
+          <option value="pair">a prompt and a response</option>
+          <option value="turns">a list of turns</option>
+          <option value="rows">one turn (records of a conversation together)</option>
+          <option value="text">text columns</option>
+        </select>
+      </div>
+      <div class="line-form" id="impFields"></div>
+      <div class="line-form" id="impConvOptions">
+        <label>Speakers' names (prompt / response, turn lists) <input type="text" id="impNameA" placeholder="chosen" style="width: 7em"> <input type="text" id="impNameB" placeholder="chosen" style="width: 7em"></label>
+        <label for="impSituation">Scene column</label> <select id="impSituation"></select>
+      </div>
+      <div id="impRoles"></div>
+      <div class="actions"><button type="button" id="impPreview" class="primary">Preview</button></div>
+      <div id="impPreviewBox"></div>
+    </div>
+    <div class="entry" id="impRunBox" hidden>
+      <h3>4. Import</h3>
+      <div class="line-form">
+        <label>Name <input type="text" id="impName" style="min-width: 18em"></label>
+        <label>Licence <input type="text" id="impLicense" style="min-width: 12em"></label>
+        <label>At most <input type="number" id="impMaxMb" min="1" max="400" value="100" class="inline-num"> MB</label>
+      </div>
+      <label class="check" id="impFilterBox"><input type="checkbox" id="impFilter" checked> Apply the quality filter's switches (§ 4) to it at practice (every usable conversation is kept; off: practice uses all of it, as with your own conversations)</label>
+      <div class="actions"><button type="button" id="impRun" class="primary">Import</button> <button type="button" id="impCancel" hidden>Cancel</button></div>
+      <p class="mono" id="impProgress"></p>
+      <p id="impResult"></p>
+    </div>
+  </section>
 </main>
 
 <footer class="colophon">
@@ -1086,5 +1153,6 @@
 <script src="js/memory.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/conversation.js"></script>
+<script src="js/datasets.js"></script>
 </body>
 </html>

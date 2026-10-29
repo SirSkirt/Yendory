@@ -494,8 +494,16 @@ fn dialogue_of(row: &Value, cut: bool) -> Vec<String> {
     {
         turns.truncate(i);
     }
+    let situation = field(row, &["situation", "narrative", "context"]);
+    dialogue_doc(&turns, situation.as_deref()).into_iter().collect()
+}
+
+/// One conversation as a `Situation:` line (when given) and `Name: text` lines: speakers in order
+/// of appearance (alternating when unlabelled), named by their labels when those are names, else
+/// by a pair of names. None for fewer than two turns or other than two speakers.
+pub fn dialogue_doc(turns: &[(Option<String>, String)], situation: Option<&str>) -> Option<String> {
     if turns.len() < 2 {
-        return Vec::new();
+        return None;
     }
     // Speakers: the labels in order of appearance (alternating when there are none).
     let mut labels: Vec<String> = Vec::new();
@@ -506,7 +514,7 @@ fn dialogue_of(row: &Value, cut: bool) -> Vec<String> {
         }
     }
     if labels.len() != 2 {
-        return Vec::new();
+        return None;
     }
     let all_text: usize = turns.iter().map(|(_, t)| t.len()).sum();
     let (a, b) = PAIRS[(all_text + turns.len()) % PAIRS.len()];
@@ -516,7 +524,7 @@ fn dialogue_of(row: &Value, cut: bool) -> Vec<String> {
         vec![a.to_string(), b.to_string()]
     };
     let mut doc = String::new();
-    if let Some(sit) = field(row, &["situation", "narrative", "context"]).filter(|x| !x.is_empty()) {
+    if let Some(sit) = situation.filter(|x| !x.trim().is_empty()) {
         doc.push_str(&format!("Situation: {}\n", sit.replace('\n', " ")));
     }
     for (i, (r, t)) in turns.iter().enumerate() {
@@ -525,7 +533,7 @@ fn dialogue_of(row: &Value, cut: bool) -> Vec<String> {
         let said = tidy(&t.split_whitespace().collect::<Vec<_>>().join(" "));
         doc.push_str(&format!("{who}: {said}\n"));
     }
-    vec![doc.trim_end().to_string()]
+    Some(doc.trim_end().to_string())
 }
 
 /// Whether text reads as English (a downloaded dataset may mix languages): almost all letters

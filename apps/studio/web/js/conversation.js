@@ -118,6 +118,7 @@
     $("convFilterNote").textContent = `In all: ${fmt(rows.reduce((a, r) => a + r.kept, 0))} conversations, ${mb(rows.reduce((a, r) => a + r.bytes, 0))}.`;
     renderMaterial();
   }, "Count"));
+  window.refreshConversation = () => refresh().catch(e => log("ERROR", e));
   async function refresh() {
     material = await invoke("conversation_material");
     if (savedChoice === undefined) {

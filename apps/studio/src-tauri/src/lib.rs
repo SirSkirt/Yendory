@@ -29,6 +29,7 @@ mod downloads;
 mod filter;
 mod growth;
 mod hfparquet;
+mod imports;
 mod memory;
 mod neuro;
 mod practice;
@@ -2124,6 +2125,12 @@ pub fn run() {
             conversation::conversation_material,
             conversation::converse,
             conversation::filter_preview,
+            imports::import_inspect,
+            imports::import_pick_local,
+            imports::import_sample,
+            imports::import_preview,
+            imports::import_run,
+            imports::import_cancel,
             courses::add_plan_step,
             saved_lessons,
             forget_saved_lesson,
