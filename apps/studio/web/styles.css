@@ -687,3 +687,6 @@ tr.nb-later td { color: var(--ink-soft); }
 .conv-pair { margin: 6px 0 12px; }
 .conv-pair-skill { font-weight: 600; font-size: 13px; }
 .conv-pair-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.download-queue ol { margin: 4px 0 0 18px; padding: 0; }
+.download-queue li { margin: 2px 0; }
+button.small { padding: 2px 8px; font-size: 13px; }

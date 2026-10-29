@@ -790,7 +790,8 @@ function renderSources() {
           const want = s.sizeMb > s.defaultMb ? Number(size.value) || s.defaultMb : s.sizeMb;
           const used = corporaList.reduce((a, c) => a + c.bytes, 0);
           if (used + want * 1048576 > BUDGET && !await askYes(`This would bring the corpora on this device to about ${mb(used + want * 1048576)}, over the 1 GB budget. Download anyway?`)) return;
-          await invoke("download_corpus", { source: s.id, maxMb: want });
+          const start = await invoke("download_corpus", { source: s.id, maxMb: want });
+          if (start.queued) { say(`${s.name} will download after the ${start.position === 1 ? "one running" : `${start.position - 1} waiting before it`}.`); return; }
           $("downloadEntry").hidden = false;
           $("downloadTitle").textContent = `Downloading ${s.name}`;
           $("downloadBar").style.width = "0%";
@@ -923,7 +924,25 @@ $("generate").addEventListener("click", safe(async () => {
   } finally { $("generate").disabled = false; }
 }, "Generate practice"));
 $("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
+// Downloads run one at a time; the ones asked for meanwhile wait their turn. Both download
+// panels (§ 2 Reading, § 4 Conversation) list the queue.
+function renderDownloadQueue(q) {
+  const list = waiting => waiting.length
+    ? [el("p", { class: "note" }, `Waiting (${waiting.length}), downloaded one after another:`),
+       el("ol", {}, ...waiting.map(w => el("li", {}, `${w.name} · ${w.maxMb} MB `,
+         el("button", { type: "button", class: "small", onclick: safe(async () => renderDownloadQueue(await invoke("remove_queued_download", { source: w.source })), "Remove") }, "Remove"))))]
+    : [];
+  for (const id of ["downloadQueue", "convDownloadQueue"]) $(id)?.replaceChildren(...list(q.waiting));
+  // A queued download that starts: the Reading panel shows it when it is a reading source.
+  if (q.current && sourcesList.some(s => s.id === q.current.source)) {
+    $("downloadEntry").hidden = false;
+    $("downloadTitle").textContent = `Downloading ${q.current.name}`;
+    $("cancelDownload").hidden = false;
+  }
+  window.dispatchEvent(new CustomEvent("download-queue", { detail: q }));
+}
 function onDownload(e) {
+  if (!sourcesList.some(s => s.id === e.source)) return;
   if (!e.done && e.note != null) {
     // Waiting for the server (rate limit, busy): shown beside the progress, which is kept.
     $("downloadNote").textContent = e.note;
@@ -1238,6 +1257,8 @@ async function boot() {
   await tauri.event.listen("read-event", ev => { try { onReadEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("read-finished", ev => onReadFinished(ev.payload));
   await tauri.event.listen("corpus-download", ev => onDownload(ev.payload));
+  await tauri.event.listen("download-queue", ev => renderDownloadQueue(ev.payload));
+  invoke("download_queue").then(renderDownloadQueue).catch(e => log("ERROR", e));
   await tauri.event.listen("benchmark-progress", ev => { $("benchNote").textContent = `Benchmarking: ${ev.payload}…`; });
   await tauri.event.listen("device-notice", ev => onDeviceNotice(ev.payload));
   sourcesList = await invoke("corpus_sources");

@@ -144,7 +144,8 @@ struct Studio {
     /// Teaching lessons or reading a corpus (one training run at a time).
     teaching: AtomicBool,
     stop: Arc<AtomicBool>,
-    downloading: AtomicBool,
+    /// The download running and the ones waiting their turn (one runs at a time).
+    downloads: Mutex<reading::DownloadQueue>,
     cancel_download: Arc<AtomicBool>,
     /// A chat reply is being written (one at a time), and the request to stop it.
     chatting: AtomicBool,
@@ -2078,6 +2079,8 @@ pub fn run() {
             reading::hf_token_set,
             reading::set_hf_token,
             reading::cancel_download,
+            reading::download_queue,
+            reading::remove_queued_download,
             reading::read_corpus,
             training_device,
             set_training_device,

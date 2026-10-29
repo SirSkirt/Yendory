@@ -6,7 +6,15 @@
   let sources = [];
   let material = { corpora: [], chatReplies: 0, lessonUnits: 0, classroomQuestions: 0 };
   const chosen = new Set();
+  // The conversation download running (its source id), shown in this page's panel.
   let downloading = null;
+  function showDownload(name) {
+    $("convDownload").hidden = false;
+    $("convDownloadTitle").textContent = `Downloading ${name}`;
+    $("convDownloadBar").style.width = "0%";
+    $("convDownloadLine").textContent = "Connecting…";
+    $("convCancelDownload").hidden = false;
+  }
   let started = 0;
 
   function renderSources() {
@@ -17,13 +25,10 @@
         s.sizeMb > s.defaultMb ? el("span", {}, "first ", size, ` MB of about ${fmt(s.sizeMb)} MB`) : el("span", {}, `about ${s.sizeMb} MB`),
         el("button", { type: "button", onclick: safe(async () => {
           const want = s.sizeMb > s.defaultMb ? Number(size.value) || s.defaultMb : s.sizeMb;
-          await invoke("download_corpus", { source: s.id, maxMb: want });
-          downloading = s.id;
+          const start = await invoke("download_corpus", { source: s.id, maxMb: want });
           $("convDownload").hidden = false;
-          $("convDownloadTitle").textContent = `Downloading ${s.name}`;
-          $("convDownloadBar").style.width = "0%";
-          $("convDownloadLine").textContent = "Connecting…";
-          $("convCancelDownload").hidden = false;
+          if (start.queued) { say(`${s.name} will download after the ${start.position === 1 ? "one running" : `${start.position - 1} waiting before it`}.`); return; }
+          showDownload(s.name);
         }, "Download") }, "Download"),
         el("p", { class: "note" }, `${s.description} `, el("b", {}, "Licence: "), `${s.license}. `, el("b", {}, "Credit: "), `${s.attribution}. Source: ${s.page}`));
     }));
@@ -311,6 +316,13 @@
   if (tauri?.event?.listen) {
     tauri.event.listen("converse-event", ev => { try { onEvent(ev.payload); } catch (err) { log("ERROR", err); } });
     tauri.event.listen("converse-finished", ev => onFinished(ev.payload));
+    // A queued conversation download that starts is shown here (app.js renders the queue).
+    window.addEventListener("download-queue", ev => {
+      const q = ev.detail;
+      if (q.waiting.length) $("convDownload").hidden = false;
+      const cur = q.current && sources.find(s => s.id === q.current.source);
+      if (cur && downloading !== cur.id) { downloading = cur.id; showDownload(cur.name); }
+    });
     tauri.event.listen("corpus-download", ev => {
       const e = ev.payload;
       if (e.source !== downloading) return;

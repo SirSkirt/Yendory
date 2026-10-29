@@ -1,7 +1,7 @@
 {
   "name": "yendory-studio",
   "private": true,
-  "version": "0.7.8",
+  "version": "0.7.9",
   "description": "Yendory Studio: teach Bicameral AI models",
   "scripts": {
     "tauri": "tauri",
