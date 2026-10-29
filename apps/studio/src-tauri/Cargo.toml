@@ -1,6 +1,6 @@
 [package]
 name = "yendory-studio"
-version = "0.7.9"
+version = "0.8.0"
 description = "Yendory Studio: create, teach, examine and export Bicameral AI models"
 edition = "2021"
 publish = false
@@ -24,6 +24,10 @@ serde_json = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = "2"
 yendory-engine = { path = "../../../crates/yendory-engine", features = ["gpu"] }
+
+# Desktop: updates from the release page (signed; see src/update.rs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
 
 # Windows: DirectX 12 with the DXC shader compiler built in (instead of the old FXC fallback).
 [target.'cfg(all(windows, target_env = "msvc", not(target_arch = "aarch64")))'.dependencies]

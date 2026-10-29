@@ -829,7 +829,7 @@ pub struct QueuedDownload {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadQueue {
-    current: Option<QueuedDownload>,
+    pub(crate) current: Option<QueuedDownload>,
     waiting: std::collections::VecDeque<QueuedDownload>,
 }
 

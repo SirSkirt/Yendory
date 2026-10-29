@@ -767,6 +767,67 @@ function onTeachFinished(f) {
   refreshModels();
 }
 
+// ---- settings kept on this device and updates ------------------------------------------------
+// The Classroom and Conversation pages' settings are kept in Studio's settings file (in the app's
+// data folder), so they survive restarts and updates. Passwords and files are never kept.
+const KEPT_PAGES = { classroom: "page-classroom", conversation: "page-conversation" };
+function formState(root) {
+  const out = {};
+  for (const e of root.querySelectorAll("input[id], select[id]")) {
+    if (e.type === "password" || e.type === "file" || e.type === "button") continue;
+    out[e.id] = e.type === "checkbox" ? e.checked : e.value;
+  }
+  return out;
+}
+async function restorePageSettings() {
+  for (const [page, id] of Object.entries(KEPT_PAGES)) {
+    const root = $(id);
+    if (!root) continue;
+    const saved = await invoke("page_settings", { page }).catch(() => null);
+    for (const [key, v] of Object.entries(saved || {})) {
+      const e = root.querySelector("#" + CSS.escape(key));
+      if (!e || e.type === "password" || e.type === "file") continue;
+      if (e.type === "checkbox") e.checked = !!v; else e.value = v;
+      e.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    let timer = null;
+    root.addEventListener("change", ev => {
+      if (!ev.target.id || ev.target.type === "password") return;
+      clearTimeout(timer);
+      timer = setTimeout(() => invoke("save_page_settings", { page, settings: formState(root) }).catch(e => log("ERROR", e)), 400);
+    });
+  }
+}
+
+// Updates: Studio asks the release page for a newer build; installing keeps everything in the
+// app's data folder and restarts Studio.
+async function checkUpdate(asked) {
+  try {
+    const u = await invoke("check_update");
+    if (u) {
+      $("updateNote").textContent = `Version ${u.version} is available (this is ${u.current}).`;
+      $("installUpdate").hidden = false;
+    } else if (asked) {
+      $("updateNote").textContent = "Studio is up to date.";
+    }
+  } catch (e) {
+    if (asked) $("updateNote").textContent = String(e);
+  }
+}
+$("checkUpdate").addEventListener("click", safe(() => checkUpdate(true), "Check for updates"));
+$("installUpdate").addEventListener("click", safe(async () => {
+  if (!await askYes("Download and install the update now? Studio restarts when it is installed; your models, datasets, chats and settings are kept.")) return;
+  $("installUpdate").disabled = true;
+  $("updateNote").textContent = "Downloading the update…";
+  try { await invoke("install_update"); } finally { $("installUpdate").disabled = false; }
+}, "Update"));
+if (tauri?.event?.listen) {
+  tauri.event.listen("update-progress", ev => {
+    const p = ev.payload;
+    $("updateNote").textContent = `Downloading the update: ${mb(p.received)}${p.total ? " of " + mb(p.total) : ""}…`;
+  });
+}
+
 // ---- reading (corpus pre-training) ---------------------------------------------------------
 let sourcesList = [];
 let corporaList = [];
@@ -1266,6 +1327,8 @@ async function boot() {
   familiesList = await invoke("practice_families");
   renderFamilies();
   applyReadSettings(await invoke("page_settings", { page: "reading" }).catch(() => null));
+  await restorePageSettings();
+  checkUpdate(false);
   await refreshCorpora();
   updateReadNote();
   const s = await invoke("status");

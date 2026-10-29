@@ -35,6 +35,11 @@
   <section class="page" id="page-models">
     <h2><span class="sec">§ 1</span> Models</h2>
     <p class="lede">Every model runs on the same Yendory Engine. Nova Bicameral is the default architecture; Nova Neuro is an experimental one you can build from specialised networks. What makes Nova different from Echo is what each one is taught.</p>
+    <div class="line-form" id="updateBox">
+      <button type="button" id="checkUpdate">Check for updates</button>
+      <button type="button" id="installUpdate" class="primary" hidden>Update and restart</button>
+      <span class="note" id="updateNote">Studio looks for a newer build when it starts. Updating installs over this version and keeps your models, datasets, chats and settings.</span>
+    </div>
 
     <div class="entry" id="activeEntry" hidden>
       <h3 id="activeName">—</h3>

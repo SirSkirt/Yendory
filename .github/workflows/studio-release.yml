@@ -64,13 +64,16 @@ jobs:
           - name: Windows installer
             os: windows-latest
             bundles: nsis
-            files: apps/studio/src-tauri/target/release/bundle/nsis/*.exe
+            files: |
+              apps/studio/src-tauri/target/release/bundle/nsis/*.exe
+              apps/studio/src-tauri/target/release/bundle/nsis/*.exe.sig
           - name: Linux packages
             os: ubuntu-22.04
             bundles: deb,appimage
             files: |
               apps/studio/src-tauri/target/release/bundle/deb/*.deb
               apps/studio/src-tauri/target/release/bundle/appimage/*.AppImage
+              apps/studio/src-tauri/target/release/bundle/appimage/*.AppImage.sig
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -92,7 +95,21 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Build
         working-directory: apps/studio
-        run: npx tauri build --bundles ${{ matrix.bundles }}
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # With the updater key (repository secret TAURI_SIGNING_PRIVATE_KEY), the Windows
+          # installer and the AppImage are also signed for Studio's built-in updates
+          # (apps/studio/src-tauri/src/update.rs); without it they are built as before.
+          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            npx tauri build --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY secret: built without update signatures"
+            npx tauri build --bundles ${{ matrix.bundles }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}
@@ -213,7 +230,7 @@ jobs:
             fi
             cat <<'NOTES'
 
-          - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway".
+          - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". It installs over an earlier version and keeps your models and settings (do not uninstall first). From 0.8.0, Studio can also update itself: § 1 Models → "Check for updates".
           - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
           - **Android:** install the `.apk` (allow installs from this source). Every build is signed with the same debug key, so it installs over the previous one and keeps your models. Keep Studio open while it teaches.
 
@@ -228,6 +245,52 @@ jobs:
               --title "Yendory Studio ${TAG#studio-v}" --notes-file notes.md --prerelease --latest=false \
               "${FILES[@]}"
           fi
+      - name: Update manifest for Studio's built-in updates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # latest.json says which build is newest, where its installers are and their update
+          # signatures. Studio reads it from the fixed `studio-updates` release
+          # (tauri.conf.json, plugins.updater). Written only when the builds were signed.
+          if ! find dist -name '*.sig' | grep -q .; then
+            echo "::notice::No update signatures (no TAURI_SIGNING_PRIVATE_KEY secret): no update manifest"
+            exit 0
+          fi
+          VERSION="$(node -p "require('./apps/studio/package.json').version")"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets > assets.json
+          python3 - "$VERSION" "$TAG" > latest.json <<'PY'
+          import json, sys, glob, os, datetime
+          version, tag = sys.argv[1], sys.argv[2]
+          assets = {a["name"]: a["url"] for a in json.load(open("assets.json"))["assets"]}
+          def url_of(local):
+              # GitHub renames spaces in asset names to dots.
+              name = os.path.basename(local)
+              for candidate in (name, name.replace(" ", ".")):
+                  if candidate in assets:
+                      return assets[candidate]
+              raise SystemExit(f"{name} is not among the release's files")
+          platforms = {}
+          for pattern, key in (("dist/**/*-setup.exe.sig", "windows-x86_64"), ("dist/**/*.AppImage.sig", "linux-x86_64")):
+              for sig in glob.glob(pattern, recursive=True):
+                  platforms[key] = {"signature": open(sig).read().strip(), "url": url_of(sig[: -len(".sig")])}
+          json.dump({
+              "version": version,
+              "notes": f"Yendory Studio {tag}",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": platforms,
+          }, sys.stdout, indent=2)
+          PY
+          cat latest.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
+          if ! gh release view studio-updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create studio-updates --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Studio updates" --prerelease --latest=false \
+              --notes "Where Yendory Studio looks for updates (latest.json). Download installers from the build releases."
+          fi
+          gh release upload studio-updates --repo "$GITHUB_REPOSITORY" --clobber latest.json
       - name: Remove old development pre-releases
         if: steps.tag.outputs.dev == 'true'
         shell: bash

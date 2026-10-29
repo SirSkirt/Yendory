@@ -35,6 +35,7 @@ mod review;
 mod rewards;
 mod sources;
 mod study;
+mod update;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
 /// Large enough for the largest model the Engine accepts (1 billion parameters × 12 bytes,
@@ -573,7 +574,7 @@ fn write_setting(app: &AppHandle, key: &str, value: serde_json::Value) -> Res<()
 
 /// Form settings the pages remember between runs (only these keys; other settings have their
 /// own commands).
-const PAGE_SETTINGS: &[&str] = &["reading"];
+const PAGE_SETTINGS: &[&str] = &["reading", "classroom", "conversation"];
 
 #[tauri::command]
 fn page_settings(app: AppHandle, page: String) -> Option<serde_json::Value> {
@@ -2010,6 +2011,9 @@ pub fn run() {
             memory::apply_stored(app.handle());
             // A Hugging Face token given earlier (for gated datasets).
             reading::load_hf_token(app.handle());
+            // Updates on the desktop (Android installs APKs).
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2077,6 +2081,8 @@ pub fn run() {
             reading::save_conversations,
             reading::download_corpus,
             reading::hf_token_set,
+            update::check_update,
+            update::install_update,
             reading::set_hf_token,
             reading::cancel_download,
             reading::download_queue,
