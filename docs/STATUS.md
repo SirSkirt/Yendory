@@ -247,6 +247,13 @@ archive; scripts' data links found without running them; splits never mixed; the
 JSON. Network check: UltraChat listed with licence and splits; DailyDialog's script noted, not run,
 its http link named but not downloaded; SODA's test split (Parquet conversion) mapped 50 of 50
 records to conversations. Not checked here: a ZIP or file picked on Android.
+0.8.9: fix (the owner's report: LMSYS-Chat-1M failed with "Invalid corpus id" after the whole
+download). Since 0.8.3 the conversations a dataset flags itself are stored beside it, but the file
+was named `<id>.flagged` through a check that accepts only the 16-character id, so saving failed
+at the end, and only for LMSYS (the one source with its own flags). The file is now named through
+its own check (tested), deleting a dataset deletes it too, and the Parquet files a download read
+are kept until the dataset is saved, so a failure after reading is retried from disk instead of
+downloading again (left-over downloads are removed after a week).
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

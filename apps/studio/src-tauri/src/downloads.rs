@@ -205,6 +205,7 @@ fn resume_on_start(app: &AppHandle) -> bool {
 
 /// At start-up: the saved queue, restored (paused unless the owner chose otherwise).
 pub(crate) fn start(app: &AppHandle) {
+    crate::hfparquet::clean_old_downloads();
     let Ok(path) = queue_file(app) else { return };
     let q = load_in(&path).restored(resume_on_start(app));
     let studio = app.state::<Studio>();

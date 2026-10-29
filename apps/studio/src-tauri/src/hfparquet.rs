@@ -92,6 +92,38 @@ pub(crate) fn split_rows(
     (n > 0).then_some(n)
 }
 
+/// The folder a dataset's files are downloaded to.
+pub(crate) fn dataset_dir(dataset: &str) -> PathBuf {
+    let safe: String =
+        dataset.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    std::env::temp_dir().join("yendory-downloads").join(safe)
+}
+
+/// The Hugging Face datasets a source reads.
+pub(crate) fn datasets_of(fetch: &crate::sources::Fetch) -> Vec<&'static str> {
+    match fetch {
+        crate::sources::Fetch::HfRows { dataset, .. } => vec![dataset],
+        crate::sources::Fetch::HfFirst { datasets, .. } => datasets.iter().map(|d| d.0).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Removes downloads left over (a dataset never saved) after a week.
+pub(crate) fn clean_old_downloads() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir().join("yendory-downloads")) else { return };
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|a| a.as_secs() > 7 * 86_400);
+        if old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 /// Where a file is downloaded to (the same place every time, so an interrupted download resumes).
 pub(crate) fn temp_path(dataset: &str, file: &ParquetFile, split: &str) -> PathBuf {
     let safe = |s: &str| {

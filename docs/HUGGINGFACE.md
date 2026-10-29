@@ -35,7 +35,9 @@ says what to do; these are not retried.
 
 Datasets are read from the Parquet files Hugging Face publishes for them (about 100 times faster
 than the dataset viewer's pages of 100 rows; the pages remain the fallback). Files are downloaded
-one at a time, continued after a break with a range request, read and deleted. Conversation
+one at a time, continued after a break with a range request, and kept until the dataset is saved
+(so a download that fails after reading is retried from them; left-over files are removed after a
+week). Conversation
 downloads keep every usable conversation; the quality filter is chosen on § 4 and applied when
 practice starts.
 

@@ -121,10 +121,26 @@ impl ReadRecord {
 }
 
 pub(crate) fn corpus_path(app: &AppHandle, id: &str, ext: &str) -> Res<PathBuf> {
+    Ok(corpora_dir(app)?.join(corpus_file(id, None, ext)?))
+}
+
+/// A part of a corpus kept beside it (`<id>.<part>.<ext>`: the conversations a dataset flagged).
+pub(crate) fn corpus_part_path(app: &AppHandle, id: &str, part: &str, ext: &str) -> Res<PathBuf> {
+    Ok(corpora_dir(app)?.join(corpus_file(id, Some(part), ext)?))
+}
+
+/// A corpus file's name: the id is 16 hex digits (its fingerprint), a part plain letters.
+fn corpus_file(id: &str, part: Option<&str>, ext: &str) -> Res<String> {
     if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("Invalid corpus id".into());
+        return Err(format!("Invalid corpus id: {id}"));
     }
-    Ok(corpora_dir(app)?.join(format!("{id}.{ext}")))
+    match part {
+        Some(p) if p.is_empty() || !p.bytes().all(|b| b.is_ascii_lowercase()) => {
+            Err(format!("Invalid corpus part: {p}"))
+        }
+        Some(p) => Ok(format!("{id}.{p}.{ext}")),
+        None => Ok(format!("{id}.{ext}")),
+    }
 }
 
 /// Checks and stores a corpus; the same text is stored once (its id is its fingerprint).
@@ -194,7 +210,7 @@ fn store(
         }),
     };
     if !flagged.is_empty() {
-        write_atomic(&corpus_path(app, &format!("{}.flagged", info.id), "txt")?, &flagged)?;
+        write_atomic(&corpus_part_path(app, &info.id, "flagged", "txt")?, &flagged)?;
     }
     write_atomic(&corpus_path(app, &info.id, "txt")?, text.as_bytes())?;
     write_atomic(
@@ -214,8 +230,8 @@ pub(crate) fn conversation_documents(
     choice: &crate::filter::FilterChoice,
     cap: Option<u64>,
 ) -> Res<(Vec<String>, Option<FilterReport>)> {
-    let read = |id: &str, sha: &str| -> Res<Vec<String>> {
-        let text = std::fs::read_to_string(corpus_path(app, id, "txt")?).map_err(|e| e.to_string())?;
+    let read = |path: PathBuf, sha: &str| -> Res<Vec<String>> {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         if sha256_hex(text.as_bytes()) != sha {
             return Err(format!(
                 "{}: the stored dataset does not match its fingerprint; download it again",
@@ -225,7 +241,7 @@ pub(crate) fn conversation_documents(
         let (ascii, _) = normalize_ascii(&text);
         Ok(split_documents(&ascii))
     };
-    let docs = read(&info.id, &info.sha256)?;
+    let docs = read(corpus_path(app, &info.id, "txt")?, &info.sha256)?;
     if info.filter.is_none() {
         let mut bytes = 0u64;
         let kept = docs
@@ -239,7 +255,7 @@ pub(crate) fn conversation_documents(
         return Ok((kept, None));
     }
     let flagged = match &info.flagged {
-        Some(f) if !choice.flagged => read(&format!("{}.flagged", info.id), &f.sha256)?,
+        Some(f) if !choice.flagged => read(corpus_part_path(app, &info.id, "flagged", "txt")?, &f.sha256)?,
         _ => Vec::new(),
     };
     let flagged_count = info.flagged.as_ref().map_or(0, |f| f.documents);
@@ -778,9 +794,9 @@ fn parquet_documents(
         });
         progress(state(read, kept_bytes, docs, at, Some((f.size, f.size))));
         match result {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&path);
-            }
+            // Kept until the dataset is saved (run_download removes them), so a failure after
+            // reading can be retried from the files on disk.
+            Ok(_) => {}
             Err(e) => {
                 // A damaged download: removed, so the next attempt fetches it again.
                 let _ = std::fs::remove_file(&path);
@@ -1099,8 +1115,11 @@ pub fn corpora(app: AppHandle) -> Res<Vec<CorpusInfo>> {
 #[tauri::command]
 pub fn delete_corpus(app: AppHandle, studio: State<Studio>, id: String) -> Res<Vec<CorpusInfo>> {
     not_teaching(&studio)?;
-    for ext in ["txt", "json"] {
-        let p = corpus_path(&app, &id, ext)?;
+    for p in [
+        corpus_path(&app, &id, "txt")?,
+        corpus_part_path(&app, &id, "flagged", "txt")?,
+        corpus_path(&app, &id, "json")?,
+    ] {
         if p.exists() {
             std::fs::remove_file(p).map_err(|e| e.to_string())?;
         }
@@ -1259,6 +1278,12 @@ pub(crate) fn run_download(app: &AppHandle, source: &str, max_mb: u64, cancel: &
         }
         Err(e) => (None, Some(e)),
     };
+    if corpus.is_some() {
+        // Saved: the Parquet files downloaded for it are no longer needed.
+        for d in crate::hfparquet::datasets_of(&src.fetch) {
+            let _ = std::fs::remove_dir_all(crate::hfparquet::dataset_dir(d));
+        }
+    }
     let outcome = match (&corpus, &error) {
         (Some(c), _) => Ok(c.name.clone()),
         (_, Some(e)) => Err(e.clone()),
@@ -1679,6 +1704,18 @@ mod tests {
             }
         });
         format!("http://{addr}/rows")
+    }
+
+    #[test]
+    fn corpus_files_are_named_safely() {
+        assert_eq!(corpus_file("0123456789abcdef", None, "txt").unwrap(), "0123456789abcdef.txt");
+        assert_eq!(
+            corpus_file("0123456789abcdef", Some("flagged"), "txt").unwrap(),
+            "0123456789abcdef.flagged.txt"
+        );
+        assert!(corpus_file("0123456789abcdef.flagged", None, "txt").is_err());
+        assert!(corpus_file("0123456789abcdef", Some("../x"), "txt").is_err());
+        assert!(corpus_file("../../etc/passwd", None, "txt").is_err());
     }
 
     #[test]
