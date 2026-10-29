@@ -232,6 +232,12 @@ it starts, why (the guards the candidate failed, and the flat candidate it took 
 the epochs left, and whether it succeeded or failed. Tested: off and on behave differently with a
 safe flat candidate present, the accepted model is unchanged throughout. Experiment B is to be
 run again later (the owner asked to finish the 0.9 features first).
+0.8.7: the download queue is saved and comes back paused at start-up (the interrupted download
+first in line) unless the owner chose to resume it; pause / resume, reorder, remove, retry failed
+or cancelled downloads, clear finished ones (docs/HUGGINGFACE.md). Tests: the saved queue round
+trip and restore (paused, interrupted item first, nothing starting by itself; resuming when chosen;
+a damaged file set aside), pause back to the front, reorder, failed / cancelled / done outcomes,
+retry rules.
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

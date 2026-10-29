@@ -87,6 +87,10 @@ asked is there.
   datasets not yet approved (docs/HUGGINGFACE.md). The 0.8.2 build was the first signed one: from
   it on, Studio updates itself.
 
+- **0.8.6**: probation takes priority over the flat-epoch rule when on (the owner's choice).
+- **0.8.7, stage 4 (download queue)**: saved and restored paused, pause / resume / reorder / retry
+  / clear finished; with 0.8.3's resumable Parquet downloads.
+
 ## Blockers and limits
 
 - **Updater secret**: fixed; builds are signed since 0.8.2.

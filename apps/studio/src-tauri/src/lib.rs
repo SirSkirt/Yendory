@@ -25,6 +25,7 @@ mod conversation;
 mod courses;
 mod credentials;
 mod designer;
+mod downloads;
 mod filter;
 mod growth;
 mod hfparquet;
@@ -150,7 +151,7 @@ struct Studio {
     teaching: AtomicBool,
     stop: Arc<AtomicBool>,
     /// The download running and the ones waiting their turn (one runs at a time).
-    downloads: Mutex<reading::DownloadQueue>,
+    downloads: Mutex<downloads::DownloadQueue>,
     /// The run record of the reading or conversation training now (recovery.rs).
     run: Mutex<Option<String>>,
     /// Studio is closing: training was asked to stop at a safe point (with a recovery point).
@@ -2079,6 +2080,8 @@ pub fn run() {
         .setup(|app| {
             // The settings file brought to this version's layout (a copy of the old one kept).
             settings::migrate(app.handle());
+            // The download queue as it was left (paused unless the owner chose otherwise).
+            downloads::start(app.handle());
             // The Classroom's lesson list as it was left.
             load_lessons(app.handle());
             // The saved training memory settings, before any training starts.
@@ -2164,16 +2167,23 @@ pub fn run() {
             reading::import_corpus,
             reading::import_conversations,
             reading::save_conversations,
-            reading::download_corpus,
+            downloads::download_corpus,
+            downloads::pause_downloads,
+            downloads::resume_downloads,
+            downloads::move_queued_download,
+            downloads::retry_download,
+            downloads::clear_finished_downloads,
+            downloads::download_resume_on_start,
+            downloads::set_download_resume_on_start,
             reading::hf_token_set,
             update::check_update,
             update::install_update,
             reading::set_hf_token,
-            reading::cancel_download,
+            downloads::cancel_download,
             reading::hf_account,
             reading::finish_download,
-            reading::download_queue,
-            reading::remove_queued_download,
+            downloads::download_queue,
+            downloads::remove_queued_download,
             reading::read_corpus,
             training_device,
             set_training_device,

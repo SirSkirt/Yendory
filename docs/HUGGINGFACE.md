@@ -38,3 +38,14 @@ than the dataset viewer's pages of 100 rows; the pages remain the fallback). Fil
 one at a time, continued after a break with a range request, read and deleted. Conversation
 downloads keep every usable conversation; the quality filter is chosen on § 4 and applied when
 practice starts.
+
+## The download queue
+
+Downloads run one at a time, in order, and the queue is saved (`download_queue.json`) after every
+change, so it survives closing Studio, a crash or an update. When Studio starts, the queue comes
+back **paused**, with a download that was running first in line, unless "Resume the download queue
+when Studio starts" (§ 1 Models) is on. In the queue: **Pause / Resume** (the running download
+stops and waits first in line; a Parquet file being downloaded continues from where it stopped,
+though files of that dataset already read are read again), **↑ / ↓** to reorder, **Remove** (takes
+it out of the line; nothing downloaded is deleted), **Retry** for a failed or cancelled one, and
+**Clear finished**. Failed downloads keep their reason; they are not retried by themselves.

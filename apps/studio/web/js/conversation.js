@@ -28,6 +28,7 @@
           const want = s.sizeMb > s.defaultMb ? Number(size.value) || s.defaultMb : s.sizeMb;
           const start = await invoke("download_corpus", { source: s.id, maxMb: want });
           $("convDownload").hidden = false;
+          if (start.paused) { say(`${s.name} is in the queue, which is paused: press Resume the queue to start.`); return; }
           if (start.queued) { say(`${s.name} will download after the ${start.position === 1 ? "one running" : `${start.position - 1} waiting before it`}.`); return; }
           showDownload(s.name);
         }, "Download") }, "Download"),
@@ -391,7 +392,12 @@
     // A queued conversation download that starts is shown here (app.js renders the queue).
     window.addEventListener("download-queue", ev => {
       const q = ev.detail;
-      if (q.waiting.length) $("convDownload").hidden = false;
+      if (q.waiting.length || q.finished?.length || q.paused) $("convDownload").hidden = false;
+      if (!q.current && !downloading) {
+        $("convDownloadTitle").textContent = "Download queue";
+        $("convCancelDownload").hidden = true;
+        $("convFinishDownload").hidden = true;
+      }
       const cur = q.current && sources.find(s => s.id === q.current.source);
       if (cur && downloading !== cur.id) { downloading = cur.id; showDownload(cur.name); }
     });

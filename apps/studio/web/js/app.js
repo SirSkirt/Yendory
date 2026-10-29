@@ -908,6 +908,7 @@ function renderSources() {
           const used = corporaList.reduce((a, c) => a + c.bytes, 0);
           if (used + want * 1048576 > BUDGET && !await askYes(`This would bring the corpora on this device to about ${mb(used + want * 1048576)}, over the 1 GB budget. Download anyway?`)) return;
           const start = await invoke("download_corpus", { source: s.id, maxMb: want });
+          if (start.paused) { $("downloadEntry").hidden = false; say(`${s.name} is in the queue, which is paused: press Resume the queue to start.`); return; }
           if (start.queued) { say(`${s.name} will download after the ${start.position === 1 ? "one running" : `${start.position - 1} waiting before it`}.`); return; }
           $("downloadEntry").hidden = false;
           $("downloadTitle").textContent = `Downloading ${s.name}`;
@@ -1046,18 +1047,49 @@ $("finishDownload").addEventListener("click", safe(async () => { await invoke("f
 // Downloads run one at a time; the ones asked for meanwhile wait their turn. Both download
 // panels (§ 2 Reading, § 4 Conversation) list the queue.
 function renderDownloadQueue(q) {
-  const list = waiting => waiting.length
-    ? [el("p", { class: "note" }, `Waiting (${waiting.length}), downloaded one after another:`),
-       el("ol", {}, ...waiting.map(w => el("li", {}, `${w.name} · ${w.maxMb} MB `,
-         el("button", { type: "button", class: "small", onclick: safe(async () => renderDownloadQueue(await invoke("remove_queued_download", { source: w.source })), "Remove") }, "Remove"))))]
-    : [];
-  for (const id of ["downloadQueue", "convDownloadQueue"]) $(id)?.replaceChildren(...list(q.waiting));
+  const build = () => {
+  const button = (label, cmd, args, title) => el("button", { type: "button", class: "small", title: title || "", onclick: safe(async () => renderDownloadQueue(await invoke(cmd, args)), label) }, label);
+  const parts = [];
+  if (q.paused) {
+    parts.push(el("p", { class: "warn" }, q.current ? "Pausing after this download stops…" : `The download queue is paused${q.waiting.length ? ` (${q.waiting.length} waiting)` : ""}. `,
+      q.current ? "" : button("Resume the queue", "resume_downloads", {})));
+  } else if (q.current || q.waiting.length) {
+    parts.push(el("p", { class: "note" }, button("Pause the queue", "pause_downloads", {}, "The download running stops and waits first in line; a file being downloaded continues from where it stopped when the queue resumes")));
+  }
+  if (q.waiting.length) {
+    parts.push(el("p", { class: "note" }, `Waiting (${q.waiting.length}), downloaded one after another:`),
+      el("ol", {}, ...q.waiting.map((w, i) => el("li", {}, `${w.name} · ${w.maxMb} MB `,
+        w.status === "paused" ? el("span", { class: "note" }, `(${w.note || "paused"}) `) : "",
+        w.retries ? el("span", { class: "note" }, `(try ${w.retries + 1}) `) : "",
+        i > 0 ? button("↑", "move_queued_download", { id: w.id, delta: -1 }, "Move up") : "",
+        i < q.waiting.length - 1 ? button("↓", "move_queued_download", { id: w.id, delta: 1 }, "Move down") : "",
+        button("Remove", "remove_queued_download", { id: w.id }, "Take it out of the queue (nothing downloaded is deleted)")))));
+  }
+  if (q.finished?.length) {
+    const label = { done: "done", failed: "failed", cancelled: "cancelled" };
+    parts.push(el("details", {}, el("summary", {}, `Finished (${q.finished.length}) `),
+      el("ul", {}, ...q.finished.map(f => el("li", {}, `${f.name}: ${label[f.status] || f.status}`,
+        f.saved ? ` (saved as ${f.saved})` : "", f.note ? el("span", { class: "note" }, ` ${f.note} `) : " ",
+        f.status === "failed" || f.status === "cancelled" ? button("Retry", "retry_download", { id: f.id }) : ""))),
+      button("Clear finished", "clear_finished_downloads", {}, "Clears the list; the datasets downloaded stay")));
+  }
+  return parts;
+  };
+  // The same list on both pages (built for each).
+  for (const id of ["downloadQueue", "convDownloadQueue"]) $(id)?.replaceChildren(...build());
+  // A queue with something in it is shown on both pages.
+  const any = q.current || q.waiting.length || q.finished?.length || q.paused;
+  if (any) { $("downloadEntry").hidden = false; }
   // A queued download that starts: the Reading panel shows it when it is a reading source.
   if (q.current && sourcesList.some(s => s.id === q.current.source)) {
     $("downloadEntry").hidden = false;
     $("downloadTitle").textContent = `Downloading ${q.current.name}`;
     $("cancelDownload").hidden = false;
     $("finishDownload").hidden = false;
+  } else if (!q.current && any) {
+    $("downloadTitle").textContent = "Download queue";
+    $("cancelDownload").hidden = true;
+    $("finishDownload").hidden = true;
   }
   window.dispatchEvent(new CustomEvent("download-queue", { detail: q }));
 }
@@ -1490,6 +1522,10 @@ window.beforeNewRun = async () => {
   if (runs.length) await refreshUnfinished(false);
   return true;
 };
+$("resumeDownloads").addEventListener("change", safe(async () => {
+  await invoke("set_download_resume_on_start", { on: $("resumeDownloads").checked });
+  say($("resumeDownloads").checked ? "The download queue will resume by itself when Studio starts." : "The download queue will wait for you (paused) when Studio starts.");
+}, "Download queue"));
 $("recoveryMinutes").addEventListener("change", safe(async () => {
   const v = Number($("recoveryMinutes").value);
   $("recoveryMinutes").value = await invoke("set_recovery_minutes", { minutes: Math.max(0, Math.min(240, Math.round(v))) });
@@ -1546,6 +1582,7 @@ async function boot() {
   });
   for (const n of await invoke("settings_notices").catch(() => [])) { log("WARN", n); say(n); }
   invoke("recovery_minutes").then(m => { $("recoveryMinutes").value = m; }).catch(e => log("ERROR", e));
+  invoke("download_resume_on_start").then(on => { $("resumeDownloads").checked = on; }).catch(e => log("ERROR", e));
   sourcesList = await invoke("corpus_sources");
   renderSources();
   familiesList = await invoke("practice_families");

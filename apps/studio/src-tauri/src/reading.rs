@@ -1166,92 +1166,17 @@ struct DownloadEvent {
     note: Option<String>,
 }
 
-/// A download asked for: the source, its name and the megabytes to download.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QueuedDownload {
-    source: String,
-    name: String,
-    max_mb: u64,
-}
-
-/// The download running and the ones waiting, in order. Downloads run one at a time; when one
-/// ends (finished, failed or cancelled), the next starts by itself.
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadQueue {
-    pub(crate) current: Option<QueuedDownload>,
-    waiting: std::collections::VecDeque<QueuedDownload>,
-}
-
-/// What Download did: started at once, or queued behind others (`position` 1 = next).
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadStart {
-    queued: bool,
-    position: usize,
-}
-
-fn emit_queue(app: &AppHandle, q: &DownloadQueue) {
-    let _ = app.emit("download-queue", q.clone());
-}
-
-/// Downloads a source, or queues it behind the downloads already asked for.
-#[tauri::command]
-pub fn download_corpus(
-    app: AppHandle,
-    studio: State<Studio>,
-    source: String,
-    max_mb: u64,
-) -> Res<DownloadStart> {
-    let src = sources()
-        .into_iter()
-        .chain(conversation_sources())
-        .find(|s| s.id == source)
-        .ok_or("Unknown corpus source")?;
-    let item = QueuedDownload { source, name: src.name.to_string(), max_mb: max_mb.max(1) };
-    let mut q = studio.downloads.lock().unwrap_or_else(|e| e.into_inner());
-    if q.current.as_ref().is_some_and(|c| c.source == item.source)
-        || q.waiting.iter().any(|w| w.source == item.source)
-    {
-        return Err(format!("{} is already downloading or waiting its turn", item.name));
-    }
-    if q.current.is_some() {
-        q.waiting.push_back(item);
-        emit_queue(&app, &q);
-        return Ok(DownloadStart { queued: true, position: q.waiting.len() });
-    }
-    q.current = Some(item.clone());
-    emit_queue(&app, &q);
-    drop(q);
-    let cancel = studio.cancel_download.clone();
-    std::thread::spawn(move || {
-        let mut next = Some(item);
-        while let Some(item) = next {
-            cancel.store(false, Ordering::Release);
-            run_download(&app, &item, &cancel);
-            // The next one waiting, if any (taken under the lock, so a download asked for now
-            // is either taken here or starts its own run).
-            let studio = app.state::<Studio>();
-            let mut q = studio.downloads.lock().unwrap_or_else(|e| e.into_inner());
-            next = q.waiting.pop_front();
-            q.current = next.clone();
-            emit_queue(&app, &q);
-        }
-    });
-    Ok(DownloadStart { queued: false, position: 0 })
-}
-
 /// One download: fetched, converted (and filtered), stored, with its events.
-fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
-    let source = item.source.clone();
+/// Returns the saved corpus's name, or why it did not finish.
+pub(crate) fn run_download(app: &AppHandle, source: &str, max_mb: u64, cancel: &AtomicBool) -> Res<String> {
+    let source = source.to_string();
     let emit = |e: DownloadEvent| {
         let _ = app.emit("corpus-download", e);
     };
     let Some(src) = sources().into_iter().chain(conversation_sources()).find(|s| s.id == source) else {
-        return;
+        return Err("Unknown corpus source".into());
     };
-    let limit = (item.max_mb << 20).min(MAX_CORPUS_BYTES);
+    let limit = (max_mb << 20).min(MAX_CORPUS_BYTES);
     // A fresh start, so the pages show it from the beginning.
     emit(DownloadEvent {
         source: source.clone(),
@@ -1300,7 +1225,16 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
     );
     let (corpus, error) = match result {
         Ok(c) => (Some(c), None),
+        // Paused, not cancelled: it continues when the queue is resumed.
+        Err(_) if crate::downloads::pausing() => {
+            (None, Some("Paused: it continues when the queue is resumed (a file being downloaded continues from where it stopped).".to_string()))
+        }
         Err(e) => (None, Some(e)),
+    };
+    let outcome = match (&corpus, &error) {
+        (Some(c), _) => Ok(c.name.clone()),
+        (_, Some(e)) => Err(e.clone()),
+        _ => Err("nothing was saved".into()),
     };
     let note = match corpus.as_ref().and_then(|c| c.filter.as_ref()) {
         Some(r) => Some(format!(
@@ -1310,33 +1244,13 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
         None => last_note.into_inner(),
     };
     emit(DownloadEvent { source, progress: Progress::default(), done: true, error, corpus, note });
+    outcome
 }
 
 /// Stops the download running and keeps what it has downloaded (the next one then starts).
 #[tauri::command]
 pub fn finish_download() {
     FINISH.store(true, Ordering::Release);
-}
-
-/// Cancels the download running (the next one waiting then starts).
-#[tauri::command]
-pub fn cancel_download(studio: State<Studio>) {
-    studio.cancel_download.store(true, Ordering::Release);
-}
-
-/// The download running and the ones waiting.
-#[tauri::command]
-pub fn download_queue(studio: State<Studio>) -> DownloadQueue {
-    studio.downloads.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-/// Takes a waiting download out of the queue.
-#[tauri::command]
-pub fn remove_queued_download(app: AppHandle, studio: State<Studio>, source: String) -> DownloadQueue {
-    let mut q = studio.downloads.lock().unwrap_or_else(|e| e.into_inner());
-    q.waiting.retain(|w| w.source != source);
-    emit_queue(&app, &q);
-    q.clone()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

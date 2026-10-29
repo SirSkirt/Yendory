@@ -51,6 +51,10 @@
       <input type="number" id="recoveryMinutes" min="0" max="240" step="1" value="10" class="inline-num">
       <span class="note">minutes while reading or practising conversations (0: only when stopped). A recovery point is about the size of the model file (which holds the optimizer state too); a run keeps two.</span>
     </div>
+    <div class="line-form">
+      <label class="check"><input type="checkbox" id="resumeDownloads"> Resume the download queue when Studio starts</label>
+      <span class="note">Off: the queue is kept as it was and waits, paused, until you resume it (a download that was running continues from where it stopped).</span>
+</div>
 
     <div class="entry" id="activeEntry" hidden>
       <h3 id="activeName">—</h3>
