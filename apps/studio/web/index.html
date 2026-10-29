@@ -193,7 +193,7 @@
       <div class="meter"><div id="downloadBar"></div></div>
       <p class="mono" id="downloadLine">—</p>
       <p class="note" id="downloadNote" hidden></p>
-      <div class="actions"><button type="button" id="cancelDownload">Cancel download</button></div>
+      <div class="actions"><button type="button" id="finishDownload" title="Stop downloading and keep what has been downloaded and filtered so far">Finish now (keep what's downloaded)</button> <button type="button" id="cancelDownload" title="Stop and keep nothing">Cancel download</button></div>
       <div class="download-queue" id="downloadQueue"></div>
     </div>
 
@@ -375,13 +375,25 @@
       <h4 id="convDownloadTitle">Downloading</h4>
       <div class="meter"><div id="convDownloadBar"></div></div>
       <p class="mono" id="convDownloadLine">—</p>
-      <div class="actions"><button type="button" id="convCancelDownload">Cancel download</button></div>
+      <div class="actions"><button type="button" id="convFinishDownload" title="Stop downloading and keep what has been downloaded and filtered so far">Finish now (keep what's downloaded)</button> <button type="button" id="convCancelDownload" title="Stop and keep nothing">Cancel download</button></div>
       <div class="download-queue" id="convDownloadQueue"></div>
     </div>
     <table class="ledger" id="convTable">
-      <thead><tr><th>Practise</th><th>Dataset</th><th class="num">Size</th><th class="num">Conversations</th><th>Licence</th></tr></thead>
-      <tbody><tr><td colspan="5" class="empty">No conversation dataset yet. Download one above.</td></tr></tbody>
+      <thead><tr><th>Practise</th><th>Dataset</th><th class="num">Size</th><th class="num">Conversations</th><th class="num" title="Use at most this many megabytes of the dataset (after the filters); empty: all of it">Use up to</th><th>Licence</th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">No conversation dataset yet. Download one above.</td></tr></tbody>
     </table>
+    <fieldset class="entry" id="convFilters">
+      <legend>Quality filter for downloaded datasets</legend>
+      <p class="note">Downloads keep every usable conversation; these switches decide what practice uses (your own datasets are never filtered). Conversations that hold one of Yendory's tests, and ones that cannot be read as two people taking turns, are always left out.</p>
+      <label class="check"><input type="checkbox" id="convFAssistant" checked> Assistant style (an assistant's phrases, lists, one side answering at length)</label>
+      <label class="check"><input type="checkbox" id="convFTooLong" checked> Too long (a turn over 600 characters) or code</label>
+      <label class="check"><input type="checkbox" id="convFNotEnglish" checked> Not English</label>
+      <label class="check"><input type="checkbox" id="convFFlagged" checked> Flagged by the dataset itself (LMSYS-Chat-1M: its language tag, its moderation, names removed)</label>
+      <label class="check"><input type="checkbox" id="convFUnsafe" checked> Unsafe or inappropriate words</label>
+      <label class="check"><input type="checkbox" id="convFLowQuality" checked> Low quality (links, placeholders, symbols, shouting, too few words)</label>
+      <label class="check"><input type="checkbox" id="convFDuplicates" checked> Duplicates</label>
+      <div class="line-form"><button type="button" id="convFilterCount">Count what practice would use</button> <span class="note" id="convFilterNote"></span></div>
+    </fieldset>
     <details class="entry" id="convOwn">
       <summary><b>Your own conversations</b>: add a file, or write or paste conversations here. They are kept as a dataset you can tick above.</summary>
       <p class="note">Write each conversation as lines of <code>Name: what they say</code> (two people; <code>U:</code> / <code>N:</code> also works), with a blank line between conversations. An optional first line <code>Situation: …</code> sets the scene. Files can be plain text in that form, or JSON / JSON lines with <code>messages</code> (<code>role</code> / <code>content</code>), <code>dialog</code> lists, or <code>&lt;|im_start|&gt;</code> text. A handful is fine: progress is then checked on the other datasets practised with it.</p>
@@ -390,7 +402,7 @@
       <textarea id="convOwnText" rows="8" placeholder="Situation: Two friends meet after school.&#10;Mia: Hi! How was the test?&#10;Leo: Hard. I didn't finish the last page.&#10;Mia: Oh no. Do you want to study together for the next one?&#10;&#10;Ann: Did you see the rain this morning?&#10;Ben: Yes, my shoes are still wet."></textarea>
       <div class="actions"><button type="button" id="convOwnSave">Save as a dataset</button> <span class="note" id="convOwnNote"></span></div>
     </details>
-    <label class="check conv-chats"><input type="checkbox" id="convSkipAi" checked> Leave out conversations where someone says they are an AI or an assistant ("as an AI", "a language model", "how can I assist you"), so Nova never practises saying that about herself. Assistant-style conversations without such lines are kept either way.</label>
+    <label class="check conv-chats"><input type="checkbox" id="convSkipAi" checked> While practising, also leave out conversations where someone says they are an AI or an assistant ("as an AI", "a language model", "how can I assist you"), so Nova never practises saying that about herself (even with the filter above off). Assistant-style conversations without such lines are decided by the filter above.</label>
     <label class="check conv-chats"><input type="checkbox" id="convBalanced"> Experimental: also keep the best <b>balanced</b> checkpoint, besides the best language one: among checkpoints that learned and kept the Classroom answers and reading, the one passing the most context tests, then listening best. It is saved as a model of its own, so the two can be compared; context and listening never reject a checkpoint.</label>
     <label class="check conv-chats"><input type="checkbox" id="convChats" checked> Also practise Nova's replies you marked <b>consistent</b> in § 13 Chat <span class="note" id="convChatCount"></span></label>
 

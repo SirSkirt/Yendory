@@ -193,6 +193,28 @@ falls back to the backup and is kept, never written over; with neither, defaults
 written at start-up; a newer version's settings are kept; recovery points are checked against
 their checksums for the start-up dialog. Not checked here: closing the window during training (the
 stop, the recovery point and the close are wired, but only run in the app).
+0.8.3: Hugging Face datasets are read from their Parquet files when the dataset viewer has them
+(the 100-row pages remain the fallback). Measured here: the row pages give about 65 rows a
+second (a page takes 0.3-0.8 s and requests are a second apart); one 244 MB Parquet file
+downloaded in 10 s and its 69,289 rows were read in 1.3 s. UltraChat 200k end to end (download,
+conversion, quality filter): all 207,865 rows in 63 s, about 53 minutes through the pages. The
+filter keeps 1,686 of them (1.9 MB; 202,371 too long or code), so asking for more cannot be met:
+the page now shows rows read of the dataset's rows, documents kept, the filter's share and the
+size that share gives, and "Finish now" keeps what was downloaded (Cancel keeps nothing). Tests:
+file choice by config and split, a broken download continued with a range request, a server
+that ignores ranges restarting the file instead of appending, Parquet rows read as the viewer's
+JSON. Not measured: LMSYS-Chat-1M (gated; no token here).
+Also in 0.8.3 (the owner's report: unticking the AI-voice box did not change the download filter,
+which was always on): conversation downloads keep every usable conversation (the dataset's own
+flagged ones in a file apart), and the quality filter is applied when practice starts, reason by
+reason as chosen on § 4 (all on by default, so practice uses what it used before), with an
+optional "use up to N MB" per dataset and a count of what practice would use. Always left out:
+unreadable conversations and ones holding Yendory's tests. Your own datasets are never filtered;
+datasets downloaded before 0.8.3 were filtered as they downloaded and are unchanged. Reading a
+conversation dataset still uses the full filter. Tests: each reason applies only when chosen,
+flagged conversations only with that filter off, the tests always left out, the size cap; network
+check: UltraChat now stores all 51 usable conversations of a 300 KB sample (the full filter would
+pass none).
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

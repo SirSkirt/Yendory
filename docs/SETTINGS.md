@@ -11,7 +11,7 @@ updating installs over Studio and keeps it).
 | § 1 Models | training device, CPU threads, GPU checks, fitted reply limits, the measured benchmark, the recovery-point interval |
 | § 2 Reading | every field, the reading mode and stage map, the ticked practice families, each corpus's tick and share |
 | § 3 Classroom | every field and switch (safeguards, loss allowances, answer-based checks, comparison variants…), and the lesson list (`classroom_lessons.json`) |
-| § 4 Conversation | every field and switch, and which datasets are ticked (a dataset added later is ticked, as before) |
+| § 4 Conversation | every field and switch (the quality filter's switches among them), which datasets are ticked (a dataset added later is ticked, as before), and each one's "use up to" size |
 | Courses, Planner | each course and plan in its own file, with its steps, settings, status and position |
 | Study, Rewards, memory | their own settings keys |
 

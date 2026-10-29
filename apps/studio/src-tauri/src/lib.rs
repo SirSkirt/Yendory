@@ -26,6 +26,7 @@ mod courses;
 mod designer;
 mod filter;
 mod growth;
+mod hfparquet;
 mod memory;
 mod neuro;
 mod practice;
@@ -2115,6 +2116,7 @@ pub fn run() {
             conversation::conversation_sources,
             conversation::conversation_material,
             conversation::converse,
+            conversation::filter_preview,
             courses::add_plan_step,
             saved_lessons,
             forget_saved_lesson,
@@ -2164,6 +2166,7 @@ pub fn run() {
             update::install_update,
             reading::set_hf_token,
             reading::cancel_download,
+            reading::finish_download,
             reading::download_queue,
             reading::remove_queued_download,
             reading::read_corpus,

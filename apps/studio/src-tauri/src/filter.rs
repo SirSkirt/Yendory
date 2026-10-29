@@ -1,7 +1,13 @@
 //! Quality filter for downloaded conversation datasets: what Nova practises with is fewer, better
-//! conversations, not as many as possible. Every conversation read is either kept or counted
-//! under the first reason it was left out, and the counts are shown during the download and kept
-//! with the dataset.
+//! conversations, not as many as possible.
+//!
+//! Since 0.8.3 a download keeps every usable conversation (the dataset's own flagged ones in a
+//! file apart) and the filter is applied when practice starts, with the reasons chosen on the
+//! Conversation page (`FilterChoice`, all on by default) and as much of each dataset as asked
+//! for. The download still reports what the full filter would keep. Two things are always left
+//! out: conversations that are not usable (malformed, broken turn order) and conversations that
+//! hold one of Yendory's tests (so the tests stay unseen). Datasets you add yourself are never
+//! filtered.
 //!
 //! Left out, in this order:
 //! * flagged by the dataset itself (LMSYS-Chat-1M: not English, flagged by its moderation, or
@@ -27,7 +33,8 @@ use std::collections::HashSet;
 use yendory_engine::learn::conversation::parse_dialogue;
 
 /// Why a conversation was left out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Reason {
     Flagged,
     Malformed,
@@ -39,6 +46,50 @@ pub enum Reason {
     AssistantStyle,
     OverlapsTests,
     Duplicate,
+}
+
+/// Which reasons leave a conversation out (the page's switches; all on by default). Malformed
+/// conversations, broken turn order and Yendory's tests are always left out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FilterChoice {
+    pub assistant_style: bool,
+    pub too_long: bool,
+    pub not_english: bool,
+    /// Flagged by the dataset itself (LMSYS-Chat-1M: its language tag, moderation, names removed).
+    pub flagged: bool,
+    pub unsafe_content: bool,
+    pub low_quality: bool,
+    pub duplicates: bool,
+}
+
+impl Default for FilterChoice {
+    fn default() -> Self {
+        FilterChoice {
+            assistant_style: true,
+            too_long: true,
+            not_english: true,
+            flagged: true,
+            unsafe_content: true,
+            low_quality: true,
+            duplicates: true,
+        }
+    }
+}
+
+impl FilterChoice {
+    pub fn applies(&self, r: Reason) -> bool {
+        match r {
+            Reason::Malformed | Reason::TurnOrder | Reason::OverlapsTests => true,
+            Reason::Flagged => self.flagged,
+            Reason::TooLong => self.too_long,
+            Reason::NotEnglish => self.not_english,
+            Reason::Unsafe => self.unsafe_content,
+            Reason::LowQuality => self.low_quality,
+            Reason::AssistantStyle => self.assistant_style,
+            Reason::Duplicate => self.duplicates,
+        }
+    }
 }
 
 /// What the filter did with a download.
@@ -99,6 +150,17 @@ impl FilterReport {
             s.push_str(&format!(" (left out: {})", parts.join(", ")));
         }
         s
+    }
+}
+
+impl FilterReport {
+    /// For a download that keeps everything: what the full filter would keep.
+    pub fn estimate(&self) -> String {
+        let s = self.summary();
+        format!(
+            "with every filter on, {}",
+            s.replacen("kept", "practice would use", 1).replace("(left out:", "(leaving out")
+        )
     }
 }
 
@@ -231,11 +293,19 @@ fn test_signatures() -> Vec<TestSignature> {
     out
 }
 
-/// The filter's state through one download.
+/// The filter's state through one download (or one preparation).
 pub struct ConversationFilter {
     pub report: FilterReport,
+    pub choice: FilterChoice,
     seen: HashSet<u64>,
     tests: Vec<TestSignature>,
+}
+
+/// A conversation a download keeps, and whether the dataset itself flagged it (`screen`).
+#[derive(Debug, PartialEq)]
+pub struct Taken {
+    pub doc: String,
+    pub screened: bool,
 }
 
 impl Default for ConversationFilter {
@@ -246,24 +316,56 @@ impl Default for ConversationFilter {
 
 impl ConversationFilter {
     pub fn new() -> Self {
-        ConversationFilter { report: FilterReport::default(), seen: HashSet::new(), tests: test_signatures() }
+        Self::with(FilterChoice::default())
     }
 
-    /// One dataset row: screened by the dataset's own flags (`screen`), converted, then checked.
-    /// Returns the conversations kept.
-    pub fn take(&mut self, row: &Value, screen: Option<Screen>, convert: Convert) -> Vec<String> {
-        if let Some(why) = screen.and_then(|s| s(row)) {
-            self.report.read += 1;
-            self.report.count(why);
-            return Vec::new();
+    pub fn with(choice: FilterChoice) -> Self {
+        ConversationFilter {
+            report: FilterReport::default(),
+            choice,
+            seen: HashSet::new(),
+            tests: test_signatures(),
         }
+    }
+
+    /// One dataset row at download: every usable conversation is returned (flagged by the
+    /// dataset or not); the report counts what the full filter would keep.
+    pub fn take_all(&mut self, row: &Value, screen: Option<Screen>, convert: Convert) -> Vec<Taken> {
+        let screened = screen.and_then(|s| s(row));
         let docs = convert(row);
         if docs.is_empty() {
             self.report.read += 1;
-            self.report.count(Reason::Malformed);
+            self.report.count(screened.unwrap_or(Reason::Malformed));
             return Vec::new();
         }
-        docs.into_iter().filter(|d| self.keep(d)).collect()
+        let mut out = Vec::new();
+        for doc in docs {
+            self.report.read += 1;
+            let verdict = match screened {
+                Some(r) => {
+                    // Counted as the dataset's flag; usable unless it cannot be read.
+                    self.report.count(r);
+                    reasons(&doc)
+                        .first()
+                        .copied()
+                        .filter(|r| matches!(r, Reason::Malformed | Reason::TurnOrder))
+                }
+                None => {
+                    let v = self.verdict(&doc);
+                    match v {
+                        Some(r) => self.report.count(r),
+                        None => self.report.kept += 1,
+                    }
+                    v
+                }
+            };
+            // Never usable: unreadable conversations and Yendory's tests. Everything else is kept
+            // and filtered when practice starts.
+            if !matches!(verdict, Some(Reason::Malformed | Reason::TurnOrder | Reason::OverlapsTests)) {
+                out.push(Taken { doc, screened: screened.is_some() });
+            }
+        }
+        out
     }
 
     /// Checks one converted conversation; true when it is kept (and counts it either way).
@@ -281,10 +383,10 @@ impl ConversationFilter {
         }
     }
 
+    /// The first reason (of the ones chosen) the conversation is left out for.
     fn verdict(&mut self, doc: &str) -> Option<Reason> {
-        let why = reason(doc);
-        if why.is_some() {
-            return why;
+        if let Some(why) = reasons(doc).into_iter().find(|r| self.choice.applies(*r)) {
+            return Some(why);
         }
         let text = normal(doc);
         if self.tests.iter().any(|t| text.contains(&t.question) && text.contains(&t.fact)) {
@@ -294,42 +396,76 @@ impl ConversationFilter {
         let key: String = text.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(&key, &mut h);
-        if !self.seen.insert(std::hash::Hasher::finish(&h)) {
+        if !self.seen.insert(std::hash::Hasher::finish(&h)) && self.choice.duplicates {
             return Some(Reason::Duplicate);
         }
         None
     }
 }
 
-/// Why a conversation is left out, apart from the tests and duplicates (`None`: it is kept).
-pub fn reason(doc: &str) -> Option<Reason> {
-    let Some(d) = parse_dialogue(doc) else { return Some(Reason::Malformed) };
+/// The conversations of a downloaded dataset that pass the chosen filters, up to `cap` bytes:
+/// `docs` are the dataset's conversations, `flagged` the ones the dataset itself flagged (used
+/// only when that filter is off). Returns them with the filter's counts.
+pub fn select<'a>(
+    docs: impl IntoIterator<Item = &'a str>,
+    flagged: impl IntoIterator<Item = &'a str>,
+    choice: &FilterChoice,
+    cap: Option<u64>,
+) -> (Vec<String>, FilterReport) {
+    let mut f = ConversationFilter::with(choice.clone());
+    let mut out = Vec::new();
+    let mut bytes = 0u64;
+    let flagged_too = !choice.flagged;
+    let all = docs.into_iter().map(|d| (d, false)).chain(flagged.into_iter().map(|d| (d, true)));
+    for (doc, screened) in all {
+        if cap.is_some_and(|c| bytes >= c) {
+            break;
+        }
+        if screened && !flagged_too {
+            f.report.read += 1;
+            f.report.count(Reason::Flagged);
+            continue;
+        }
+        if f.keep(doc) {
+            bytes += doc.len() as u64 + 16;
+            out.push(doc.to_string());
+        }
+    }
+    (out, f.report)
+}
+
+/// Every reason a conversation would be left out for, in the filter's order (apart from the
+/// tests and duplicates; empty: it is kept). Malformed and broken turn order end the list (the
+/// rest cannot be judged).
+pub fn reasons(doc: &str) -> Vec<Reason> {
+    let Some(d) = parse_dialogue(doc) else { return vec![Reason::Malformed] };
     if d.turns.iter().any(|t| !t.chars().any(|c| c.is_ascii_alphabetic())) {
-        return Some(Reason::Malformed);
+        return vec![Reason::Malformed];
     }
     if d.speakers.windows(2).any(|w| w[0] == w[1]) {
-        return Some(Reason::TurnOrder);
+        return vec![Reason::TurnOrder];
     }
+    let mut out = Vec::new();
     if d.turns.iter().any(|t| t.len() > LONGEST || t.contains("```")) {
-        return Some(Reason::TooLong);
+        out.push(Reason::TooLong);
     }
     let all = d.turns.join("\n");
     if !english(&all) {
-        return Some(Reason::NotEnglish);
+        out.push(Reason::NotEnglish);
     }
     let lower = all.to_ascii_lowercase();
     let words: Vec<&str> =
         lower.split(|c: char| !c.is_ascii_alphanumeric() && c != '\'').filter(|w| !w.is_empty()).collect();
     if words.iter().any(|w| UNSAFE.contains(w)) || UNSAFE_PHRASES.iter().any(|p| lower.contains(p)) {
-        return Some(Reason::Unsafe);
+        out.push(Reason::Unsafe);
     }
     if low_quality(&d.turns, &lower, words.len()) {
-        return Some(Reason::LowQuality);
+        out.push(Reason::LowQuality);
     }
     if assistant_style(&d.speakers, &d.turns, &lower) {
-        return Some(Reason::AssistantStyle);
+        out.push(Reason::AssistantStyle);
     }
-    None
+    out
 }
 
 fn low_quality(turns: &[String], lower: &str, words: usize) -> bool {
@@ -453,10 +589,56 @@ mod tests {
             })
         };
         let mut f = ConversationFilter::new();
-        assert_eq!(f.take(&row("English", false, false), Some(screen), whole_dialogue).len(), 1);
-        assert!(f.take(&row("Portuguese", false, false), Some(screen), whole_dialogue).is_empty());
-        assert!(f.take(&row("English", true, false), Some(screen), whole_dialogue).is_empty());
-        assert!(f.take(&row("English", false, true), Some(screen), whole_dialogue).is_empty());
+        let taken = |f: &mut ConversationFilter, r| f.take_all(&r, Some(screen), whole_dialogue);
+        assert_eq!(taken(&mut f, row("English", false, false)).iter().filter(|t| !t.screened).count(), 1);
+        // Flagged rows are kept apart (for when that filter is switched off), not dropped.
+        for r in [row("Portuguese", false, false), row("English", true, false), row("English", false, true)] {
+            let t = taken(&mut f, r);
+            assert!(t.len() == 1 && t[0].screened);
+        }
         assert_eq!((f.report.read, f.report.kept, f.report.not_english, f.report.flagged), (4, 1, 1, 2));
+    }
+
+    /// At practice: the chosen reasons only, the dataset's flagged conversations only when that
+    /// filter is off, duplicates counted whether or not they are left out, the tests always left
+    /// out, and no more than the size asked for.
+    #[test]
+    fn practice_uses_the_chosen_filters_and_size() {
+        let natural = "Mia: Hi! How was your weekend?\nLeo: Great, I went hiking with my cousin.\nMia: Where did you go?\nLeo: Up the hill behind town.";
+        let assistant = "Mia: How do I bake bread?\nLeo: Certainly! Here are some steps: 1. Mix flour and water 2. Knead it. I hope this helps!";
+        let long = format!(
+            "Mia: Tell me about your trip.\nLeo: {}",
+            "We walked far and saw many birds. ".repeat(30)
+        );
+        let t = &yendory_engine::learn::listening::context_tests(1)[0];
+        let leaked = format!(
+            "Mia: {}\nLeo: Okay, good to know.\nMia: {}\nLeo: I think so.",
+            t.a.turns[0].1, t.a.question
+        );
+        let flagged = "Ana: Oi, tudo bem com voce hoje?\nBea: Tudo otimo, obrigada por perguntar.";
+        let docs = [natural, assistant, &long, natural, &leaked];
+        let all_on = FilterChoice::default();
+        let (kept, r) = select(docs, [flagged], &all_on, None);
+        assert_eq!(kept, [natural]);
+        assert_eq!(
+            (r.assistant_style, r.too_long, r.duplicates, r.overlaps_tests, r.flagged),
+            (1, 1, 1, 1, 1)
+        );
+        let loose = FilterChoice {
+            assistant_style: false,
+            too_long: false,
+            duplicates: false,
+            flagged: false,
+            not_english: false,
+            ..all_on.clone()
+        };
+        let (kept, _) = select(docs, [flagged], &loose, None);
+        assert_eq!(
+            kept,
+            [natural, assistant, &long, natural, flagged],
+            "the test conversation is always left out"
+        );
+        let (kept, _) = select(docs, [flagged], &loose, Some(10));
+        assert_eq!(kept, [natural], "stops at the size asked for");
     }
 }

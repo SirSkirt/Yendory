@@ -8,7 +8,8 @@ use crate::sources::{conversation_sources, gutenberg_book, screen_of, sources, C
 use std::time::Duration;
 use yendory_engine::learn::autogrow::Check;
 use yendory_engine::learn::corpus::{
-    pretrain_mix_with, Category, Corpus, MixPart, PretrainConfig, PretrainEvent, ReadingState, END_OF_TEXT,
+    normalize_ascii, pretrain_mix_with, split_documents, Category, Corpus, MixPart, PretrainConfig,
+    PretrainEvent, ReadingState, END_OF_TEXT,
 };
 use yendory_engine::learn::generate::{generate, Family, GenerateConfig};
 
@@ -37,9 +38,35 @@ pub struct CorpusInfo {
     /// How to credit the source.
     #[serde(default)]
     pub(crate) attribution: String,
-    /// A downloaded conversation dataset: what the quality filter kept and left out.
+    /// A downloaded conversation dataset: what the quality filter kept and left out (since
+    /// 0.8.3: what the full filter would keep; the filter is applied when practice starts).
     #[serde(default)]
     pub(crate) filter: Option<FilterReport>,
+    /// Downloaded since 0.8.3: every usable conversation is stored and the filter is applied at
+    /// practice (earlier downloads were filtered as they downloaded).
+    #[serde(default)]
+    pub(crate) unfiltered: bool,
+    /// The conversations the dataset itself flagged (LMSYS-Chat-1M), stored apart
+    /// (`<id>.flagged.txt`) for when that filter is switched off.
+    #[serde(default)]
+    pub(crate) flagged: Option<FlaggedPart>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlaggedPart {
+    pub(crate) documents: usize,
+    pub(crate) bytes: u64,
+    pub(crate) sha256: String,
+}
+
+/// What a download brought: the text, whether it stopped at the size asked for, the filter's
+/// counts, and the conversations the dataset flagged (kept apart; empty for most sources).
+pub struct Fetched {
+    pub text: Vec<u8>,
+    pub truncated: bool,
+    pub report: Option<FilterReport>,
+    pub flagged: Vec<u8>,
 }
 
 /// One corpus of a reading, as recorded.
@@ -111,6 +138,7 @@ fn store(
     bytes: Vec<u8>,
     truncated: bool,
     filter: Option<FilterReport>,
+    flagged: Vec<u8>,
 ) -> Res<CorpusInfo> {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let corpus = Corpus::prepare(&text);
@@ -152,14 +180,76 @@ fn store(
         dropped_chars: corpus.dropped_chars,
         truncated,
         added: now(),
+        unfiltered: filter.is_some(),
         filter,
+        flagged: (!flagged.is_empty()).then(|| FlaggedPart {
+            documents: String::from_utf8_lossy(&flagged).matches(END_OF_TEXT).count() + 1,
+            bytes: flagged.len() as u64,
+            sha256: sha256_hex(&flagged),
+        }),
     };
+    if !flagged.is_empty() {
+        write_atomic(&corpus_path(app, &format!("{}.flagged", info.id), "txt")?, &flagged)?;
+    }
     write_atomic(&corpus_path(app, &info.id, "txt")?, text.as_bytes())?;
     write_atomic(
         &corpus_path(app, &info.id, "json")?,
         &serde_json::to_vec_pretty(&info).map_err(|e| e.to_string())?,
     )?;
     Ok(info)
+}
+
+/// A conversation dataset's conversations for practice (or reading): a downloaded one through the
+/// chosen filters (its flagged part only when that filter is off), at most `cap` bytes; one of
+/// your own as it is (never filtered), at most `cap` bytes. The stored files are checked against
+/// their fingerprints. Returns the filter's counts for a downloaded dataset.
+pub(crate) fn conversation_documents(
+    app: &AppHandle,
+    info: &CorpusInfo,
+    choice: &crate::filter::FilterChoice,
+    cap: Option<u64>,
+) -> Res<(Vec<String>, Option<FilterReport>)> {
+    let read = |id: &str, sha: &str| -> Res<Vec<String>> {
+        let text = std::fs::read_to_string(corpus_path(app, id, "txt")?).map_err(|e| e.to_string())?;
+        if sha256_hex(text.as_bytes()) != sha {
+            return Err(format!(
+                "{}: the stored dataset does not match its fingerprint; download it again",
+                info.name
+            ));
+        }
+        let (ascii, _) = normalize_ascii(&text);
+        Ok(split_documents(&ascii))
+    };
+    let docs = read(&info.id, &info.sha256)?;
+    if info.filter.is_none() {
+        let mut bytes = 0u64;
+        let kept = docs
+            .into_iter()
+            .take_while(|d| {
+                let go = cap.is_none_or(|c| bytes < c);
+                bytes += d.len() as u64 + 16;
+                go
+            })
+            .collect();
+        return Ok((kept, None));
+    }
+    let flagged = match &info.flagged {
+        Some(f) if !choice.flagged => read(&format!("{}.flagged", info.id), &f.sha256)?,
+        _ => Vec::new(),
+    };
+    let flagged_count = info.flagged.as_ref().map_or(0, |f| f.documents);
+    let (kept, mut report) = crate::filter::select(
+        docs.iter().map(String::as_str),
+        flagged.iter().map(String::as_str),
+        choice,
+        cap,
+    );
+    // With that filter on, the flagged part is not read; it is still counted.
+    if choice.flagged && flagged_count > 0 {
+        report.read += flagged_count;
+        report.flagged += flagged_count;
+    }
+    Ok((kept, Some(report)))
 }
 
 pub(crate) fn load_info(app: &AppHandle, id: &str) -> Res<CorpusInfo> {
@@ -169,12 +259,42 @@ pub(crate) fn load_info(app: &AppHandle, id: &str) -> Res<CorpusInfo> {
 
 /// Streams `url` into memory, at most `limit` bytes. A download cut at the limit ends at the last
 /// complete story (`<|endoftext|>`) or paragraph, so no document is torn in half.
+/// How far a download is (sent to the pages with every update).
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    /// Bytes kept (text, or the documents that passed the quality filter) and the most that
+    /// will be kept.
+    pub received: u64,
+    pub total: Option<u64>,
+    /// Hugging Face datasets: rows read and the rows the dataset (split) has.
+    pub rows: Option<u64>,
+    pub rows_total: Option<u64>,
+    /// Documents (conversations) kept.
+    pub kept: Option<u64>,
+    /// Parquet: the file (1-based) of the files, and its bytes on disk / size.
+    pub file: Option<(usize, usize)>,
+    pub file_bytes: Option<(u64, u64)>,
+}
+
+impl Progress {
+    pub fn bytes(received: u64, total: Option<u64>) -> Self {
+        Progress { received, total, ..Default::default() }
+    }
+}
+
+/// "Finish now": the download running stops reading and keeps what it has (unlike Cancel).
+pub(crate) static FINISH: AtomicBool = AtomicBool::new(false);
+pub(crate) fn finishing() -> bool {
+    FINISH.load(Ordering::Acquire)
+}
+
 pub fn fetch(
     agent: &ureq::Agent,
     url: &str,
     limit: u64,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(Progress),
 ) -> Res<(Vec<u8>, bool)> {
     let resp = agent.get(url).call().map_err(|e| format!("Download failed: {e}"))?;
     let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok());
@@ -195,14 +315,14 @@ pub fn fetch(
         data.extend_from_slice(&buf[..n.min(room)]);
         if data.len() as u64 - reported >= 1 << 20 {
             reported = data.len() as u64;
-            progress(reported, total);
+            progress(Progress::bytes(reported, total));
         }
-        if data.len() as u64 >= limit {
-            truncated = total.is_none_or(|t| t > limit);
+        if data.len() as u64 >= limit || finishing() {
+            truncated = total.is_none_or(|t| t > data.len() as u64);
             break;
         }
     }
-    progress(data.len() as u64, total);
+    progress(Progress::bytes(data.len() as u64, total));
     if truncated {
         let cut = find_last(&data, END_OF_TEXT.as_bytes())
             .map(|i| i + END_OF_TEXT.len())
@@ -229,7 +349,7 @@ fn agent() -> ureq::Agent {
 /// Paces requests to one server: a gap between requests that widens when the server says
 /// "too many requests" (429), so a long download slows down instead of failing.
 pub struct Pacer {
-    gap: Duration,
+    pub(crate) gap: Duration,
     last: Option<std::time::Instant>,
 }
 impl Pacer {
@@ -242,7 +362,7 @@ impl Pacer {
 fn wait_for(time: Duration, cancel: &AtomicBool) -> bool {
     let until = std::time::Instant::now() + time;
     while std::time::Instant::now() < until {
-        if cancel.load(Ordering::Acquire) {
+        if cancel.load(Ordering::Acquire) || finishing() {
             return false;
         }
         std::thread::sleep(Duration::from_millis(200).min(until - std::time::Instant::now()));
@@ -254,7 +374,7 @@ fn wait_for(time: Duration, cancel: &AtomicBool) -> bool {
 /// the `HF_TOKEN` environment variable is used when none is given.
 static HF_TOKEN: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
-fn hf_token() -> Option<String> {
+pub(crate) fn hf_token() -> Option<String> {
     HF_TOKEN
         .read()
         .ok()
@@ -299,7 +419,7 @@ const RATE_LIMITED: &str = "the server is limiting downloads (too many requests)
 /// asks (Retry-After) or 30 s, doubling up to 5 minutes, for up to about 20 minutes, and
 /// slows later requests down. Busy servers (5xx) and dropped connections are retried too.
 /// `note` reports waiting (and `None` when downloading again).
-fn get_json(
+pub(crate) fn get_json(
     agent: &ureq::Agent,
     url: &str,
     cancel: &AtomicBool,
@@ -395,21 +515,48 @@ pub fn hf_documents(
     convert: &mut dyn FnMut(&serde_json::Value) -> Vec<String>,
     limit: u64,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(Progress),
     note: &mut dyn FnMut(Option<String>),
 ) -> Res<(Vec<String>, bool)> {
+    let rows_total = crate::hfparquet::split_rows(agent, dataset, configs, split, cancel);
+    // The Parquet files when the dataset has them (about 100 times faster), else the viewer's
+    // pages of 100 rows.
+    if let Some(files) = crate::hfparquet::parquet_files(agent, dataset, configs, split, cancel, note) {
+        let mut docs = Vec::new();
+        match parquet_documents(
+            agent, dataset, split, &files, configs, convert, limit, rows_total, cancel, progress, note,
+            &mut docs,
+        ) {
+            Ok(truncated) => return Ok((docs, truncated)),
+            Err(e) if cancel.load(Ordering::Acquire) => return Err(e),
+            // Rows already read went through the filter: keep what passed rather than read them
+            // again from the pages.
+            Err(e) if !docs.is_empty() => {
+                note(Some(format!("{e} Keeping the {} documents read so far.", docs.len())));
+                return Ok((docs, true));
+            }
+            Err(e) => note(Some(format!(
+                "The Parquet files could not be used ({e}); reading the row pages instead."
+            ))),
+        }
+    }
     let mut docs = Vec::new();
     let mut truncated = false;
     let per_config = (limit / configs.len().max(1) as u64).max(1);
     let mut pacer = Pacer::new();
+    let mut read = 0u64;
     for config in configs {
         let (mut used, mut offset) = (0u64, 0u64);
         loop {
+            if finishing() {
+                return Ok((docs, true));
+            }
             let url = format!(
                 "https://datasets-server.huggingface.co/rows?dataset={dataset}&config={config}&split={split}&offset={offset}&length=100"
             );
             let page = match get_json(agent, &url, cancel, &mut pacer, note) {
                 Ok(p) => p,
+                Err(_) if finishing() => return Ok((docs, true)),
                 Err(e) if !docs.is_empty() && !cancel.load(Ordering::Acquire) => {
                     note(Some(format!("{e} Keeping the {} documents downloaded so far.", docs.len())));
                     return Ok((docs, true));
@@ -427,13 +574,21 @@ pub fn hf_documents(
                 }
             }
             offset += rows.len() as u64;
+            read += rows.len() as u64;
             if docs.is_empty() && offset >= 3000 {
                 // Nothing in this layout converts (or passes the filter): no point reading on.
                 break;
             }
-            progress(docs.iter().map(|d| d.len() as u64 + 16).sum::<u64>().min(limit), Some(limit));
-            let rows_total = page.get("num_rows_total").and_then(|n| n.as_u64()).unwrap_or(0);
-            if offset >= rows_total {
+            progress(Progress {
+                received: docs.iter().map(|d| d.len() as u64 + 16).sum::<u64>().min(limit),
+                total: Some(limit),
+                rows: Some(read),
+                rows_total,
+                kept: Some(docs.len() as u64),
+                ..Default::default()
+            });
+            let rows_in = page.get("num_rows_total").and_then(|n| n.as_u64()).unwrap_or(0);
+            if offset >= rows_in {
                 break;
             }
             if used >= per_config {
@@ -443,6 +598,105 @@ pub fn hf_documents(
         }
     }
     Ok((docs, truncated))
+}
+
+/// Reads a split's Parquet files into `docs` (each file downloaded, read and deleted in turn).
+/// Returns whether it stopped before the end (the limit, or "Finish now").
+#[allow(clippy::too_many_arguments)]
+fn parquet_documents(
+    agent: &ureq::Agent,
+    dataset: &str,
+    split: &str,
+    files: &[crate::hfparquet::ParquetFile],
+    configs: &[&str],
+    convert: &mut dyn FnMut(&serde_json::Value) -> Vec<String>,
+    limit: u64,
+    rows_total: Option<u64>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+    note: &mut dyn FnMut(Option<String>),
+    docs: &mut Vec<String>,
+) -> Res<bool> {
+    let per_config = (limit / configs.len().max(1) as u64).max(1);
+    let (mut read, mut kept_bytes) = (0u64, 0u64);
+    let mut used: std::collections::HashMap<&str, u64> = Default::default();
+    let state = |read, kept_bytes: u64, docs: &Vec<String>, file, file_bytes| Progress {
+        received: kept_bytes.min(limit),
+        total: Some(limit),
+        rows: Some(read),
+        rows_total,
+        kept: Some(docs.len() as u64),
+        file,
+        file_bytes,
+    };
+    for (i, f) in files.iter().enumerate() {
+        if used.get(f.config.as_str()).copied().unwrap_or(0) >= per_config {
+            continue;
+        }
+        if finishing() {
+            return Ok(true);
+        }
+        let path = crate::hfparquet::temp_path(dataset, f, split);
+        let at = Some((i + 1, files.len()));
+        note(Some(format!("Downloading file {} of {} ({} MB)…", i + 1, files.len(), f.size >> 20)));
+        let fetched =
+            crate::hfparquet::download_to(agent, &f.url, &path, f.size, cancel, &finishing, &mut |b| {
+                progress(state(read, kept_bytes, docs, at, Some((b, f.size))))
+            });
+        match fetched {
+            Ok(()) => {}
+            Err(_) if finishing() => return Ok(true),
+            Err(e) => return Err(e),
+        }
+        note(Some(format!("Reading file {} of {}…", i + 1, files.len())));
+        let room = per_config;
+        let mut stop = false;
+        let mut since = 0u64;
+        let result = crate::hfparquet::for_each_row(&path, &mut |row| {
+            for d in convert(row) {
+                let n = d.len() as u64 + 16;
+                *used.entry(f.config.as_str()).or_default() += n;
+                kept_bytes += n;
+                docs.push(d);
+            }
+            read += 1;
+            since += 1;
+            if since >= 2000 {
+                since = 0;
+                progress(state(read, kept_bytes, docs, at, Some((f.size, f.size))));
+            }
+            if cancel.load(Ordering::Acquire)
+                || finishing()
+                || used.get(f.config.as_str()).copied().unwrap_or(0) >= room
+            {
+                stop = true;
+            }
+            !stop
+        });
+        progress(state(read, kept_bytes, docs, at, Some((f.size, f.size))));
+        match result {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(e) => {
+                // A damaged download: removed, so the next attempt fetches it again.
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err("Download cancelled".into());
+        }
+        if finishing() {
+            return Ok(true);
+        }
+        if docs.is_empty() && read >= 3000 {
+            // Nothing in this layout converts (or passes the filter).
+            return Ok(false);
+        }
+    }
+    note(None);
+    Ok(configs.iter().any(|c| used.get(c).copied().unwrap_or(0) >= per_config))
 }
 
 /// A dataset's training split as its dataset-viewer lists it (config, split): "train" (or
@@ -480,7 +734,7 @@ fn jsonl_documents(
     convert: Convert,
     limit: u64,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(Progress),
 ) -> Res<(Vec<String>, bool)> {
     let (bytes, truncated) = fetch(agent, url, limit, cancel, progress)?;
     let text = String::from_utf8_lossy(&bytes);
@@ -499,7 +753,7 @@ fn gutenberg_documents(
     books: &[(u32, &str)],
     limit: u64,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(Progress),
 ) -> Res<(Vec<String>, bool)> {
     let mut docs = Vec::new();
     let mut used = 0u64;
@@ -511,12 +765,12 @@ fn gutenberg_documents(
             std::thread::sleep(Duration::from_millis(500)); // be gentle with gutenberg.org
         }
         let url = format!("https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt");
-        let (bytes, _) = fetch(agent, &url, 8 << 20, cancel, &mut |_, _| {})?;
+        let (bytes, _) = fetch(agent, &url, 8 << 20, cancel, &mut |_| {})?;
         for d in gutenberg_book(&String::from_utf8_lossy(&bytes)) {
             used += d.len() as u64 + 16;
             docs.push(d);
         }
-        progress(used.min(limit), Some(limit));
+        progress(Progress::bytes(used.min(limit), Some(limit)));
     }
     Ok((docs, false))
 }
@@ -529,28 +783,42 @@ pub fn source_text(
     src: &Source,
     limit: u64,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(Progress),
     note: &mut dyn FnMut(Option<String>),
-) -> Res<(Vec<u8>, bool, Option<FilterReport>)> {
+) -> Res<Fetched> {
     let filtering = src.category == Category::Conversation;
     let filter = std::cell::RefCell::new(ConversationFilter::new());
     let screen = screen_of(src.id);
     let counts = std::cell::RefCell::new((0usize, None::<String>));
-    // Rows are converted (and filtered) here; the filter's counts are noted every 500 rows.
+    // The conversations the dataset flagged, kept apart (at most as much as asked for).
+    let flagged = std::cell::RefCell::new((Vec::<String>::new(), 0u64));
+    // Rows are converted here and every usable conversation is kept; the full filter's counts
+    // are noted every 500 rows (it is applied when practice starts).
     let process = |convert: Convert| {
-        let (filter, counts) = (&filter, &counts);
+        let (filter, counts, flagged) = (&filter, &counts, &flagged);
         move |row: &serde_json::Value| -> Vec<String> {
             if !filtering {
                 return convert(row);
             }
             let mut f = filter.borrow_mut();
-            let kept = f.take(row, screen, convert);
+            let mut out = Vec::new();
+            for t in f.take_all(row, screen, convert) {
+                if t.screened {
+                    let mut fl = flagged.borrow_mut();
+                    if fl.1 < limit {
+                        fl.1 += t.doc.len() as u64 + 16;
+                        fl.0.push(t.doc);
+                    }
+                } else {
+                    out.push(t.doc);
+                }
+            }
             let mut c = counts.borrow_mut();
             c.0 += 1;
             if c.0.is_multiple_of(500) {
-                c.1 = Some(format!("Filtering: {}", f.report.summary()));
+                c.1 = Some(format!("Downloading every usable conversation; {}", f.report.estimate()));
             }
-            kept
+            out
         }
     };
     // The page's note is shared by the download (waiting, retries) and the filter's counts.
@@ -563,14 +831,14 @@ pub fn source_text(
         }
     };
     let progress = std::cell::RefCell::new(progress);
-    let mut on_progress = |a: u64, b: Option<u64>| {
-        (*progress.borrow_mut())(a, b);
+    let mut on_progress = |p: Progress| {
+        (*progress.borrow_mut())(p);
         flush();
     };
     let (docs, truncated) = match src.fetch {
         Fetch::Text(url) => {
-            let (bytes, truncated) = fetch(agent, url, limit, cancel, &mut on_progress)?;
-            return Ok((bytes, truncated, None));
+            let (text, truncated) = fetch(agent, url, limit, cancel, &mut on_progress)?;
+            return Ok(Fetched { text, truncated, report: None, flagged: Vec::new() });
         }
         Fetch::HfRows { dataset, configs, split, convert } => {
             let mut p = process(convert);
@@ -631,15 +899,22 @@ pub fn source_text(
         Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, &mut on_progress)?,
     };
     let report = filtering.then(|| filter.into_inner().report);
-    if docs.is_empty() {
+    let flagged = flagged.into_inner().0;
+    if docs.is_empty() && flagged.is_empty() {
         return Err(match &report {
-            Some(r) => format!("{}: no conversation passed the quality filter ({})", src.name, r.summary()),
+            Some(r) => format!("{}: no usable conversation in it ({})", src.name, r.summary()),
             None => format!("{}: nothing usable was downloaded", src.name),
         });
     }
-    let mut text = docs.join(&format!("\n{END_OF_TEXT}\n"));
-    text.push('\n');
-    Ok((text.into_bytes(), truncated, report))
+    let join = |docs: Vec<String>| {
+        if docs.is_empty() {
+            return Vec::new();
+        }
+        let mut text = docs.join(&format!("\n{END_OF_TEXT}\n"));
+        text.push('\n');
+        text.into_bytes()
+    };
+    Ok(Fetched { text: join(docs), truncated, report, flagged: join(flagged) })
 }
 
 #[tauri::command]
@@ -696,6 +971,7 @@ pub async fn generate_corpus(
             text.into_bytes(),
             false,
             None,
+            Vec::new(),
         )
     })
     .await
@@ -744,7 +1020,7 @@ pub async fn import_corpus(app: AppHandle, category: Option<Category>) -> Res<Op
             attribution: "",
             category: category.unwrap_or_default(),
         };
-        store(&app, &name, &from, bytes, false, None)
+        store(&app, &name, &from, bytes, false, None, Vec::new())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -799,15 +1075,15 @@ fn store_own_conversations(app: &AppHandle, name: &str, text: String) -> Res<Cor
         attribution: "",
         category: Category::Conversation,
     };
-    store(app, name, &from, text.into_bytes(), false, None)
+    store(app, name, &from, text.into_bytes(), false, None, Vec::new())
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadEvent {
     source: String,
-    received: u64,
-    total: Option<u64>,
+    #[serde(flatten)]
+    progress: Progress,
     done: bool,
     error: Option<String>,
     corpus: Option<CorpusInfo>,
@@ -904,19 +1180,18 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
     // A fresh start, so the pages show it from the beginning.
     emit(DownloadEvent {
         source: source.clone(),
-        received: 0,
-        total: None,
+        progress: Progress::default(),
         done: false,
         error: None,
         corpus: None,
         note: None,
     });
     let last_note = std::cell::RefCell::new(None::<String>);
-    let mut progress = |received, total| {
+    FINISH.store(false, Ordering::Release);
+    let mut progress = |progress: Progress| {
         emit(DownloadEvent {
             source: source.clone(),
-            received,
-            total,
+            progress,
             done: false,
             error: None,
             corpus: None,
@@ -927,8 +1202,7 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
         last_note.replace(n.clone());
         emit(DownloadEvent {
             source: source.clone(),
-            received: 0,
-            total: None,
+            progress: Progress::default(),
             done: false,
             error: None,
             corpus: None,
@@ -936,7 +1210,7 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
         })
     };
     let result = source_text(&agent(), &src, limit, cancel, &mut progress, &mut note).and_then(
-        |(bytes, truncated, report)| {
+        |Fetched { text: bytes, truncated, report, flagged }| {
             let mb = bytes.len() as f64 / (1 << 20) as f64;
             let name =
                 if truncated { format!("{} · first {mb:.0} MB", src.name) } else { src.name.to_string() };
@@ -946,7 +1220,7 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
                 attribution: src.attribution,
                 category: src.category,
             };
-            store(app, &name, &from, bytes, truncated, report)
+            store(app, &name, &from, bytes, truncated, report, flagged)
         },
     );
     let (corpus, error) = match result {
@@ -954,10 +1228,19 @@ fn run_download(app: &AppHandle, item: &QueuedDownload, cancel: &AtomicBool) {
         Err(e) => (None, Some(e)),
     };
     let note = match corpus.as_ref().and_then(|c| c.filter.as_ref()) {
-        Some(r) => Some(format!("Quality filter: {}.", r.summary())),
+        Some(r) => Some(format!(
+            "Every usable conversation was kept; {}. The filters apply when practice starts (§ 4).",
+            r.estimate()
+        )),
         None => last_note.into_inner(),
     };
-    emit(DownloadEvent { source, received: 0, total: None, done: true, error, corpus, note });
+    emit(DownloadEvent { source, progress: Progress::default(), done: true, error, corpus, note });
+}
+
+/// Stops the download running and keeps what it has downloaded (the next one then starts).
+#[tauri::command]
+pub fn finish_download() {
+    FINISH.store(true, Ordering::Release);
 }
 
 /// Cancels the download running (the next one waiting then starts).
@@ -1183,6 +1466,14 @@ fn read_with(
                 info.name
             ));
         }
+        // A conversation dataset downloaded whole (0.8.3) is read through the full quality
+        // filter, as conversation downloads always were.
+        let text = if info.category == Category::Conversation && info.unfiltered {
+            let (docs, _) = conversation_documents(app, info, &Default::default(), None)?;
+            docs.join(&format!("\n{END_OF_TEXT}\n"))
+        } else {
+            text
+        };
         parts.push(MixPart {
             name: info.name.clone(),
             category: info.category,
@@ -1405,13 +1696,13 @@ mod tests {
         let local = ureq::AgentBuilder::new().build();
         let body = stories(100);
         let (all, truncated) =
-            fetch(&local, &serve(body.clone()), 1 << 20, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+            fetch(&local, &serve(body.clone()), 1 << 20, &AtomicBool::new(false), &mut |_| {}).unwrap();
         assert_eq!((all, truncated), (body.clone(), false));
         let (part, truncated) =
-            fetch(&local, &serve(body.clone()), 1000, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+            fetch(&local, &serve(body.clone()), 1000, &AtomicBool::new(false), &mut |_| {}).unwrap();
         assert!(truncated && part.len() <= 1000 && part.ends_with(END_OF_TEXT.as_bytes()));
         assert!(body.starts_with(&part));
-        let cancelled = fetch(&local, &serve(body), 1 << 20, &AtomicBool::new(true), &mut |_, _| {});
+        let cancelled = fetch(&local, &serve(body), 1 << 20, &AtomicBool::new(true), &mut |_| {});
         assert!(cancelled.is_err());
     }
 
@@ -1434,12 +1725,12 @@ mod tests {
                 Fetch::Gutenberg(_) => 200_000,
                 _ => 300_000,
             };
-            match source_text(&agent(), &src, limit, &AtomicBool::new(false), &mut |_, _| {}, &mut |n| {
+            match source_text(&agent(), &src, limit, &AtomicBool::new(false), &mut |_| {}, &mut |n| {
                 if let Some(n) = n {
                     println!("{n}");
                 }
             }) {
-                Ok((bytes, truncated, report)) => {
+                Ok(Fetched { text: bytes, truncated, report, .. }) => {
                     if let Some(r) = &report {
                         println!("{}: {}", src.id, r.summary());
                     }
@@ -1480,14 +1771,41 @@ mod tests {
         assert!(failed.is_empty(), "{failed:#?}");
     }
 
+    /// Times a filtered conversation download from the Parquet files (network; `--ignored`).
+    /// UltraChat is assistant-style, so the filter keeps few rows and the whole split is read.
+    #[test]
+    #[ignore]
+    fn parquet_download_speed() {
+        let id = std::env::var("SOURCE").unwrap_or_else(|_| "ultrachat".into());
+        let src = conversation_sources().into_iter().find(|s| s.id == id).unwrap();
+        let started = std::time::Instant::now();
+        let mut last = Progress::default();
+        let Fetched { text: bytes, truncated, report, .. } =
+            source_text(&agent(), &src, 200 << 20, &AtomicBool::new(false), &mut |p| last = p, &mut |n| {
+                if let Some(n) = n {
+                    println!("{n}");
+                }
+            })
+            .unwrap();
+        println!(
+            "{id}: {:.0} s, {:?} rows of {:?}, kept {:?} documents ({} bytes), truncated {truncated}; {}",
+            started.elapsed().as_secs_f64(),
+            last.rows,
+            last.rows_total,
+            last.kept,
+            bytes.len(),
+            report.map(|r| r.summary()).unwrap_or_default()
+        );
+        assert!(last.rows.unwrap_or(0) > 10_000);
+    }
+
     /// Checks the real TinyStories download (network; run in CI with `--ignored`).
     #[test]
     #[ignore]
     fn tinystories_is_reachable() {
         let src = &sources()[0];
-        let (bytes, truncated, _) =
-            source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}, &mut |_| {})
-                .unwrap();
+        let Fetched { text: bytes, truncated, .. } =
+            source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_| {}, &mut |_| {}).unwrap();
         assert!(truncated);
         let corpus = Corpus::prepare(&String::from_utf8_lossy(&bytes));
         println!(

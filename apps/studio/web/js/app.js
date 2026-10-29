@@ -850,6 +850,40 @@ let sourcesList = [];
 let corporaList = [];
 let familiesList = [];
 const mb = bytes => (bytes / 1048576).toFixed(1) + " MB";
+// A download's progress as the backend reports it: rows read of the dataset's rows, documents
+// kept by the quality filter, the Parquet file being fetched. The bar follows what limits the
+// download (rows read, or the size asked for); the estimates come from the measured pace.
+const downloadPace = {};
+function downloadFraction(e) {
+  const kept = e.total ? e.received / e.total : 0;
+  let rows = e.rowsTotal && e.rows ? e.rows / e.rowsTotal : null;
+  if (rows == null && e.file) {
+    const [i, n] = e.file;
+    const part = e.fileBytes && e.fileBytes[1] ? e.fileBytes[0] / e.fileBytes[1] : 0;
+    rows = (i - 1 + part) / n;
+  }
+  return Math.min(1, Math.max(kept, rows ?? 0));
+}
+function downloadText(e) {
+  if (e.rows == null && !e.file) return `${mb(e.received)}${e.total ? " of " + mb(e.total) : ""} received`;
+  const parts = [];
+  if (e.file && e.fileBytes && e.fileBytes[0] < e.fileBytes[1]) parts.push(`file ${e.file[0]} of ${e.file[1]}: ${mb(e.fileBytes[0])} of ${mb(e.fileBytes[1])} downloaded`);
+  if (e.rows != null) parts.push(`read ${fmt(e.rows)}${e.rowsTotal ? ` of ${fmt(e.rowsTotal)}` : ""} rows`);
+  if (e.kept != null) parts.push(`kept ${fmt(e.kept)} (${mb(e.received)}${e.total ? `; stops at ${mb(e.total)}` : ""})`);
+  const pace = downloadPace[e.source] ||= { start: Date.now(), rows0: e.rows || 0 };
+  const secs = (Date.now() - pace.start) / 1000;
+  if (e.rowsTotal && e.rows > 5000) {
+    const share = e.kept / e.rows;
+    const final = e.received * e.rowsTotal / e.rows;
+    if (e.total && final < 0.9 * e.total) parts.push(`the filter keeps ${(100 * share).toFixed(1)}% of rows, so about ${mb(final)} in all`);
+    const rate = (e.rows - pace.rows0) / Math.max(1, secs);
+    if (secs > 20 && rate > 0) {
+      const left = Math.min(e.rowsTotal - e.rows, e.total && e.received ? (e.total - e.received) / e.received * e.rows : Infinity) / rate;
+      if (left > 30) parts.push(`about ${left > 5400 ? `${(left / 3600).toFixed(1)} h` : `${Math.round(left / 60)} min`} left`);
+    }
+  }
+  return parts.join(" · ");
+}
 const CATEGORY = { general: "Stories and prose", knowledge: "Knowledge", conversation: "Conversation", reasoning: "Reasoning" };
 const BUDGET = 1024 * 1048576;
 // Reading choices per corpus (kept while the list is refreshed).
@@ -876,6 +910,7 @@ function renderSources() {
           $("downloadLine").textContent = "Connecting…";
           $("downloadNote").hidden = true;
           $("cancelDownload").hidden = false;
+          $("finishDownload").hidden = false;
         }, "Download") }, "Download"),
         el("p", { class: "note" }, `${s.description} `, el("b", {}, "Licence: "), `${s.license}. `, el("b", {}, "Credit: "), `${s.attribution}. Source: ${s.page}`));
     }))));
@@ -1002,6 +1037,7 @@ $("generate").addEventListener("click", safe(async () => {
   } finally { $("generate").disabled = false; }
 }, "Generate practice"));
 $("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
+$("finishDownload").addEventListener("click", safe(async () => { await invoke("finish_download"); say("Finishing the download: what it has so far is kept."); }, "Finish download"));
 // Downloads run one at a time; the ones asked for meanwhile wait their turn. Both download
 // panels (§ 2 Reading, § 4 Conversation) list the queue.
 function renderDownloadQueue(q) {
@@ -1016,6 +1052,7 @@ function renderDownloadQueue(q) {
     $("downloadEntry").hidden = false;
     $("downloadTitle").textContent = `Downloading ${q.current.name}`;
     $("cancelDownload").hidden = false;
+    $("finishDownload").hidden = false;
   }
   window.dispatchEvent(new CustomEvent("download-queue", { detail: q }));
 }
@@ -1032,11 +1069,13 @@ function onDownload(e) {
     $("downloadNote").hidden = !e.note || !!e.error;
   }
   if (!e.done) {
-    $("downloadBar").style.width = e.total ? (100 * e.received / e.total).toFixed(1) + "%" : "50%";
-    $("downloadLine").textContent = `${mb(e.received)}${e.total ? " of " + mb(e.total) : ""} received`;
+    $("downloadBar").style.width = e.total || e.rowsTotal || e.file ? (100 * downloadFraction(e)).toFixed(1) + "%" : "50%";
+    $("downloadLine").textContent = downloadText(e);
     return;
   }
+  delete downloadPace[e.source];
   $("cancelDownload").hidden = true;
+  $("finishDownload").hidden = true;
   if (e.error) { $("downloadLine").textContent = e.error; log("ERROR", e.error); return; }
   $("downloadBar").style.width = "100%";
   const c = e.corpus;

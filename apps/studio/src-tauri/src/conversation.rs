@@ -117,6 +117,47 @@ pub fn conversation_material(app: AppHandle, studio: State<Studio>) -> Res<Mater
     })
 }
 
+/// What the chosen filters and sizes keep of each ticked dataset (before practice starts).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterPreview {
+    id: String,
+    name: String,
+    /// Conversations kept and their size.
+    kept: usize,
+    bytes: u64,
+    /// The filter's counts (downloaded datasets; None for your own, never filtered).
+    filter: Option<crate::filter::FilterReport>,
+}
+
+#[tauri::command]
+pub async fn filter_preview(
+    app: AppHandle,
+    corpus_ids: Vec<String>,
+    filters: crate::filter::FilterChoice,
+    dataset_mb: std::collections::BTreeMap<String, u64>,
+) -> Res<Vec<FilterPreview>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        corpus_ids
+            .iter()
+            .map(|id| {
+                let info = load_info(&app, id)?;
+                let cap = dataset_mb.get(id).filter(|mb| **mb > 0).map(|mb| mb << 20);
+                let (docs, filter) = crate::reading::conversation_documents(&app, &info, &filters, cap)?;
+                Ok(FilterPreview {
+                    id: info.id.clone(),
+                    name: info.name.clone(),
+                    kept: docs.len(),
+                    bytes: docs.iter().map(|d| d.len() as u64).sum(),
+                    filter,
+                })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn yes() -> bool {
     true
 }
@@ -126,6 +167,10 @@ fn yes() -> bool {
 #[serde(rename_all = "camelCase", default)]
 pub struct ConverseOptions {
     corpus_ids: Vec<String>,
+    /// The quality filter's reasons applied to downloaded datasets (all on by default).
+    filters: crate::filter::FilterChoice,
+    /// At most this many MB of a dataset (by id; missing or 0: all of it).
+    dataset_mb: std::collections::BTreeMap<String, u64>,
     /// Also practise the replies marked consistent in the model's chats.
     chats: bool,
     tokens: u64,
@@ -175,6 +220,8 @@ impl Default for ConverseOptions {
         let d = ConversationConfig::default();
         ConverseOptions {
             corpus_ids: Vec::new(),
+            filters: Default::default(),
+            dataset_mb: Default::default(),
             chats: true,
             tokens: d.tokens,
             batch_size: d.batch_size,
@@ -242,6 +289,8 @@ pub(crate) struct ConversationJob {
     infos: Vec<CorpusInfo>,
     cfg: ConversationConfig,
     chats: bool,
+    filters: crate::filter::FilterChoice,
+    dataset_mb: std::collections::BTreeMap<String, u64>,
     /// The options as given, and a description (for the run record).
     options: serde_json::Value,
     pub(crate) label: String,
@@ -329,7 +378,15 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
     };
     let label = conversation_label(app, o);
     let options = serde_json::to_value(o).map_err(|e| e.to_string())?;
-    Ok(ConversationJob { infos, cfg, chats: o.chats, options, label })
+    Ok(ConversationJob {
+        infos,
+        cfg,
+        chats: o.chats,
+        filters: o.filters.clone(),
+        dataset_mb: o.dataset_mb.clone(),
+        options,
+        label,
+    })
 }
 
 /// A short description of a conversation run, for plans.
@@ -427,20 +484,36 @@ fn converse_in(
     );
     let current = Arc::new(Mutex::new(meta.clone()));
     let mut sets = Vec::new();
+    // Each dataset through the filters chosen and as much of it as asked for (your own
+    // datasets are never filtered).
+    let mut prepared = Vec::new();
     for info in &job.infos {
-        let text = std::fs::read_to_string(corpus_path(app, &info.id, "txt")?).map_err(|e| e.to_string())?;
-        if sha256_hex(text.as_bytes()) != info.sha256 {
+        let cap = job.dataset_mb.get(&info.id).filter(|mb| **mb > 0).map(|mb| mb << 20);
+        let (docs, report) = crate::reading::conversation_documents(app, info, &job.filters, cap)?;
+        if let Some(r) = &report {
+            prepared.push(serde_json::json!({"name": info.name, "filter": r, "summary": r.summary()}));
+        }
+        let dialogues: Vec<_> = docs.iter().filter_map(|d| parse_dialogue(d)).collect();
+        if dialogues.is_empty() {
             return Err(format!(
-                "{}: the stored dataset does not match its fingerprint; download it again",
-                info.name
+                "{}: no two-person conversations {}",
+                info.name,
+                if report.is_some() {
+                    "pass the filters chosen (§ 4: switch some off)"
+                } else {
+                    "found in it"
+                }
             ));
         }
-        let (ascii, _) = normalize_ascii(&text);
-        let dialogues: Vec<_> = split_documents(&ascii).iter().filter_map(|d| parse_dialogue(d)).collect();
-        if dialogues.is_empty() {
-            return Err(format!("{}: no two-person conversations found in it", info.name));
-        }
         sets.push(ConversationSet { name: info.name.clone(), dialogues, nova: None, hold_out: true });
+    }
+    if !prepared.is_empty() {
+        append_history(
+            app,
+            &id,
+            serde_json::json!({"type": "conversation_prepared", "time": now(), "datasets": prepared, "filters": job.filters}),
+        );
+        let _ = app.emit("conversation-prepared", &prepared);
     }
     let mut chat_replies = 0;
     if job.chats {

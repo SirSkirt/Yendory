@@ -76,6 +76,12 @@ asked is there.
   a backup, a damaged file never written over, the ticked conversation datasets and the
   Classroom's lesson list kept, restored values checked.
 
+- **0.8.3, part of stage 4 (downloads), brought forward**: a 200 MB LMSYS-Chat-1M download had
+  1.9 MB after two hours. Hugging Face datasets now come from their Parquet files (about 100 times
+  faster; UltraChat's whole split in 63 s), interrupted file downloads continue with range
+  requests, progress shows rows read and what the filter keeps, and "Finish now" keeps what was
+  downloaded. Still to do in stage 4: the queue saved across restarts, pause / retry / reorder.
+
 ## Blockers and limits
 
 - **Updater secret**: the builds did not receive `TAURI_SIGNING_PRIVATE_KEY`. It must be a

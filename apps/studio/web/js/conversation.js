@@ -14,6 +14,7 @@
     $("convDownloadBar").style.width = "0%";
     $("convDownloadLine").textContent = "Connecting…";
     $("convCancelDownload").hidden = false;
+    $("convFinishDownload").hidden = false;
   }
   let started = 0;
 
@@ -38,17 +39,26 @@
     const body = $("convTable").tBodies[0];
     body.replaceChildren();
     if (!material.corpora.length) {
-      body.append(el("tr", {}, el("td", { colspan: 5, class: "empty" }, "No conversation dataset yet. Download one above.")));
+      body.append(el("tr", {}, el("td", { colspan: 6, class: "empty" }, "No conversation dataset yet. Download one above.")));
     }
     for (const c of material.corpora) {
       const box = el("input", { type: "checkbox", checked: chosen.has(c.id) ? "" : null, disabled: teaching ? "" : null,
         onchange: e => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); note(); saveChoice(); } });
+      const use = el("input", { type: "number", min: 0, step: 1, class: "inline-num", placeholder: "all", value: datasetMb[c.id] || "",
+        title: "Use at most this many MB of it (after the filters); empty: all", disabled: teaching ? "" : null,
+        onchange: e => { const v = Math.max(0, Math.round(Number(e.target.value) || 0)); if (v) datasetMb[c.id] = v; else delete datasetMb[c.id]; e.target.value = v || ""; saveChoice(); } });
+      const filterNote = !c.filter ? ""
+        : c.unfiltered ? `Stored whole; ${filterText(c.filter).replace(/^kept/, "with every filter on, practice would use")}`
+        : `Filtered when downloaded (before 0.8.3): ${filterText(c.filter)}`;
       body.append(el("tr", {},
         el("td", {}, box),
         el("td", {}, c.name, c.attribution ? el("div", { class: "note" }, "Credit: " + c.attribution) : "",
-          c.filter ? el("div", { class: "note" }, "Quality filter: " + filterText(c.filter)) : ""),
+          filterNote ? el("div", { class: "note" }, filterNote) : "",
+          c.flagged ? el("div", { class: "note" }, `${fmt(c.flagged.documents)} conversation(s) the dataset flagged kept apart (${mb(c.flagged.bytes)}).`) : "",
+          preview[c.id] ? el("div", { class: "note ok" }, preview[c.id]) : ""),
         el("td", { class: "num" }, mb(c.bytes)),
         el("td", { class: "num" }, fmt(c.documents)),
+        el("td", { class: "num" }, use, " MB"),
         el("td", {}, c.license)));
     }
     $("convChatCount").textContent = active
@@ -87,12 +97,31 @@
   // The ticked datasets are kept between runs of Studio: the ticked ones and the ones known
   // then (a dataset added since is ticked, as a new dataset always was).
   let savedChoice;
+  // At most this many MB of each dataset (by id), and the last count of what practice would use.
+  const datasetMb = {};
+  const preview = {};
   const saveChoice = () => invoke("save_page_settings", { page: "conversationDatasets",
-    settings: { ids: [...chosen], seen: material.corpora.map(c => c.id) } }).catch(e => log("ERROR", e));
+    settings: { ids: [...chosen], seen: material.corpora.map(c => c.id), mb: datasetMb } }).catch(e => log("ERROR", e));
+  const filterChoice = () => ({
+    assistantStyle: $("convFAssistant").checked, tooLong: $("convFTooLong").checked, notEnglish: $("convFNotEnglish").checked,
+    flagged: $("convFFlagged").checked, unsafeContent: $("convFUnsafe").checked, lowQuality: $("convFLowQuality").checked,
+    duplicates: $("convFDuplicates").checked,
+  });
+  $("convFilterCount").addEventListener("click", safe(async () => {
+    const ids = material.corpora.filter(c => chosen.has(c.id)).map(c => c.id);
+    if (!ids.length) throw new Error("Tick at least one dataset");
+    $("convFilterNote").textContent = "Counting…";
+    const rows = await invoke("filter_preview", { corpusIds: ids, filters: filterChoice(), datasetMb });
+    for (const k of Object.keys(preview)) delete preview[k];
+    for (const r of rows) preview[r.id] = `Practice would use ${fmt(r.kept)} conversation(s), ${mb(r.bytes)}` + (r.filter ? ` (${filterText(r.filter)})` : " (your own: not filtered)");
+    $("convFilterNote").textContent = `In all: ${fmt(rows.reduce((a, r) => a + r.kept, 0))} conversations, ${mb(rows.reduce((a, r) => a + r.bytes, 0))}.`;
+    renderMaterial();
+  }, "Count"));
   async function refresh() {
     material = await invoke("conversation_material");
     if (savedChoice === undefined) {
       savedChoice = await invoke("page_settings", { page: "conversationDatasets" }).catch(() => null);
+      for (const [id, v] of Object.entries(savedChoice?.mb || {})) if (Number(v) > 0) datasetMb[id] = Math.round(Number(v));
       if (Array.isArray(savedChoice?.ids) && Array.isArray(savedChoice?.seen)) {
         for (const c of material.corpora) {
           if (savedChoice.ids.includes(c.id) || !savedChoice.seen.includes(c.id)) chosen.add(c.id);
@@ -258,6 +287,8 @@
     const n = id => Number($(id).value);
     return {
       corpusIds,
+      filters: filterChoice(),
+      datasetMb: Object.fromEntries(Object.entries(datasetMb).filter(([id]) => corpusIds.includes(id))),
       chats: $("convChats").checked,
       tokens: n("convTokens"),
       batchSize: n("convBatch"),
@@ -323,6 +354,7 @@
   };
   $("stopConverse").addEventListener("click", safe(async () => { await invoke("stop_teaching"); say("Stopping after this batch…"); }, "Stop"));
   $("convCancelDownload").addEventListener("click", () => invoke("cancel_download").catch(e => log("ERROR", e)));
+  $("convFinishDownload").addEventListener("click", () => { invoke("finish_download").catch(e => log("ERROR", e)); say("Finishing the download: what it has so far is kept."); });
   $("convAddCourse").addEventListener("click", () => {
     const sel = $("builtinLessons");
     if (![...sel.options].some(o => o.value === "deciding")) { say("The built-in courses are still loading."); return; }
@@ -363,21 +395,26 @@
       const cur = q.current && sources.find(s => s.id === q.current.source);
       if (cur && downloading !== cur.id) { downloading = cur.id; showDownload(cur.name); }
     });
+    tauri.event.listen("conversation-prepared", ev => {
+      for (const d of ev.payload || []) log("INFO", `Practice uses from ${d.name}: ${d.summary}`);
+    });
     tauri.event.listen("corpus-download", ev => {
       const e = ev.payload;
       if (e.source !== downloading) return;
       if (!e.done) {
         if (e.note) { $("convDownloadLine").textContent = e.note; return; }
-        $("convDownloadBar").style.width = e.total ? (100 * e.received / e.total).toFixed(1) + "%" : "50%";
-        $("convDownloadLine").textContent = `${mb(e.received)}${e.total ? " of " + mb(e.total) : ""} received`;
+        $("convDownloadBar").style.width = e.total || e.rowsTotal || e.file ? (100 * downloadFraction(e)).toFixed(1) + "%" : "50%";
+        $("convDownloadLine").textContent = downloadText(e);
         return;
       }
       downloading = null;
+      delete downloadPace[e.source];
       $("convCancelDownload").hidden = true;
+      $("convFinishDownload").hidden = true;
       if (e.error) { $("convDownloadLine").textContent = e.error; return; }
       $("convDownloadBar").style.width = "100%";
       $("convDownloadLine").textContent = `Saved ${e.corpus.name}: ${mb(e.corpus.bytes)}, ${fmt(e.corpus.documents)} conversations.` +
-        (e.corpus.filter ? ` Quality filter: ${filterText(e.corpus.filter)}.` : "");
+        (e.corpus.filter ? ` With every filter on, practice would use ${filterText(e.corpus.filter).replace(/^kept /, "")}; the filters apply when practice starts.` : "");
       chosen.add(e.corpus.id);
       refresh().catch(err => log("ERROR", err));
     });
