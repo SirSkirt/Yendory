@@ -743,6 +743,18 @@ discarded and training restarts from the accepted model. Each epoch records what
 epochs; or discarded after n epochs). `SessionConfig::epoch_hook` lets an experiment look at the
 accepted and the working model after every epoch.
 
+**Since 0.8.6 probation takes priority over the flat-epoch rule.** Before, an epoch with a safe
+but flat candidate (rejected only for not improving enough) always continued from that
+candidate, and probation acted only when no candidate was safe. On the owner's model there was
+always such a candidate, so probation never acted: the comparison's variant B was identical to A.
+Now, with probation on, the branch continues from the most promising candidate (which may be the
+flat one) and counts its epochs; the record names the flat candidate it took priority over
+(`Probation::Continued::instead_of_flat`) and the limit. When the limit is reached, training
+restarts from the accepted model, not from a flat candidate. With probation off the flat-epoch
+rule works exactly as before. Tested (`tests/checkpoints.rs`): with every candidate safe but
+flat, probation off continues from the flat candidate every epoch; on, the branch runs its two
+epochs, is discarded and the accepted model is restored, and the accepted model never changes.
+
 `examples/probation_compare.rs` tests whether this helps: each lesson's held-out questions are
 split, one half judges checkpoints and the other half is never trained on or used to choose
 anything, so it measures generalization; the accepted and the working model are both asked it

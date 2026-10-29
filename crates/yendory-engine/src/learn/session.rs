@@ -154,11 +154,14 @@ pub struct SessionConfig {
     /// their held-out loss and answers pass the earlier-lesson guards.
     #[serde(default)]
     pub train_earlier: bool,
-    /// Experimental (0 = off): probation. When no candidate of an epoch is safe (and none is
-    /// kept by `recover_earlier`), training may continue from the most promising rejected
-    /// candidate (most held-out answers, then the lowest held-out loss; never one whose loss is
-    /// not finite) for up to this many epochs in a row, instead of restarting from the accepted
-    /// model, so a change that first costs something has room to recover. Nothing about
+    /// Experimental (0 = off): probation. When no candidate of an epoch is accepted, training
+    /// continues from the most promising rejected candidate (most held-out answers, then the
+    /// lowest held-out loss; never one whose loss is not finite) for up to this many epochs in
+    /// a row, instead of restarting from the accepted model, so a change that first costs
+    /// something has room to recover. Since 0.8.6 it takes priority over the flat-epoch rule
+    /// (continuing from a safe but flat candidate), which used to leave it no chance to act;
+    /// with probation off the flat-epoch rule works as before. When the branch reaches its
+    /// limit, training restarts from the accepted model (not from a flat candidate). Nothing about
     /// acceptance changes: every candidate is still judged against the accepted model by every
     /// guard, and the accepted model (with its optimizer state) changes only when one passes.
     /// After this many epochs without an accepted candidate, the branch is discarded and
@@ -647,8 +650,19 @@ pub struct GrowthCheck {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Probation {
     /// Training continues from a rejected candidate: its focus, the guards it failed (names
-    /// and reasons) and its probation epoch (1 = the branch starts).
-    Continued { focus: String, epoch_in_branch: u32, rejections: Vec<Rejection>, reasons: Vec<String> },
+    /// and reasons), its probation epoch (1 = the branch starts) and the limit, and the safe
+    /// but flat candidate the flat-epoch rule would otherwise have continued from (probation
+    /// takes priority over it since 0.8.6).
+    Continued {
+        focus: String,
+        epoch_in_branch: u32,
+        rejections: Vec<Rejection>,
+        reasons: Vec<String>,
+        #[serde(default)]
+        limit: u32,
+        #[serde(default)]
+        instead_of_flat: Option<String>,
+    },
     /// A candidate of the branch passed every guard and was accepted, after this many epochs.
     Promoted { epochs: u32 },
     /// The branch reached its limit (or its best candidate's loss was not finite) without an
@@ -1761,12 +1775,9 @@ pub fn teach_rewarded(
         if best.is_none() {
             let promising = fallback.borrow_mut().take().filter(|b| b.2.heldout_loss.is_finite());
             match (plateau.take(), promising) {
-                (Some((ci, cand, _, _, _)), _) => {
-                    records[ci].continued = true;
-                    continued = Some(records[ci].focus.clone());
-                    working = cand;
-                }
-                (None, Some((ci, cand, ..))) if probing && on_probation < cfg.probation_epochs => {
+                // Probation, when on, comes first: the branch continues from the most promising
+                // candidate even when a safe but flat one exists.
+                (flat, Some((ci, cand, ..))) if probing && on_probation < cfg.probation_epochs => {
                     on_probation += 1;
                     records[ci].continued = true;
                     continued = Some(records[ci].focus.clone());
@@ -1775,10 +1786,19 @@ pub fn teach_rewarded(
                         epoch_in_branch: on_probation,
                         rejections: records[ci].rejections.clone(),
                         reasons: records[ci].reasons.clone(),
+                        limit: cfg.probation_epochs,
+                        instead_of_flat: flat.map(|(fi, ..)| records[fi].focus.clone()),
                     });
                     working = cand;
                 }
-                (None, _) => {
+                // The branch reached its limit without an accepted candidate: back to the
+                // accepted model (below), not on from a flat candidate.
+                (Some((ci, cand, _, _, _)), _) if on_probation == 0 => {
+                    records[ci].continued = true;
+                    continued = Some(records[ci].focus.clone());
+                    working = cand;
+                }
+                (_, _) => {
                     if on_probation > 0 {
                         probation = Some(Probation::Discarded { epochs: on_probation });
                         on_probation = 0;

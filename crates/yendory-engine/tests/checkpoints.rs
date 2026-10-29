@@ -236,3 +236,61 @@ fn probation_continues_rejected_candidates_then_discards_the_branch() {
     assert!(off.epochs.iter().all(|e| e.probation.is_none()));
     assert!(off.epochs.iter().all(|e| e.continued.is_none() && !e.restored), "never left the accepted model");
 }
+
+/// Probation takes priority over the flat-epoch rule when it is on (0.8.6). With learning steps
+/// too small to change any answer, every candidate is safe but flat: with probation off, training
+/// continues from the flat candidate epoch after epoch (as before); with probation on, the branch
+/// runs for its limit, then the accepted model is restored. The accepted model never changes.
+#[test]
+fn probation_takes_priority_over_a_safe_flat_candidate() {
+    use yendory_engine::learn::session::{EpochHook, Probation, Rejection};
+    let base = SessionConfig {
+        epochs: 6,
+        patience: 6,
+        foundation: false,
+        learning_rate: 3e-3,
+        ..SessionConfig::default()
+    };
+    let taught = run(&Bicameral::with_config(Config::default(), 7), &base, &mut Vec::new()).model;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = {
+        let seen = seen.clone();
+        EpochHook(std::sync::Arc::new(move |_e: u32, accepted: &Bicameral, working: &Bicameral| {
+            seen.lock().unwrap().push((accepted.step, working.step));
+        }))
+    };
+    let flat = SessionConfig { epochs: 4, patience: 8, learning_rate: 1e-7, seed: 3, ..base };
+    // Off: the flat-epoch rule continues from the safe candidate every epoch.
+    let off = run(&taught, &SessionConfig { probation_epochs: 0, ..flat.clone() }, &mut Vec::new());
+    assert!(!off.learned);
+    assert!(
+        off.epochs.iter().all(|e| e.probation.is_none() && e.continued.is_some() && !e.restored),
+        "{:?}",
+        off.epochs.iter().map(|e| (&e.continued, e.restored)).collect::<Vec<_>>()
+    );
+    let flat_safe =
+        off.epochs.iter().all(|e| e.candidates.iter().any(|c| c.rejections == [Rejection::NoImprovement]));
+    assert!(flat_safe, "every epoch had a safe but flat candidate");
+    // On (2 epochs): probation runs instead, says what it passed over, then gives up and restores.
+    let on =
+        run(&taught, &SessionConfig { probation_epochs: 2, epoch_hook: Some(hook), ..flat }, &mut Vec::new());
+    let states: Vec<_> = on.epochs.iter().map(|e| e.probation.clone()).collect();
+    let cont = |p: &Option<Probation>| match p {
+        Some(Probation::Continued { epoch_in_branch, limit, instead_of_flat, .. }) => {
+            assert_eq!(*limit, 2);
+            assert!(instead_of_flat.is_some(), "the flat candidate it took priority over is named");
+            Some(*epoch_in_branch)
+        }
+        _ => None,
+    };
+    assert_eq!((cont(&states[0]), cont(&states[1])), (Some(1), Some(2)), "{states:?}");
+    assert_eq!(states[2], Some(Probation::Discarded { epochs: 2 }));
+    assert!(on.epochs[2].restored, "the limit reached: back to the accepted model, not on from a flat one");
+    assert_eq!(cont(&states[3]), Some(1), "a new branch");
+    assert_ne!(states, off.epochs.iter().map(|e| e.probation.clone()).collect::<Vec<_>>());
+    // The accepted model is protected throughout.
+    assert_eq!((on.model.weights.clone(), on.model.step), (taught.weights.clone(), taught.step));
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|&(accepted, _)| accepted == taught.step));
+    assert_eq!(seen[2].1, taught.step, "restored after the branch");
+}

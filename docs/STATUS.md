@@ -224,6 +224,14 @@ conditions. Tests: migration leaves no copy of the token in any file and keeps t
 the fallback file is owner-only, a store that becomes available takes over. Checked here: an
 invalid token gets 401 from /api/whoami-v2. Not checked here: Windows Credential Manager itself
 (this container has no credential service; the code path is the `keyring` crate's).
+0.8.6: probation takes priority over the flat-epoch rule when it is on (the owner's choice; before,
+a safe but flat candidate always existed on the owner's model, so probation never acted and
+variant B equalled A). Its limit is kept, the accepted checkpoint is restored when it is reached,
+and nothing about acceptance changed; probation off behaves as before. The Classroom shows when
+it starts, why (the guards the candidate failed, and the flat candidate it took priority over),
+the epochs left, and whether it succeeded or failed. Tested: off and on behave differently with a
+safe flat candidate present, the accepted model is unchanged throughout. Experiment B is to be
+run again later (the owner asked to finish the 0.9 features first).
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

@@ -649,12 +649,17 @@ function learningText(r) {
 function epochDecision(ep) {
   if (ep.selected && ep.overridden) return `accepted ${ep.selected} by the first-epoch override (the safeguards had rejected it)`;
   const p = ep.probation;
-  if (ep.selected && p?.state === "promoted") return `accepted ${ep.selected}: the probation branch recovered after ${p.epochs} epoch(s)`;
+  if (ep.selected && p?.state === "promoted") return `accepted ${ep.selected}: probation succeeded, the branch passed every safeguard after ${p.epochs} epoch(s)`;
   if (ep.selected) return `accepted ${ep.selected}`;
   const flat = ep.flat_epochs ? ` (flat epoch ${ep.flat_epochs})` : "";
-  if (p?.state === "continued") return `rejected (${p.rejections.join(", ")}); on probation, training continues from ${p.focus} (probation epoch ${p.epoch_in_branch})${flat}`;
+  if (p?.state === "continued") {
+    const left = p.limit ? p.limit - p.epoch_in_branch : null;
+    const start = p.epoch_in_branch === 1 ? "probation starts: " : "";
+    return `rejected (${p.rejections.join(", ")}); ${start}training continues from ${p.focus} on probation (epoch ${p.epoch_in_branch}${p.limit ? ` of ${p.limit}, ${left} left` : ""})` +
+      (p.instead_of_flat ? `, instead of the safe but flat ${p.instead_of_flat}` : "") + `. The accepted checkpoint stays as it is until a candidate passes every safeguard${flat}`;
+  }
   if (ep.continued) return `not accepted yet; training continues from ${ep.continued}${flat}`;
-  if (p?.state === "discarded") return `probation ended after ${p.epochs} epoch(s) without a safe improvement; restored the best checkpoint${flat}`;
+  if (p?.state === "discarded") return `probation failed: ${p.epochs} epoch(s) without a candidate passing every safeguard; restored the accepted checkpoint${flat}`;
   if (ep.restored) return `no safe candidate; restored the best checkpoint${flat}`;
   return `no candidate accepted${flat}`;
 }
