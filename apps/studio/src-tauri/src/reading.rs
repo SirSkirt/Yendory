@@ -3,7 +3,8 @@
 //! <app data>/corpora/<id>.{txt,json}; the training itself is
 //! `yendory_engine::learn::corpus::pretrain_mix`.
 use super::*;
-use crate::sources::{conversation_sources, gutenberg_book, sources, Convert, Fetch, Source};
+use crate::filter::{ConversationFilter, FilterReport};
+use crate::sources::{conversation_sources, gutenberg_book, screen_of, sources, Convert, Fetch, Source};
 use std::time::Duration;
 use yendory_engine::learn::autogrow::Check;
 use yendory_engine::learn::corpus::{
@@ -36,6 +37,9 @@ pub struct CorpusInfo {
     /// How to credit the source.
     #[serde(default)]
     pub(crate) attribution: String,
+    /// A downloaded conversation dataset: what the quality filter kept and left out.
+    #[serde(default)]
+    pub(crate) filter: Option<FilterReport>,
 }
 
 /// One corpus of a reading, as recorded.
@@ -100,7 +104,14 @@ struct Provenance<'a> {
     category: Category,
 }
 
-fn store(app: &AppHandle, name: &str, from: &Provenance, bytes: Vec<u8>, truncated: bool) -> Res<CorpusInfo> {
+fn store(
+    app: &AppHandle,
+    name: &str,
+    from: &Provenance,
+    bytes: Vec<u8>,
+    truncated: bool,
+    filter: Option<FilterReport>,
+) -> Res<CorpusInfo> {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let corpus = Corpus::prepare(&text);
     if from.category == Category::Conversation {
@@ -141,6 +152,7 @@ fn store(app: &AppHandle, name: &str, from: &Provenance, bytes: Vec<u8>, truncat
         dropped_chars: corpus.dropped_chars,
         truncated,
         added: now(),
+        filter,
     };
     write_atomic(&corpus_path(app, &info.id, "txt")?, text.as_bytes())?;
     write_atomic(
@@ -238,6 +250,48 @@ fn wait_for(time: Duration, cancel: &AtomicBool) -> bool {
     !cancel.load(Ordering::Acquire)
 }
 
+/// The Hugging Face access token given in Studio (for gated datasets such as LMSYS-Chat-1M);
+/// the `HF_TOKEN` environment variable is used when none is given.
+static HF_TOKEN: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+fn hf_token() -> Option<String> {
+    HF_TOKEN
+        .read()
+        .ok()
+        .and_then(|t| t.clone())
+        .or_else(|| std::env::var("HF_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// Loads the stored token (at start-up).
+pub(crate) fn load_hf_token(app: &AppHandle) {
+    let stored = read_settings(app).get("hfToken").and_then(|v| v.as_str()).map(str::to_string);
+    if let Ok(mut t) = HF_TOKEN.write() {
+        *t = stored.filter(|t| !t.trim().is_empty());
+    }
+}
+
+/// Whether a Hugging Face token is set (the token itself is never sent back to the page).
+#[tauri::command]
+pub fn hf_token_set() -> bool {
+    hf_token().is_some()
+}
+
+/// Stores the Hugging Face access token on this device (an empty one removes it). It is sent
+/// only to huggingface.co, with downloads.
+#[tauri::command]
+pub fn set_hf_token(app: AppHandle, token: String) -> Res<bool> {
+    let token = token.trim().to_string();
+    if token.len() > 200 || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("That does not look like a Hugging Face access token".into());
+    }
+    write_setting(&app, "hfToken", token.clone().into())?;
+    if let Ok(mut t) = HF_TOKEN.write() {
+        *t = (!token.is_empty()).then_some(token);
+    }
+    Ok(hf_token().is_some())
+}
+
 /// Rate limited: the server kept answering 429 after every wait.
 const RATE_LIMITED: &str = "the server is limiting downloads (too many requests)";
 
@@ -268,10 +322,8 @@ fn get_json(
         }
         pacer.last = Some(std::time::Instant::now());
         let mut request = agent.get(url);
-        if let Ok(token) = std::env::var("HF_TOKEN") {
-            if url.contains("huggingface.co") && !token.trim().is_empty() {
-                request = request.set("Authorization", &format!("Bearer {}", token.trim()));
-            }
+        if let Some(token) = hf_token().filter(|_| url.contains("huggingface.co")) {
+            request = request.set("Authorization", &format!("Bearer {}", token.trim()));
         }
         let wait = match request.call() {
             Ok(r) => {
@@ -297,7 +349,17 @@ fn get_json(
                 )));
                 wait
             }
-            Err(ureq::Error::Status(code, _)) if code < 500 => {
+            Err(ureq::Error::Status(401, _)) if url.contains("huggingface.co") => {
+                return Err(format!(
+                    "Download failed: the server answered 401 for {url}. The dataset is gated or private: \
+                     accept its licence on its Hugging Face page while signed in, and give Studio an \
+                     access token{}.",
+                    if hf_token().is_some() { " (the token given was not accepted)" } else { "" }
+                ))
+            }
+            // 501 "not implemented" is not a busy server: the dataset viewer does not serve this
+            // dataset (for instance one built by a loading script). Asking again cannot help.
+            Err(ureq::Error::Status(code, _)) if code < 500 || code == 501 => {
                 return Err(format!("Download failed: the server answered {code} for {url}"))
             }
             Err(e) => {
@@ -330,7 +392,7 @@ pub fn hf_documents(
     dataset: &str,
     configs: &[&str],
     split: &str,
-    convert: Convert,
+    convert: &mut dyn FnMut(&serde_json::Value) -> Vec<String>,
     limit: u64,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
@@ -365,8 +427,8 @@ pub fn hf_documents(
                 }
             }
             offset += rows.len() as u64;
-            if docs.is_empty() && offset >= 300 {
-                // Nothing in this layout converts: no point reading the rest.
+            if docs.is_empty() && offset >= 3000 {
+                // Nothing in this layout converts (or passes the filter): no point reading on.
                 break;
             }
             progress(docs.iter().map(|d| d.len() as u64 + 16).sum::<u64>().min(limit), Some(limit));
@@ -460,6 +522,8 @@ fn gutenberg_documents(
 }
 
 /// Downloads a source and converts it into documents (plain text sources are kept as they are).
+/// Conversation datasets go through the quality filter (`filter`): its report comes back with the
+/// text, and its counts are shown (`note`) as the download goes.
 pub fn source_text(
     agent: &ureq::Agent,
     src: &Source,
@@ -467,34 +531,87 @@ pub fn source_text(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
     note: &mut dyn FnMut(Option<String>),
-) -> Res<(Vec<u8>, bool)> {
-    let (docs, truncated) = match src.fetch {
-        Fetch::Text(url) => return fetch(agent, url, limit, cancel, progress),
-        Fetch::HfRows { dataset, configs, split, convert } => {
-            hf_documents(agent, dataset, configs, split, convert, limit, cancel, progress, note)?
+) -> Res<(Vec<u8>, bool, Option<FilterReport>)> {
+    let filtering = src.category == Category::Conversation;
+    let filter = std::cell::RefCell::new(ConversationFilter::new());
+    let screen = screen_of(src.id);
+    let counts = std::cell::RefCell::new((0usize, None::<String>));
+    // Rows are converted (and filtered) here; the filter's counts are noted every 500 rows.
+    let process = |convert: Convert| {
+        let (filter, counts) = (&filter, &counts);
+        move |row: &serde_json::Value| -> Vec<String> {
+            if !filtering {
+                return convert(row);
+            }
+            let mut f = filter.borrow_mut();
+            let kept = f.take(row, screen, convert);
+            let mut c = counts.borrow_mut();
+            c.0 += 1;
+            if c.0.is_multiple_of(500) {
+                c.1 = Some(format!("Filtering: {}", f.report.summary()));
+            }
+            kept
         }
-        Fetch::JsonLines(url, convert) => jsonl_documents(agent, url, convert, limit, cancel, progress)?,
+    };
+    // The page's note is shared by the download (waiting, retries) and the filter's counts.
+    let note = std::cell::RefCell::new(note);
+    let say = |n: Option<String>| (*note.borrow_mut())(n);
+    let flush = || {
+        let pending = counts.borrow_mut().1.take();
+        if let Some(n) = pending {
+            say(Some(n));
+        }
+    };
+    let progress = std::cell::RefCell::new(progress);
+    let mut on_progress = |a: u64, b: Option<u64>| {
+        (*progress.borrow_mut())(a, b);
+        flush();
+    };
+    let (docs, truncated) = match src.fetch {
+        Fetch::Text(url) => {
+            let (bytes, truncated) = fetch(agent, url, limit, cancel, &mut on_progress)?;
+            return Ok((bytes, truncated, None));
+        }
+        Fetch::HfRows { dataset, configs, split, convert } => {
+            let mut p = process(convert);
+            hf_documents(agent, dataset, configs, split, &mut p, limit, cancel, &mut on_progress, &mut |n| {
+                say(n)
+            })?
+        }
+        Fetch::JsonLines(url, convert) => {
+            jsonl_documents(agent, url, convert, limit, cancel, &mut on_progress)?
+        }
         Fetch::HfFirst { datasets, convert } => {
             // The first name that answers with data is used; why each other one failed is kept.
             let mut why = Vec::new();
             let mut found = None;
+            let mut p = process(convert);
             for (dataset, config, split) in datasets {
-                let mut tried =
-                    hf_documents(agent, dataset, &[config], split, convert, limit, cancel, progress, note);
+                let mut tried = hf_documents(
+                    agent,
+                    dataset,
+                    &[config],
+                    split,
+                    &mut p,
+                    limit,
+                    cancel,
+                    &mut on_progress,
+                    &mut |n| say(n),
+                );
                 // Refused: the dataset may publish other config or split names; use its own.
                 if tried.as_ref().is_err_and(|e| e.contains("404")) && !cancel.load(Ordering::Acquire) {
-                    if let Some((c, s)) = hf_train_split(agent, dataset, cancel, note) {
+                    if let Some((c, s)) = hf_train_split(agent, dataset, cancel, &mut |n| say(n)) {
                         if (c.as_str(), s.as_str()) != (*config, *split) {
                             tried = hf_documents(
                                 agent,
                                 dataset,
                                 &[&c],
                                 &s,
-                                convert,
+                                &mut p,
                                 limit,
                                 cancel,
-                                progress,
-                                note,
+                                &mut on_progress,
+                                &mut |n| say(n),
                             );
                         }
                     }
@@ -504,21 +621,25 @@ pub fn source_text(
                         found = Some((docs, cut));
                         break;
                     }
-                    Ok(_) => why.push(format!("{dataset}: no conversations in its rows")),
+                    Ok(_) => why.push(format!("{dataset}: no conversations in its rows passed")),
                     Err(e) if cancel.load(Ordering::Acquire) => return Err(e),
                     Err(e) => why.push(format!("{dataset}: {e}")),
                 }
             }
             found.ok_or_else(|| format!("No copy of this dataset could be read ({})", why.join("; ")))?
         }
-        Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, progress)?,
+        Fetch::Gutenberg(books) => gutenberg_documents(agent, books, limit, cancel, &mut on_progress)?,
     };
+    let report = filtering.then(|| filter.into_inner().report);
     if docs.is_empty() {
-        return Err(format!("{}: nothing usable was downloaded", src.name));
+        return Err(match &report {
+            Some(r) => format!("{}: no conversation passed the quality filter ({})", src.name, r.summary()),
+            None => format!("{}: nothing usable was downloaded", src.name),
+        });
     }
     let mut text = docs.join(&format!("\n{END_OF_TEXT}\n"));
     text.push('\n');
-    Ok((text.into_bytes(), truncated))
+    Ok((text.into_bytes(), truncated, report))
 }
 
 #[tauri::command]
@@ -574,6 +695,7 @@ pub async fn generate_corpus(
             },
             text.into_bytes(),
             false,
+            None,
         )
     })
     .await
@@ -622,7 +744,7 @@ pub async fn import_corpus(app: AppHandle, category: Option<Category>) -> Res<Op
             attribution: "",
             category: category.unwrap_or_default(),
         };
-        store(&app, &name, &from, bytes, false)
+        store(&app, &name, &from, bytes, false, None)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -677,7 +799,7 @@ fn store_own_conversations(app: &AppHandle, name: &str, text: String) -> Res<Cor
         attribution: "",
         category: Category::Conversation,
     };
-    store(app, name, &from, text.into_bytes(), false)
+    store(app, name, &from, text.into_bytes(), false, None)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -735,7 +857,7 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
             })
         };
         let result = source_text(&agent(), &src, limit, &cancel, &mut progress, &mut note).and_then(
-            |(bytes, truncated)| {
+            |(bytes, truncated, report)| {
                 let mb = bytes.len() as f64 / (1 << 20) as f64;
                 let name = if truncated {
                     format!("{} · first {mb:.0} MB", src.name)
@@ -748,7 +870,7 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
                     attribution: src.attribution,
                     category: src.category,
                 };
-                store(&app, &name, &from, bytes, truncated)
+                store(&app, &name, &from, bytes, truncated, report)
             },
         );
         let (corpus, error) = match result {
@@ -756,7 +878,10 @@ pub fn download_corpus(app: AppHandle, studio: State<Studio>, source: String, ma
             Err(e) => (None, Some(e)),
         };
         app.state::<Studio>().downloading.store(false, Ordering::Release);
-        let note = last_note.into_inner();
+        let note = match corpus.as_ref().and_then(|c| c.filter.as_ref()) {
+            Some(r) => Some(format!("Quality filter: {}.", r.summary())),
+            None => last_note.into_inner(),
+        };
         emit(DownloadEvent { source, received: 0, total: None, done: true, error, corpus, note });
     });
     Ok(())
@@ -1153,6 +1278,14 @@ mod tests {
     fn sources_are_reachable_and_convert() {
         let mut failed = Vec::new();
         for src in sources().into_iter().chain(conversation_sources()) {
+            // A gated dataset needs an access token (HF_TOKEN), which CI does not have.
+            if src.id == "lmsys-chat" && hf_token().is_none() {
+                println!("SKIPPED {}: gated, and no HF_TOKEN is set", src.id);
+                continue;
+            }
+            if std::env::var("SOURCES").is_ok_and(|only| !only.split(',').any(|id| id == src.id)) {
+                continue;
+            }
             let limit = match src.fetch {
                 Fetch::Gutenberg(_) => 200_000,
                 _ => 300_000,
@@ -1162,7 +1295,10 @@ mod tests {
                     println!("{n}");
                 }
             }) {
-                Ok((bytes, truncated)) => {
+                Ok((bytes, truncated, report)) => {
+                    if let Some(r) = &report {
+                        println!("{}: {}", src.id, r.summary());
+                    }
                     let text = String::from_utf8_lossy(&bytes);
                     let corpus = Corpus::prepare(&text);
                     let first = corpus.train.first().cloned().unwrap_or_default();
@@ -1205,7 +1341,7 @@ mod tests {
     #[ignore]
     fn tinystories_is_reachable() {
         let src = &sources()[0];
-        let (bytes, truncated) =
+        let (bytes, truncated, _) =
             source_text(&agent(), src, 1 << 20, &AtomicBool::new(false), &mut |_, _| {}, &mut |_| {})
                 .unwrap();
         assert!(truncated);

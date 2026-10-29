@@ -41,11 +41,28 @@
 //! * **Reply checks** (`reply_checks`): replies Nova writes mid-conversation are checked for
 //!   emptiness, repetition, echoing, staying on topic, questions, its own name and an assistant's
 //!   voice. They are measured, never trained on.
+//! * **Every turn.** A practice window is one row in which every one of Nova's replies is trained
+//!   (teacher forcing): each reply's tokens see exactly the turns before it in the window, so one
+//!   pass trains all of her replies, each from its own history. The other speaker's lines and the
+//!   `N: ` before each reply are context only (weight `user_weight`, 0 by default).
+//! * **Examples** (`examples_share`): hand-written conversations of thirteen kinds (greetings and
+//!   greeting again, who said what, the same question in other words, the latest message,
+//!   changes of topic, misunderstandings, ...), three different ones per kind at each level, drawn
+//!   up to the level the curriculum has reached (`learn::examples`).
+//! * **Understanding** (`understanding_practice`, `understanding_tests`): practice and tests of
+//!   following the conversation itself (greeted again, paraphrased questions, who said what, the
+//!   latest message, topic changes, misunderstandings, repeated questions; `learn::listening`).
+//!   The tests are asked two ways: teacher-forced (Nova's earlier turns as the script has them)
+//!   and free-running (her earlier turns are what she wrote herself, so a wrong turn early on
+//!   stays in the conversation).
 use super::eval::reply;
 use super::lessons::{is_held_out, Item, Kind};
 #[cfg(test)]
 use super::listening::Skill;
-use super::listening::{context_practice, context_tests, score, ContextScore, ContextTest};
+use super::listening::{
+    context_practice, context_tests, practice_of, score, understanding_tests, ContextScore, ContextTest,
+    Probe, Skill as ListeningSkill,
+};
 use super::{batch_loss, encode_item, lr_schedule, Rng, Row};
 use crate::model::{Ablation, Bicameral, Focus};
 use crate::tokenizer::TokenId;
@@ -266,6 +283,16 @@ pub struct ConversationConfig {
     /// whose context tests pass the most pairs, then with the higher listening measure, then the
     /// lower loss. Context and listening never reject a checkpoint; this only keeps a second one.
     pub keep_balanced: bool,
+    /// Share of training rows from the built-in example conversations (`learn::examples`), at
+    /// the levels the curriculum has reached (0: none).
+    pub examples_share: f32,
+    /// The generated listening practice also practises the understanding skills (greeted again,
+    /// paraphrased questions, who said what, the latest message, topic changes,
+    /// misunderstandings, repeated questions). Off: only the context skills, as before 0.7.8.
+    pub understanding_practice: bool,
+    /// Understanding test pairs per skill at each check, asked teacher-forced and free-running
+    /// (0: none).
+    pub understanding_tests: usize,
 }
 
 impl Default for ConversationConfig {
@@ -305,6 +332,9 @@ impl Default for ConversationConfig {
             reading_rise: 0.02,
             skip_ai_voice: true,
             keep_balanced: false,
+            examples_share: 0.1,
+            understanding_practice: true,
+            understanding_tests: 6,
         }
     }
 }
@@ -367,6 +397,9 @@ pub struct ConversationCheck {
     /// Held-out loss on text the model read.
     pub reading_loss: Option<f32>,
     pub context: Option<ContextScore>,
+    /// The understanding tests, teacher-forced and free-running.
+    #[serde(default)]
+    pub understanding: Option<UnderstandingScore>,
     pub reply_checks: Option<ReplyChecks>,
     pub learning_rate_scale: f32,
     pub accepted: bool,
@@ -375,6 +408,17 @@ pub struct ConversationCheck {
     /// `keep_balanced`: this check became the best balanced checkpoint so far.
     #[serde(default)]
     pub balanced: bool,
+}
+
+/// The understanding tests asked two ways.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnderstandingScore {
+    /// Nova's earlier turns as the test's script has them: does she answer the last message
+    /// right when the conversation before it is right?
+    pub teacher_forced: ContextScore,
+    /// Nova's earlier turns written by herself, one after another: does she still answer right
+    /// when the conversation is her own?
+    pub free_running: ContextScore,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -396,7 +440,12 @@ pub enum ConversationEvent {
         baseline_listening: Option<f32>,
         baseline_reading: Option<f32>,
         baseline_context: Option<ContextScore>,
+        #[serde(default)]
+        baseline_understanding: Option<UnderstandingScore>,
         baseline_reply_checks: Option<ReplyChecks>,
+        /// Built-in example conversations practised (each counts once).
+        #[serde(default)]
+        examples: usize,
         steps: u64,
         stages: Vec<String>,
     },
@@ -443,6 +492,7 @@ pub struct ConversationResult {
     pub baseline_classroom: usize,
     pub classroom_total: usize,
     pub baseline_context: Option<ContextScore>,
+    pub baseline_understanding: Option<UnderstandingScore>,
     /// The check of the best accepted checkpoint.
     pub best_check: Option<ConversationCheck>,
     pub tokens: u64,
@@ -796,6 +846,8 @@ struct Fixed<'a> {
     guard: Vec<&'a Item>,
     reading_probes: Vec<Row>,
     tests: Vec<ContextTest>,
+    /// The understanding tests.
+    understanding: Vec<ContextTest>,
     /// Mid-conversation prompts for the reply checks, with the turns before them.
     check_prompts: Vec<(String, Vec<(bool, String)>)>,
     /// Prompts shown with Nova's reply and the person's.
@@ -813,6 +865,7 @@ struct Measured {
     classroom: Vec<bool>,
     reading: Option<f32>,
     context: Option<ContextScore>,
+    understanding: Option<UnderstandingScore>,
     reply_checks: Option<ReplyChecks>,
     samples: Vec<Sample>,
 }
@@ -865,6 +918,19 @@ impl Fixed<'_> {
         Some(score(&self.tests, &replies(model, &prompts, 24)))
     }
 
+    fn understanding(&self, model: &Bicameral) -> Option<UnderstandingScore> {
+        if self.understanding.is_empty() {
+            return None;
+        }
+        let probes: Vec<&Probe> = self.understanding.iter().flat_map(|t| [&t.a, &t.b]).collect();
+        let forced: Vec<String> = probes.iter().map(|p| p.prompt()).collect();
+        let free = free_running(model, &probes);
+        Some(UnderstandingScore {
+            teacher_forced: score(&self.understanding, &replies(model, &forced, 24)),
+            free_running: score(&self.understanding, &replies(model, &free, 24)),
+        })
+    }
+
     fn reply_checks(&self, model: &Bicameral) -> Option<ReplyChecks> {
         if !self.cfg.reply_checks || self.check_prompts.is_empty() {
             return None;
@@ -893,6 +959,7 @@ impl Fixed<'_> {
         };
         let classroom = self.classroom(&model, &confirmed)?;
         let context = self.context(&model);
+        let understanding = self.understanding(&model);
         let reply_checks = self.reply_checks(&model);
         let samples = self
             .samples
@@ -913,10 +980,42 @@ impl Fixed<'_> {
             classroom,
             reading,
             context,
+            understanding,
             reply_checks,
             samples,
         })
     }
+}
+
+/// The prompts of `probes` as conversations Nova wrote herself (free-running): each of her turns
+/// in a probe's script is replaced, in order, by her own reply to the conversation so far (her
+/// earlier replies included); the other speaker's turns and the last question stay as written.
+/// The replies of all probes are written together, one turn at a time.
+fn free_running(model: &Bicameral, probes: &[&Probe]) -> Vec<String> {
+    let mut history: Vec<String> = vec![String::new(); probes.len()];
+    let mut at: Vec<usize> = vec![0; probes.len()];
+    loop {
+        // Each probe up to its next turn of Nova's.
+        let mut waiting = Vec::new();
+        for (i, p) in probes.iter().enumerate() {
+            while at[i] < p.turns.len() && !p.turns[at[i]].0 {
+                history[i].push_str(&format!("U: {}\n", p.turns[at[i]].1));
+                at[i] += 1;
+            }
+            if at[i] < p.turns.len() {
+                waiting.push(i);
+            }
+        }
+        if waiting.is_empty() {
+            break;
+        }
+        let prompts: Vec<String> = waiting.iter().map(|&i| format!("{}N: ", history[i])).collect();
+        for (&i, r) in waiting.iter().zip(replies(model, &prompts, 32)) {
+            history[i].push_str(&format!("N: {}\n", r.trim()));
+            at[i] += 1;
+        }
+    }
+    probes.iter().zip(history).map(|(p, h)| format!("{h}U: {}\nN: ", p.question)).collect()
 }
 
 /// Nova's loss on each pool conversation (its first window of the stage): on the GPU when
@@ -1138,9 +1237,10 @@ pub fn converse(
     if cfg.batch_size == 0 || !(cfg.learning_rate > 0. && cfg.learning_rate.is_finite()) || cfg.tokens == 0 {
         return Err("Invalid conversation settings".into());
     }
-    let shares = [cfg.earlier_share, cfg.reading_share, cfg.context_practice, cfg.review_share];
+    let shares =
+        [cfg.earlier_share, cfg.reading_share, cfg.context_practice, cfg.review_share, cfg.examples_share];
     if shares.iter().any(|s| !(0. ..1.).contains(s))
-        || cfg.earlier_share + cfg.reading_share + cfg.context_practice >= 0.9
+        || cfg.earlier_share + cfg.reading_share + cfg.context_practice + cfg.examples_share >= 0.9
         || !(0. ..=1.).contains(&cfg.guard_drop)
     {
         return Err("The shares of earlier lessons, reading and listening practice must leave most rows to conversations".into());
@@ -1157,8 +1257,15 @@ pub fn converse(
     let mut current = model.clone();
     let mut rng = Rng::new(cfg.seed);
     let nova_label = if cfg.own_name.is_empty() { "Nova".to_string() } else { cfg.own_name.clone() };
-    let listening_practice =
-        if cfg.context_practice > 0. { context_practice(4000, cfg.seed, &nova_label) } else { Vec::new() };
+    let listening_practice = if cfg.context_practice <= 0. {
+        Vec::new()
+    } else if cfg.understanding_practice {
+        let skills: Vec<ListeningSkill> =
+            ListeningSkill::ALL.iter().chain(&ListeningSkill::UNDERSTANDING).copied().collect();
+        practice_of(&skills, 4000, cfg.seed, &nova_label)
+    } else {
+        context_practice(4000, cfg.seed, &nova_label)
+    };
     let listening_sets = [ConversationSet {
         name: "listening practice".into(),
         dialogues: listening_practice,
@@ -1166,6 +1273,12 @@ pub fn converse(
         hold_out: false,
     }];
     let (listen_train, ..) = practices(&listening_sets, cfg);
+    // The built-in examples, by level (a stage draws from its own level and the ones before).
+    let examples = if cfg.examples_share > 0. { super::examples::examples(&nova_label) } else { Vec::new() };
+    let example_practice: Vec<(usize, Practice<'_>)> = examples
+        .iter()
+        .map(|e| (e.level, Practice { dialogue: &e.dialogue, nova: nova_label.clone() }))
+        .collect();
     let earlier_train: Vec<&Item> = earlier.iter().filter(|i| !i.held_out).collect();
     let questions: Vec<&Item> = earlier
         .iter()
@@ -1229,6 +1342,11 @@ pub fn converse(
         guard: spread(questions.len(), cfg.guard_questions).into_iter().map(|i| questions[i]).collect(),
         reading_probes,
         tests: if cfg.context_tests > 0 { context_tests(cfg.context_tests) } else { Vec::new() },
+        understanding: if cfg.understanding_tests > 0 {
+            understanding_tests(cfg.understanding_tests, &nova_label)
+        } else {
+            Vec::new()
+        },
         check_prompts,
         samples,
     };
@@ -1264,7 +1382,9 @@ pub fn converse(
         baseline_listening: baseline.listening,
         baseline_reading,
         baseline_context: baseline.context.clone(),
+        baseline_understanding: baseline.understanding.clone(),
         baseline_reply_checks: baseline.reply_checks.clone(),
+        examples: example_practice.len(),
         steps,
         stages: STAGES.iter().map(|s| s.0.to_string()).collect(),
     });
@@ -1365,6 +1485,7 @@ pub fn converse(
             classroom_gained: gained,
             reading_loss: m.reading,
             context: m.context,
+            understanding: m.understanding,
             reply_checks: m.reply_checks,
             learning_rate_scale: curriculum.lr_scale,
             accepted,
@@ -1481,6 +1602,18 @@ pub fn converse(
                 {
                     let p = &listen_train[rng.below(listen_train.len())];
                     p.row(&current, cfg, Some(&mut rng), windows[STAGES.len() - 1])?
+                } else if u < cfg.earlier_share
+                    + cfg.reading_share
+                    + cfg.context_practice
+                    + cfg.examples_share
+                    && !example_practice.is_empty()
+                {
+                    // An example of the stage's level or an earlier one, whole.
+                    let level = if cfg.curriculum { stage } else { STAGES.len() - 1 };
+                    let fit: Vec<&Practice<'_>> =
+                        example_practice.iter().filter(|(l, _)| *l <= level).map(|(_, p)| p).collect();
+                    let p = fit[rng.below(fit.len())];
+                    p.row(&current, cfg, None, windows[STAGES.len() - 1])?
                 } else {
                     // A conversation: from an earlier stage now and then, else from the pool
                     // (by difficulty) or at random.
@@ -1618,6 +1751,7 @@ pub fn converse(
         baseline_classroom,
         classroom_total,
         baseline_context: baseline.context,
+        baseline_understanding: baseline.understanding,
         best_check,
         tokens,
         checks,
@@ -1725,6 +1859,90 @@ mod tests {
         chat.trainable = vec![true, false, true];
         let p = Practice { dialogue: &chat, nova: "Ben".into() };
         assert!(p.row(&m, &cfg, None, WHOLE).unwrap().is_none(), "Ben's only reply is not marked");
+    }
+
+    /// Every one of Nova's replies in a conversation is trained, each from exactly the history
+    /// before it: one row's loss on reply n equals the loss of a row that ends with reply n, so
+    /// one pass is the same as training each reply on its own history (teacher forcing). The
+    /// other speaker's lines and the "N: " before each reply are not trained.
+    #[test]
+    fn every_nova_turn_is_trained_with_its_own_history() {
+        let neuro = {
+            let p = crate::model::neuro::presets().into_iter().next().unwrap();
+            Bicameral::with_design(Config { max_tokens: 256, ..p.config }, Some(p.design), 5)
+        };
+        let d = parse_dialogue(
+            "Ann: Hello!\nBen: Hey! How are you?\nAnn: I'm good. What's new?\nBen: Not much. How about you?\nAnn: I've been working all day.\nBen: Sounds tiring. How was work?",
+        )
+        .unwrap();
+        let cfg = ConversationConfig::default();
+        let p = Practice { dialogue: &d, nova: "Ben".into() };
+        // Room for the whole conversation (a longer one is cut at the context; its later replies
+        // are trained in windows that start further in).
+        let bicameral = Bicameral::with_config(Config { max_tokens: 256, ..small().config }, 3);
+        for m in [bicameral, neuro] {
+            let row = p.row(&m, &cfg, None, WHOLE).unwrap().unwrap();
+            // The trained text is Nova's three replies, nothing else.
+            assert_eq!(
+                trained_text(&m, &row),
+                "Hey! How are you?\nNot much. How about you?\nSounds tiring. How was work?\n"
+            );
+            // Where each reply starts and ends in the row (runs of trained targets).
+            let mut spans = Vec::new();
+            let mut i = 0;
+            while i < row.mask.len() {
+                if row.mask[i] > 0. {
+                    let start = i;
+                    while i < row.mask.len() && row.mask[i] > 0. {
+                        i += 1;
+                    }
+                    spans.push((start, i));
+                } else {
+                    i += 1;
+                }
+            }
+            assert_eq!(spans.len(), 3, "three replies");
+            let whole_loss =
+                super::super::row_losses(&m, std::slice::from_ref(&row), Ablation::default()).unwrap()[0];
+            let tokens: usize = spans.iter().map(|(a, b)| b - a).sum();
+            let mut sum = 0.;
+            for (n, &(a, b)) in spans.iter().enumerate() {
+                // The conversation before reply n is exactly what Nova reads before it.
+                let before = m.tokenizer.decode(&row.ids[..a + 1]).unwrap();
+                assert_eq!(before, p.prompt_at(&cfg, n).unwrap().0, "reply {n}");
+                // A row that ends with reply n and trains only it.
+                let mut mask = vec![0.; b];
+                mask[a..b].fill(1.);
+                let one = Row { ids: row.ids[..b].to_vec(), targets: row.targets[..b].to_vec(), mask };
+                let l = super::super::row_losses(&m, &[one], Ablation::default()).unwrap()[0];
+                sum += l * (b - a) as f32;
+            }
+            let per_turn = sum / tokens as f32;
+            assert!((per_turn - whole_loss).abs() < 1e-4, "{per_turn} vs {whole_loss}");
+        }
+    }
+
+    /// Free-running: Nova's turns of the script are replaced by what she writes herself, in
+    /// order; the other speaker's turns and the last question stay as written.
+    #[test]
+    fn free_running_conversations_are_nova_s_own() {
+        let m = small();
+        let tests = understanding_tests(1, "Nova");
+        let probes: Vec<&Probe> = tests.iter().flat_map(|t| [&t.a, &t.b]).collect();
+        let prompts = free_running(&m, &probes);
+        assert_eq!(prompts.len(), probes.len());
+        for (p, prompt) in probes.iter().zip(&prompts) {
+            assert!(prompt.ends_with(&format!("U: {}\nN: ", p.question)), "{prompt}");
+            let nova_turns = p.turns.iter().filter(|t| t.0).count();
+            assert_eq!(prompt.matches("N: ").count(), nova_turns + 1, "{prompt}");
+            for (mine, t) in &p.turns {
+                if !mine {
+                    assert!(prompt.contains(&format!("U: {t}\n")), "{prompt}");
+                }
+            }
+            // Teacher-forced: the script as written.
+            assert!(p.prompt().ends_with(&format!("U: {}\nN: ", p.question)));
+        }
     }
 
     #[test]
@@ -1843,6 +2061,7 @@ mod tests {
             evaluations: 5,
             pool_size: 64,
             context_tests: 2,
+            understanding_tests: 1,
             keep_balanced: true,
             ..ConversationConfig::default()
         };
@@ -1877,19 +2096,25 @@ mod tests {
         assert_eq!(saved, r.checks.iter().filter(|c| c.accepted).count());
         let Some(ConversationEvent::Started {
             baseline_context,
+            baseline_understanding,
             baseline_reading,
             baseline_stage_losses,
+            examples,
             ..
         }) = events.first()
         else {
             panic!("no start")
         };
         assert!(baseline_context.as_ref().is_some_and(|c| c.total == 2 * Skill::ALL.len()));
+        let u = baseline_understanding.as_ref().expect("understanding tests");
+        assert_eq!((u.teacher_forced.total, u.free_running.total), (7, 7));
+        assert!(*examples >= 117, "the built-in examples are practised");
         assert!(baseline_reading.is_some());
         assert_eq!(baseline_stage_losses.len(), STAGES.len());
         for c in &r.checks {
             assert_eq!(c.stage_losses.len(), 3);
             assert!(c.context.is_some() && c.reply_checks.is_some() && c.reading_loss.is_some());
+            assert!(c.understanding.is_some());
             assert!(c.samples.iter().all(|s| s.prompt.ends_with("N: ")));
             assert!(
                 !c.samples.is_empty() && c.samples.iter().all(|s| s.prompt.lines().count() >= 4),

@@ -9,6 +9,36 @@ use yendory_engine::learn::corpus::Category;
 /// Converts one record (a JSON row) into documents.
 pub type Convert = fn(&Value) -> Vec<String>;
 
+/// A dataset's own reason to leave a record out (its language tag, its moderation flags, ...),
+/// before it is converted (see `filter`).
+pub type Screen = fn(&Value) -> Option<crate::filter::Reason>;
+
+/// The screening a conversation source's records get, when the dataset flags them itself.
+pub fn screen_of(source: &str) -> Option<Screen> {
+    match source {
+        "lmsys-chat" => Some(lmsys_screen),
+        _ => None,
+    }
+}
+
+/// LMSYS-Chat-1M: English only (its `language` tag), nothing its OpenAI moderation flagged in any
+/// turn, and no conversation whose names were removed for privacy (`redacted`: they read
+/// "NAME_1").
+fn lmsys_screen(row: &Value) -> Option<crate::filter::Reason> {
+    use crate::filter::Reason;
+    if row.get("language").and_then(Value::as_str) != Some("English") {
+        return Some(Reason::NotEnglish);
+    }
+    let flagged = row
+        .get("openai_moderation")
+        .and_then(Value::as_array)
+        .is_some_and(|m| m.iter().any(|t| t.get("flagged").and_then(Value::as_bool) == Some(true)));
+    if flagged || row.get("redacted").and_then(Value::as_bool) == Some(true) {
+        return Some(Reason::Flagged);
+    }
+    None
+}
+
 #[derive(Clone, Copy)]
 pub enum Fetch {
     /// A plain text file (stories separated by `<|endoftext|>`).
@@ -227,16 +257,12 @@ pub fn conversation_sources() -> Vec<Source> {
             size_mb: 6,
             default_mb: 6,
             fetch: Fetch::HfFirst {
-                datasets: &[
-                    ("li2017dailydialog/daily_dialog", "default", "train"),
-                    ("roskoN/dailydialog", "full", "train"),
-                    ("frankdarkluo/DailyDialog", "default", "train"),
-                    ("ConvLab/dailydialog", "default", "train"),
-                    ("OpenRL/daily_dialog", "default", "train"),
-                    ("Aeala/daily_dialog", "default", "train"),
-                    ("daily_dialog", "default", "train"),
-                ],
-                convert: english_dialogue,
+                // Checked 2026-10-29: the original (li2017dailydialog/daily_dialog) answers 501, as
+                // the dataset viewer does not run its loading script; these copies answer with
+                // rows. (frankdarkluo's has context/response pairs, ConvLab's fails to build,
+                // Aeala's is gated and "daily_dialog" was renamed.)
+                datasets: &[("OpenRL/daily_dialog", "default", "train"), ("roskoN/dailydialog", "full", "train")],
+                convert: whole_dialogue,
             },
         },
         Source {
@@ -254,14 +280,14 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("Estwld/empathetic_dialogues_llm", "default", "train"),
                     ("facebook/empathetic_dialogues", "default", "train"),
                 ],
-                convert: english_dialogue,
+                convert: whole_dialogue,
             },
         },
         Source {
             id: "ultrachat",
-            name: "UltraChat (assistant-style)",
+            name: "UltraChat 200k (assistant-style, filtered)",
             category: Category::Conversation,
-            description: "Long conversations where one person asks about all kinds of topics and the other explains: assistant-style, longer and harder words. Kept as a conversation between two named people; long turns are cut by the practice windows. 200,000 in all; download only the first part you need.",
+            description: "Long conversations where one person asks about all kinds of topics and the other explains. Most are in an assistant's style (long answers, lists, \"Certainly!\"), and those are left out, so only a small share is kept: the plainer, more natural exchanges, as a conversation between two named people. 200,000 in all; the size you choose is what is kept.",
             page: "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k",
             license: "MIT",
             attribution: "UltraChat, Ding et al. (2023); ultrachat_200k by Hugging Face H4",
@@ -272,7 +298,7 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("HuggingFaceH4/ultrachat_200k", "default", "train_sft"),
                     ("stingning/ultrachat", "default", "train"),
                 ],
-                convert: english_dialogue,
+                convert: whole_dialogue,
             },
         },
         Source {
@@ -290,7 +316,24 @@ pub fn conversation_sources() -> Vec<Source> {
                     ("OpenAssistant/oasst_top1_2023-08-25", "default", "train"),
                     ("timdettmers/openassistant-guanaco", "default", "train"),
                 ],
-                convert: english_dialogue,
+                convert: whole_dialogue,
+            },
+        },
+        Source {
+            id: "lmsys-chat",
+            name: "LMSYS-Chat-1M (gated: needs your Hugging Face token)",
+            category: Category::Conversation,
+            description: "One million real conversations people had with chatbots in 2023. Most are tasks and questions for an assistant, so strict filtering keeps few: English only, nothing the dataset's own moderation flagged, no conversation whose names were removed for privacy, and nothing in an assistant's style. Access: while signed in to Hugging Face, accept the licence on the dataset's page, then give Studio an access token (below). The conversations stay on this device.",
+            page: "https://huggingface.co/datasets/lmsys/lmsys-chat-1m",
+            license: "LMSYS-Chat-1M Dataset License Agreement (accept it on Hugging Face; no redistribution)",
+            attribution: "LMSYS-Chat-1M, Zheng et al. (2023), LMSYS",
+            size_mb: 2500,
+            default_mb: 10,
+            fetch: Fetch::HfRows {
+                dataset: "lmsys/lmsys-chat-1m",
+                configs: &["default"],
+                split: "train",
+                convert: whole_dialogue,
             },
         },
         Source {
@@ -414,6 +457,16 @@ fn tidy(text: &str) -> String {
 /// cut before code or a turn longer than 1,200 characters; fewer than two turns, more than two
 /// speakers or nothing recognised: none.
 pub fn any_dialogue(row: &Value) -> Vec<String> {
+    dialogue_of(row, true)
+}
+
+/// [`any_dialogue`] without cutting: a conversation with code or a long turn is converted whole
+/// (the download filter leaves it out and counts it, see `filter`).
+pub fn whole_dialogue(row: &Value) -> Vec<String> {
+    dialogue_of(row, false)
+}
+
+fn dialogue_of(row: &Value, cut: bool) -> Vec<String> {
     const LISTS: [&str; 7] =
         ["dialog", "dialogue", "utterances", "turns", "conversation", "conversations", "messages"];
     let field = |v: &Value, keys: &[&str]| -> Option<String> {
@@ -436,7 +489,9 @@ pub fn any_dialogue(row: &Value) -> Vec<String> {
     }
     turns.retain(|(r, t)| !t.is_empty() && !r.as_deref().is_some_and(|r| r.eq_ignore_ascii_case("system")));
     // Cut before code or an over-long turn.
-    if let Some(i) = turns.iter().position(|(_, t)| t.contains("```") || t.len() > LONGEST_TURN) {
+    if let Some(i) =
+        turns.iter().position(|(_, t)| t.contains("```") || t.len() > LONGEST_TURN).filter(|_| cut)
+    {
         turns.truncate(i);
     }
     if turns.len() < 2 {
@@ -473,13 +528,8 @@ pub fn any_dialogue(row: &Value) -> Vec<String> {
     vec![doc.trim_end().to_string()]
 }
 
-/// [`any_dialogue`], keeping only conversations in English (a downloaded dataset may mix
-/// languages): almost all letters ASCII and enough of the commonest English words.
-pub fn english_dialogue(row: &Value) -> Vec<String> {
-    any_dialogue(row).into_iter().filter(|d| english(d)).collect()
-}
-
-/// Whether text reads as English (see [`english_dialogue`]).
+/// Whether text reads as English (a downloaded dataset may mix languages): almost all letters
+/// ASCII and enough of the commonest English words.
 pub fn english(text: &str) -> bool {
     const COMMON: [&str; 40] = [
         "the", "a", "an", "to", "and", "i", "you", "is", "it", "of", "in", "that", "what", "for", "my", "do",
@@ -933,11 +983,11 @@ mod tests {
     #[test]
     fn only_english_conversations_are_kept_from_mixed_datasets() {
         let it = json!({"text": "<|im_start|>user\nConsigliami 5 nomi per il mio cucciolo di dobberman<|im_end|>\n<|im_start|>assistant\nEcco 5 nomi per il tuo cucciolo di dobermann: Zeus, Apollo, Thor<|im_end|>"});
-        assert!(!any_dialogue(&it).is_empty() && english_dialogue(&it).is_empty());
+        assert!(!any_dialogue(&it).is_empty() && !english(&any_dialogue(&it)[0]));
         let de = json!({"dialog": ["Wie geht es dir heute?", "Mir geht es gut, danke. Und dir?"]});
-        assert!(english_dialogue(&de).is_empty());
+        assert!(!english(&any_dialogue(&de)[0]));
         let en = json!({"dialog": ["Do you want to go to the park with me?", "Yes, that is a good idea. What time?"]});
-        assert_eq!(english_dialogue(&en).len(), 1);
+        assert!(english(&any_dialogue(&en)[0]));
     }
 
     /// Files of your own: JSON, JSON lines and plain text all give conversations.

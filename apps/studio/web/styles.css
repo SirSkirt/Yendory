@@ -140,7 +140,7 @@ input:focus { border-bottom-color: var(--accent); outline: none; }
 .settings .wide { grid-column: 1 / -1; max-width: 640px; }
 .settings .wide select { color: var(--ink); }
 .ledger tr.epoch-summary td { background: color-mix(in srgb, var(--accent) 7%, transparent); font-size: 13px; }
-.check-inline { display: inline-flex; gap: 6px; align-items: baseline; font-size: 14px; }
+.check-inline { display: inline-flex; gap: 6px; align-items: baseline; font-size: 14px; margin-right: 10px; }
 
 /* Yendory dropdowns (js/dropdown.js): drawn by Studio, the same on every system */
 select.ydd-native { display: none !important; }

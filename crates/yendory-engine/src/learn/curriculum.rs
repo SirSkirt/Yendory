@@ -255,6 +255,9 @@ pub struct CourseSettings {
     /// Experimental (0 = off): keep training from a rejected epoch for up to this many epochs
     /// before restarting from the accepted model (see `SessionConfig::probation_epochs`).
     pub probation_epochs: u32,
+    /// How much the earlier lessons' held-out loss may rise in a lesson session (see
+    /// `SessionConfig::retention_loss_tolerance`).
+    pub earlier_loss_rise: f32,
 }
 impl Default for CourseSettings {
     fn default() -> Self {
@@ -280,6 +283,7 @@ impl Default for CourseSettings {
             backoff: true,
             override_first_epoch: false,
             probation_epochs: 0,
+            earlier_loss_rise: 0.02,
         }
     }
 }

@@ -190,6 +190,18 @@ pub struct SessionConfig {
     /// `earlier_answers_net`).
     #[serde(default)]
     pub earlier_panel_net: bool,
+    /// Experimental (off by default): with the larger earlier-lesson check
+    /// (`retention_per_lesson`), judge the earlier lessons by their held-out ANSWERS: the check
+    /// is judged by its net change (as `earlier_panel_net`), and their held-out loss may rise up
+    /// to `earlier_loss_cap` instead of `retention_loss_tolerance`, so a small loss rise with the
+    /// answers kept no longer rejects a candidate. A rise above the cap still does. Without the
+    /// larger check it changes nothing (a dozen questions are too few to judge by).
+    #[serde(default)]
+    pub earlier_by_answers: bool,
+    /// With `earlier_by_answers`: the most the earlier lessons' held-out loss may rise above its
+    /// session baseline (a substantial regression is rejected whatever the answers).
+    #[serde(default = "default_earlier_loss_cap")]
+    pub earlier_loss_cap: f32,
     /// For experiments: called at the end of every epoch with the epoch, the accepted model and
     /// the working model training continues from. Not saved with settings.
     #[serde(skip)]
@@ -217,6 +229,11 @@ fn yes() -> bool {
 fn default_pass_mark() -> f32 {
     0.5
 }
+
+fn default_earlier_loss_cap() -> f32 {
+    0.25
+}
+
 fn default_retention_units() -> usize {
     16
 }
@@ -299,6 +316,8 @@ impl Default for SessionConfig {
             guard_before_growth: false,
             retention_per_lesson: None,
             earlier_panel_net: false,
+            earlier_by_answers: false,
+            earlier_loss_cap: default_earlier_loss_cap(),
         }
     }
 }
@@ -993,6 +1012,64 @@ struct Pending<'s> {
     scoring: std::thread::ScopedJoinHandle<'s, (Bicameral, Result<Scored, String>)>,
 }
 
+/// The safeguards on the earlier lessons for one candidate: their held-out loss `(now, at the
+/// session start)` against the allowance, and the earlier-lesson answers the baseline gave that
+/// are wrong now (`lost_panel`), against those newly right among the same questions
+/// (`regained_panel`) or the answers gained in the lessons taught (`gained_here`), as the
+/// settings say. Returns each rejection with its reason.
+fn earlier_lessons_check(
+    cfg: &SessionConfig,
+    loss: Option<(f32, f32)>,
+    lost_panel: usize,
+    regained_panel: usize,
+    gained_here: usize,
+) -> Vec<(Rejection, String)> {
+    let mut out = Vec::new();
+    // `earlier_by_answers` (with the larger check): the earlier lessons are judged by their
+    // answers, and their loss only by the cap.
+    let by_answers = cfg.earlier_by_answers && cfg.retention_per_lesson.is_some();
+    if let Some((now, before)) = loss {
+        let allowed = match cfg.retention_relative {
+            Some(share) => before * share,
+            None => cfg.retention_loss_tolerance,
+        };
+        let allowed = if by_answers { allowed.max(cfg.earlier_loss_cap) } else { allowed };
+        if now > before + allowed {
+            out.push((
+                Rejection::EarlierLessonsLoss,
+                match cfg.retention_relative {
+                    Some(share) if !by_answers => format!(
+                        "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {:.0}%",
+                        share * 100.
+                    ),
+                    _ => format!("earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {allowed}"),
+                },
+            ));
+        }
+    }
+    let panel_net = cfg.earlier_panel_net || by_answers;
+    let panel_ok =
+        (cfg.earlier_answers_net && lost_panel <= gained_here) || (panel_net && lost_panel <= regained_panel);
+    if lost_panel > 0 && !panel_ok {
+        out.push((
+            Rejection::EarlierAnswersLost,
+            if panel_net {
+                format!(
+                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced and got {regained_panel} of the others right (net -{})",
+                    lost_panel - regained_panel
+                )
+            } else if cfg.earlier_answers_net {
+                format!(
+                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced, more than the {gained_here} gained in this lesson"
+                )
+            } else {
+                format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced")
+            },
+        ));
+    }
+    out
+}
+
 /// What a candidate is judged against during one epoch.
 struct Judge<'a> {
     cfg: &'a SessionConfig,
@@ -1061,45 +1138,20 @@ impl Judge<'_> {
                 s.heldout_loss, accepted_score.heldout_loss
             ));
         }
-        if let (Some(now), Some(before)) = (s.retention_loss, baseline.retention_loss) {
-            let allowed = match cfg.retention_relative {
-                Some(share) => before * share,
-                None => cfg.retention_loss_tolerance,
-            };
-            if now > before + allowed {
-                rejections.push(Rejection::EarlierLessonsLoss);
-                reasons.push(match cfg.retention_relative {
-                    Some(share) => format!(
-                        "earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {:.0}%",
-                        share * 100.
-                    ),
-                    None => {
-                        format!("earlier lessons' held-out loss {now:.4} exceeds {before:.4} + {allowed}")
-                    }
-                });
-            }
-        }
         let panel_now = correct_set(&panel);
         let lost_panel = base_panel_correct.iter().zip(&panel_now).filter(|(b, n)| **b && !**n).count();
         let regained_panel = base_panel_correct.iter().zip(&panel_now).filter(|(b, n)| !**b && **n).count();
         let now_correct = correct_set(&report);
         let gained_here = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| !**b && **n).count();
-        let panel_ok = (cfg.earlier_answers_net && lost_panel <= gained_here)
-            || (cfg.earlier_panel_net && lost_panel <= regained_panel);
-        if lost_panel > 0 && !panel_ok {
-            rejections.push(Rejection::EarlierAnswersLost);
-            reasons.push(if cfg.earlier_panel_net {
-                format!(
-                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced and got {regained_panel} of the others right (net -{})",
-                    lost_panel - regained_panel
-                )
-            } else if cfg.earlier_answers_net {
-                format!(
-                    "lost {lost_panel} earlier-lesson answer(s) the baseline produced, more than the {gained_here} gained in this lesson"
-                )
-            } else {
-                format!("lost {lost_panel} earlier-lesson answer(s) the baseline produced")
-            });
+        for (r, why) in earlier_lessons_check(
+            cfg,
+            s.retention_loss.zip(baseline.retention_loss),
+            lost_panel,
+            regained_panel,
+            gained_here,
+        ) {
+            rejections.push(r);
+            reasons.push(why);
         }
         if cfg.protect_correct_answers {
             let lost = accepted_correct.iter().zip(&now_correct).filter(|(b, n)| **b && !**n).count();
@@ -1874,4 +1926,48 @@ pub fn teach_rewarded(
         epochs,
         stopped,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The earlier lessons' safeguards: the loss allowance is a setting (0.02 unless changed);
+    /// judging by answers needs the larger check, still rejects a lost net of answers, and
+    /// rejects a loss rise above its cap whatever the answers.
+    #[test]
+    fn earlier_lessons_are_judged_by_the_allowance_or_by_answers() {
+        let rejected = |cfg: &SessionConfig, now: f32, lost: usize, regained: usize| {
+            earlier_lessons_check(cfg, Some((now, 1.12)), lost, regained, 0)
+                .into_iter()
+                .map(|(r, _)| r)
+                .collect::<Vec<_>>()
+        };
+        let usual = SessionConfig::default();
+        assert_eq!(usual.retention_loss_tolerance, 0.02, "the default is unchanged");
+        assert!(!usual.earlier_by_answers);
+        // The case from the owner's model: 1.12 -> 1.19 with the answers kept.
+        assert_eq!(rejected(&usual, 1.19, 0, 0), [Rejection::EarlierLessonsLoss]);
+        assert!(rejected(&usual, 1.13, 0, 0).is_empty());
+        let wider = SessionConfig { retention_loss_tolerance: 0.08, ..usual.clone() };
+        assert!(rejected(&wider, 1.19, 0, 0).is_empty());
+        assert_eq!(rejected(&wider, 1.21, 0, 0), [Rejection::EarlierLessonsLoss]);
+        // Answers are still guarded with the wider allowance: one lost answer rejects (the
+        // usual check allows no loss).
+        assert_eq!(rejected(&wider, 1.15, 1, 3), [Rejection::EarlierAnswersLost]);
+
+        // By answers: without the larger check, nothing changes.
+        let alone = SessionConfig { earlier_by_answers: true, ..usual.clone() };
+        assert_eq!(rejected(&alone, 1.19, 0, 0), [Rejection::EarlierLessonsLoss]);
+        let by_answers =
+            SessionConfig { earlier_by_answers: true, retention_per_lesson: Some(4), ..usual.clone() };
+        assert!(rejected(&by_answers, 1.19, 0, 0).is_empty(), "a small rise with the answers kept");
+        assert!(rejected(&by_answers, 1.30, 4, 5).is_empty(), "answers judged by net change");
+        assert_eq!(rejected(&by_answers, 1.30, 5, 4), [Rejection::EarlierAnswersLost]);
+        assert_eq!(
+            rejected(&by_answers, 1.12 + by_answers.earlier_loss_cap + 0.01, 0, 0),
+            [Rejection::EarlierLessonsLoss],
+            "a substantial regression is rejected whatever the answers"
+        );
+    }
 }

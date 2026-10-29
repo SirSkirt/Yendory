@@ -402,6 +402,7 @@ fn session_cfg(prep: &PreparedCourse, l: &PreparedLesson, opts: &RunOptions, see
         backoff: s.backoff,
         override_first_epoch: s.override_first_epoch,
         probation_epochs: s.probation_epochs.min(10),
+        retention_loss_tolerance: s.earlier_loss_rise.clamp(0., 1.),
         ..SessionConfig::default()
     }
 }

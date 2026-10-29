@@ -11,6 +11,7 @@ pub mod course;
 pub mod curriculum;
 pub mod designer;
 pub mod eval;
+pub mod examples;
 pub mod generate;
 pub mod grading;
 pub mod lessons;

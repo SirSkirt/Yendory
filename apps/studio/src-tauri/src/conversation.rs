@@ -7,7 +7,7 @@ use crate::reading::{corpora, corpus_path, load_info, CorpusInfo};
 use crate::sources::{conversation_sources as dataset_sources, Source};
 use yendory_engine::learn::conversation::{
     converse as practise, parse_dialogue, ConversationCheck, ConversationConfig, ConversationEvent,
-    ConversationSet,
+    ConversationSet, UnderstandingScore,
 };
 use yendory_engine::learn::corpus::{normalize_ascii, split_documents, Category};
 use yendory_engine::learn::listening::ContextScore;
@@ -54,6 +54,9 @@ pub struct ConversationRecord {
     baseline_context: Option<ContextScore>,
     #[serde(default)]
     best_check: Option<ConversationCheck>,
+    /// Understanding tests before practice (the kept checkpoint's are in `best_check`).
+    #[serde(default)]
+    baseline_understanding: Option<UnderstandingScore>,
     /// Read text used for rehearsal and its guard (documents).
     #[serde(default)]
     reading_documents: usize,
@@ -158,6 +161,13 @@ pub struct ConverseOptions {
     /// Experimental: also keep the best balanced checkpoint (saved as a model of its own).
     #[serde(default)]
     keep_balanced: bool,
+    /// Percent of training rows from the built-in example conversations.
+    examples_percent: f32,
+    /// Listening practice also practises the understanding skills.
+    #[serde(default = "yes")]
+    understanding_practice: bool,
+    /// Understanding test pairs per kind at each check (teacher-forced and free-running).
+    understanding_tests: usize,
 }
 
 impl Default for ConverseOptions {
@@ -189,6 +199,9 @@ impl Default for ConverseOptions {
             reading_rise_percent: 100. * d.reading_rise,
             skip_ai_voice: d.skip_ai_voice,
             keep_balanced: d.keep_balanced,
+            examples_percent: 100. * d.examples_share,
+            understanding_practice: d.understanding_practice,
+            understanding_tests: d.understanding_tests,
         }
     }
 }
@@ -249,12 +262,13 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
         || !percent(o.reading_percent, 50.)
         || !percent(o.reading_rise_percent, 100.)
         || !percent(o.competency_gain_percent, 90.)
+        || !percent(o.examples_percent, 50.)
     {
-        return Err("A percentage setting is out of range (earlier lessons up to 80%; review, listening practice and reading up to 50% each)".into());
+        return Err("A percentage setting is out of range (earlier lessons up to 80%; review, listening practice, examples and reading up to 50% each)".into());
     }
-    if o.earlier_percent + o.listening_percent + o.reading_percent >= 90. {
+    if o.earlier_percent + o.listening_percent + o.reading_percent + o.examples_percent >= 90. {
         return Err(
-            "Earlier lessons, listening practice and reading together must leave most rows to conversations"
+            "Earlier lessons, listening practice, examples and reading together must leave most rows to conversations"
                 .into(),
         );
     }
@@ -305,6 +319,9 @@ pub(crate) fn conversation_job(app: &AppHandle, o: &ConverseOptions) -> Res<Conv
         reading_rise: o.reading_rise_percent / 100.,
         skip_ai_voice: o.skip_ai_voice,
         keep_balanced: o.keep_balanced,
+        examples_share: o.examples_percent / 100.,
+        understanding_practice: o.understanding_practice,
+        understanding_tests: o.understanding_tests.min(50),
         ..ConversationConfig::default()
     };
     Ok(ConversationJob { infos, cfg, chats: o.chats })
@@ -459,6 +476,7 @@ pub(crate) fn run_conversation(
         stuck: r.stuck.clone(),
         baseline_context: r.baseline_context.clone(),
         best_check: r.best_check.clone(),
+        baseline_understanding: r.baseline_understanding.clone(),
         reading_documents: reading.len(),
     });
     write_atomic(

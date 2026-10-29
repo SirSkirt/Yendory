@@ -160,6 +160,20 @@ ones, "Compare settings (experiment)" in the Classroom (A/B/C on the open model 
 never trained or judged; `learn::compare`, tested on step 15,000: the model is unchanged, every
 epoch is tested, the test half is never judged) and a best balanced Conversation checkpoint
 (experimental). Not yet run on the owner's model.
+0.7.8: conversation and safeguards (docs/LEARNING.md, "Every turn, following the conversation"
+and "The earlier lessons' loss allowance"). Verified by tests: every one of Nova's turns is
+trained from its own history (one pass equals each reply alone, to 1e-4, on Bicameral and Nova
+Neuro); free-running prompts are Nova's own; the understanding tests are held out from the
+practice by words and wordings, and the original context tests are unchanged; 13 kinds × 3 levels
+× 3 different example conversations; the download filter's reasons; the earlier-lesson allowance
+and judging by answers. Measured: DailyDialog's original copy answers 501 (fixed: final, other
+copies first); kept by the filter from 300 KB of each: DailyDialog 672 of 700, EmpatheticDialogues
+692 of 700, SODA 358 of 400, Persona-Chat 262 of 300, OpenAssistant 533 of 12,947, UltraChat 200k
+269 of 33,800. Not yet measured:
+whether the examples and understanding practice raise the understanding tests on the owner's
+model (needs a conversation run on a GPU); LMSYS-Chat-1M downloaded with a real token (the
+gated rows could not be fetched here; its layout and flags are tested on rows in its published
+format).
 Not checked: the Windows installer and Android APK on real devices (CI builds them).
 
 ## Not verified

@@ -112,6 +112,8 @@ fn study_mode_teaching_keeps_grading_without_memory() {
         guard_before_growth: false,
         retention_per_lesson: None,
         earlier_panel_net: false,
+        earlier_by_answers: false,
+        earlier_loss_cap: 0.25,
     };
     let mut events = Vec::new();
     let stop = AtomicBool::new(false);

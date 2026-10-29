@@ -779,6 +779,27 @@ after every epoch. Results: docs/STATUS.md.
   context tests of `learn::listening` are asked too. The model is never changed; the results go to
   the page and the model's history.
 
+### The earlier lessons' loss allowance, and judging them by answers (0.7.8)
+
+On the owner's model, comparing settings showed epochs rejected only because the earlier lessons'
+held-out loss rose a little past its allowance (1.16–1.19 against 1.12 + 0.02), while the branch
+training continued from kept improving on the new course (22 → 28 of 51 on the test half) with
+the earlier lessons' answers level (71–73 of 150). The accepted model stayed at 22.
+
+- **The allowance is a setting** (`SessionConfig::retention_loss_tolerance`; Classroom: "Earlier
+  lessons' held-out loss may rise by", Courses: the same). **The default stays 0.02**; 0.08
+  matches what the new lessons' own held-out loss may rise. The answer checks apply either way.
+- **Judging the earlier lessons by their answers** (experimental, `earlier_by_answers`, off;
+  Classroom checkbox). With the larger earlier-lesson check (`retention_per_lesson`), the earlier
+  lessons are judged by their held-out answers, by net change, and their loss may rise up to
+  `earlier_loss_cap` (0.25) instead of the allowance; a larger rise is still rejected, as is a net
+  loss of answers. Without the larger check it changes nothing (a dozen questions are too few to
+  judge by). Tested (`earlier_lessons_are_judged_by_the_allowance_or_by_answers`).
+- **Compare settings** has two more variants: D (the allowance at 0.08) and E (the larger check,
+  judged by answers); choose which to run. After every epoch the context tests are asked of the
+  accepted and the working model too (`EpochTest::accepted_context`, `working_context`), next to
+  the new-course and earlier-lesson tests and losses.
+
 ## Course Builder and Lesson Planner (`learn::curriculum`, `learn::program`)
 
 Courses with graded lessons, a final exam and automatic remediation, run one after another by a
@@ -1163,13 +1184,13 @@ from what it has read, been taught and said itself.
   assistant-style UltraChat (MIT) and OpenAssistant (Apache 2.0) for more material: a person and
   a helper, kept as a conversation between two named people (`sources::any_dialogue` reads every
   common layout: utterance lists, role/content messages, `<|im_start|>` or `### Human:` text;
-  speakers labelled user/assistant get names; system prompts are dropped, and a conversation is
-  cut before code or a turn longer than 1,200 characters; only English conversations are kept from
-  downloads, `sources::english_dialogue`, since OpenAssistant mixes languages). Several copies of
-  a dataset are tried in turn (`Fetch::HfFirst`), each with its own config and split names looked
-  up when the expected ones are refused. **Your own conversations** (§ 4: "Your own conversations"): a file
+  speakers labelled user/assistant get names; system prompts are dropped). Since 0.7.8 every
+  download goes through a quality filter (below) and LMSYS-Chat-1M can be added (gated). Several
+  copies of a dataset are tried in turn (`Fetch::HfFirst`), each with its own config and split
+  names looked up when the expected ones are refused. **Your own conversations** (§ 4: "Your own conversations"): a file
   (.txt as `Name: text` lines with blank lines between conversations, or .json / .jsonl in any of
-  those layouts; `sources::conversations_from_file`) or text written or pasted on the page,
+  those layouts; `sources::conversations_from_file`, cut before code or a turn over 1,200
+  characters; not filtered: they are yours) or text written or pasted on the page,
   stored as a conversation dataset; one conversation is enough (held-out checks then come from
   the other datasets). Conversation corpora from Reading (`U:` / `N:` turns) can be practised
   too. A dialogue with other than two speakers is not used, and one where a speaker says it is
@@ -1266,6 +1287,64 @@ same measures either way.
   reply again), echoing the other person, on topic (a topic word of the last two turns, or a
   short reply), asking something, calling itself another name ("I am Ben"), and an assistant's
   voice. They describe the replies; none is required of a checkpoint, and none is trained on.
+
+### Every turn, following the conversation, examples and the dataset filter (0.7.8)
+
+- **Every one of Nova's turns is trained**, each from its own history. A practice window is one
+  row in which all of Nova's replies carry loss weight (teacher forcing). The model is causal, so
+  the loss on reply *n* is exactly the loss of a row that ends with reply *n*: one pass trains
+  every reply from the conversation before it, as if each were trained on its own. Tested on a
+  Bicameral and a Nova Neuro model (`every_nova_turn_is_trained_with_its_own_history`): the
+  trained text is the three replies of a six-turn conversation; the text before reply *n* is
+  exactly the prompt Nova answers at that point (`U:` / `N:` boundaries included); and the loss
+  of the whole row equals the mean of the three single-reply rows to 1e-4. A conversation longer
+  than the context is cut at turn boundaries; its later replies are trained in windows that start
+  further in. The other speaker's lines and the `N: ` before each reply are context only.
+- **Teacher-forced and free-running.** The held-out loss is teacher-forced (the real
+  conversation before each reply). The **understanding tests** are asked both ways at every
+  check (`ConversationCheck::understanding`, `UnderstandingScore`): teacher-forced (Nova's
+  earlier turns as the test's script has them) and free-running (each of her turns is what she
+  wrote herself, in order, so an early mistake stays in the conversation; the other speaker's
+  turns and the final question are as written).
+- **Understanding skills** (`learn::listening`, `Skill::UNDERSTANDING`; practice on by default,
+  `understanding_practice`; `understanding_tests` pairs per skill, 6): greeted again (greet back,
+  never "I do not know"), the same question in other words (her name, how she is, a fact told
+  earlier), who said what (what the user likes and what Nova said she likes), the latest message
+  (the same conversation with a different last question), topic changes (what was said before
+  and after "Anyway, ..."), misunderstandings (Nova misheard and was corrected) and repeated
+  questions. The tests use other names, foods, relatives and other **wordings** than the
+  practice ("May I know your name?", "How are things?" are never practised), are never trained
+  on, and are graded by meaning (an expected word, not a denied one, not the other version's).
+  The original seven context tests are unchanged (a test pins them), so earlier context scores
+  still compare.
+- **Example conversations** (`learn::examples`, `examples_share`, 10% of rows): written by hand,
+  13 kinds (greetings and greeting again, how are you, names, remembering what someone said, who
+  said what, follow-up questions, the same question in other words, the latest message, changing
+  the topic, misunderstandings, not knowing, plans, goodbyes), **three different conversations of
+  each kind at each level** (short exchanges: 2–4 turns; a few turns: 5–8; whole conversations:
+  10–18), 117 in all. A stage draws from its own level and the ones before. Tests check the
+  counts and lengths, that the speakers take turns, that no two of a kind and level share more
+  than a third of their words, and that none uses a word or wording of the tests.
+- **Dataset filter** (Studio, `filter.rs`; every downloaded conversation dataset). A conversation
+  is kept or counted under the first reason it is left out: flagged by the dataset itself
+  (LMSYS-Chat-1M: its language tag, its moderation flags, names removed for privacy), malformed,
+  broken turn order (the same speaker twice in a row), too long (a turn over 600 characters, or
+  code), not English, unsafe or inappropriate words, low quality (links, placeholders, symbols,
+  shouting, a longer turn said back word for word, too few words), assistant style (an
+  assistant's phrases, lists, or one speaker answering at length every time), holding one of
+  Yendory's tests (its fact and its question), and duplicates. The counts are shown while it
+  downloads and kept with the dataset (`CorpusInfo::filter`); the size chosen is what is kept.
+  Measured on 2026-10-29 through Studio's own download code (300 KB kept of each): DailyDialog
+  672 of 700 read, EmpatheticDialogues 692 of 700, SODA 358 of 400 (20 with broken turn order),
+  Synthetic-Persona-Chat 262 of 300, OpenAssistant 533 of 12,947 (most are long answers, other
+  languages or a single turn), UltraChat 200k 269 of 33,800 (its answers are long and
+  essay-like).
+- **DailyDialog** (checked 2026-10-29): the original copy answers **501** (the dataset viewer does
+  not run its loading script), which Studio treated as a busy server and retried for a minute;
+  501 is now final, and the two copies that serve rows are tried first.
+- **LMSYS-Chat-1M** is gated: accept its licence on its Hugging Face page while signed in, then
+  give Studio an access token (§ 4; kept in the app's settings on this device, sent only to
+  huggingface.co, never shown again). Without one, Studio says why the download is refused.
 
 **In a plan.** The Planner (§ 7) runs Reading, courses and Conversation practice in one plan,
 in order (for example: read 160M tokens, teach 200 lessons, then practise conversation). A

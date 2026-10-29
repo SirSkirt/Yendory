@@ -52,6 +52,12 @@ pub struct EpochTest {
     pub working: TestScore,
     pub accepted_step: u64,
     pub working_step: u64,
+    /// Context-test pairs passed and asked, of the accepted model and of the working model
+    /// (when the comparison asks context tests).
+    #[serde(default)]
+    pub accepted_context: Option<(usize, usize)>,
+    #[serde(default)]
+    pub working_context: Option<(usize, usize)>,
 }
 
 /// What one variant did.
@@ -221,14 +227,19 @@ pub fn compare(
         let hook = {
             let (tested, nt, et) = (tested.clone(), new_test.clone(), earlier_test.clone());
             EpochHook(Arc::new(move |epoch: u32, accepted: &Bicameral, working: &Bicameral| {
+                let same = working.step == accepted.step;
+                let passed = |m: &Bicameral| context(m, context_per_skill).map(|c| (c.passed, c.total));
                 let r = test(accepted, &nt, &et).and_then(|a| {
-                    let w = if working.step == accepted.step { a.clone() } else { test(working, &nt, &et)? };
+                    let w = if same { a.clone() } else { test(working, &nt, &et)? };
+                    let accepted_context = passed(accepted);
                     Ok(EpochTest {
                         epoch,
                         accepted: a,
                         working: w,
                         accepted_step: accepted.step,
                         working_step: working.step,
+                        working_context: if same { accepted_context } else { passed(working) },
+                        accepted_context,
                     })
                 });
                 tested.lock().unwrap().push(r);

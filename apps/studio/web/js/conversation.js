@@ -40,7 +40,8 @@
         onchange: e => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); note(); } });
       body.append(el("tr", {},
         el("td", {}, box),
-        el("td", {}, c.name, c.attribution ? el("div", { class: "note" }, "Credit: " + c.attribution) : ""),
+        el("td", {}, c.name, c.attribution ? el("div", { class: "note" }, "Credit: " + c.attribution) : "",
+          c.filter ? el("div", { class: "note" }, "Quality filter: " + filterText(c.filter)) : ""),
         el("td", { class: "num" }, mb(c.bytes)),
         el("td", { class: "num" }, fmt(c.documents)),
         el("td", {}, c.license)));
@@ -49,6 +50,15 @@
       ? (material.chatReplies ? `(${fmt(material.chatReplies)} marked so far)` : "(none marked yet: mark replies with ✓ Consistent in a chat)")
       : "";
     note();
+  }
+
+  // The download filter's counts: kept of read, and why the rest was left out.
+  function filterText(r) {
+    const why = [[r.assistantStyle, "assistant-style"], [r.notEnglish, "not English"], [r.flagged, "flagged by the dataset"],
+      [r.tooLong, "too long or code"], [r.lowQuality, "low quality"], [r.unsafeContent, "unsafe or inappropriate"],
+      [r.turnOrder, "broken turn order"], [r.malformed, "malformed"], [r.duplicates, "duplicates"], [r.overlapsTests, "overlapping Yendory's tests"]]
+      .filter(([n]) => n > 0).map(([n, w]) => `${fmt(n)} ${w}`);
+    return `kept ${fmt(r.kept)} of ${fmt(r.read)} conversations` + (why.length ? ` (left out: ${why.join(", ")})` : "");
   }
 
   function note() {
@@ -82,13 +92,14 @@
     const runs = active?.conversation || [];
     if (!runs.length) { $("convHistory").replaceChildren(el("p", { class: "empty" }, "None yet.")); return; }
     $("convHistory").replaceChildren(el("table", { class: "ledger compact" },
-      el("thead", {}, el("tr", {}, el("th", {}, "When"), el("th", {}, "Conversations"), el("th", { class: "num" }, "Tokens"), el("th", { class: "num" }, "Held-out loss"), el("th", { class: "num" }, "Context tests"), el("th", {}, "Result"))),
+      el("thead", {}, el("tr", {}, el("th", {}, "When"), el("th", {}, "Conversations"), el("th", { class: "num" }, "Tokens"), el("th", { class: "num" }, "Held-out loss"), el("th", { class: "num" }, "Context tests"), el("th", { class: "num", title: "Understanding-test pairs passed, teacher-forced / free-running: before → the kept checkpoint" }, "Understanding"), el("th", {}, "Result"))),
       el("tbody", {}, ...runs.slice().reverse().map(r => el("tr", {},
         el("td", {}, when(r.time)),
         el("td", {}, r.sources.map(s => s.name).join(" + ") + (r.chatReplies ? ` + ${fmt(r.chatReplies)} chat replies` : "")),
         el("td", { class: "num" }, fmt(r.tokens)),
         el("td", { class: "num" }, `${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)}`),
         el("td", { class: "num" }, r.baselineContext ? `${r.baselineContext.passed}/${r.baselineContext.total} → ${r.bestCheck?.context ? r.bestCheck.context.passed : "—"}` : "—"),
+        el("td", { class: "num" }, r.baselineUnderstanding ? `${understandingText(r.baselineUnderstanding)} → ${r.bestCheck?.understanding ? understandingText(r.bestCheck.understanding) : "—"}` : "—"),
         el("td", { class: r.accepted ? "ok" : "" }, r.accepted ? "kept the best checkpoint" : r.stopped ? "stopped, unchanged" : "no checkpoint was better: unchanged",
           r.stage != null ? el("div", { class: "note" }, `reached: ${STAGE[r.stage] || "—"}`) : "",
           r.stuck ? el("div", { class: "warn note" }, r.stuck) : ""))))));
@@ -114,11 +125,11 @@
       ...samples.map(s => transcript(s.prompt, s.reply,
         el("div", { class: "conv-turn original" }, el("span", { class: "conv-who" }, "Real reply"), s.original))));
   }
-  function pairsView(c) {
+  function pairsView(c, title) {
     if (!c?.pairs?.length) return "";
     const mark = ok => el("span", { class: ok ? "ok" : "bad" }, ok ? " ✓" : " ✗");
     return el("details", { class: "conv-samples" },
-      el("summary", {}, "Context tests: one pair of each kind, in full"),
+      el("summary", {}, title || "Context tests: one pair of each kind, in full"),
       ...c.pairs.map(p => el("div", { class: "conv-pair" },
         el("div", { class: "conv-pair-skill" }, SKILL[p.skill] || p.skill, p.a_right && p.b_right ? el("span", { class: "ok" }, " · passed") : el("span", { class: "warn" }, " · not passed")),
         el("div", { class: "conv-pair-sides" },
@@ -126,7 +137,17 @@
           transcript(p.b, p.b_reply, mark(p.b_right))))));
   }
   const STAGE = ["short exchanges", "a few turns", "whole conversations"];
-  const SKILL = { names: "names", locations: "locations", changing_facts: "changing facts", corrections: "corrections", references: "references", follow_ups: "follow-ups", uncertainty: "uncertainty" };
+  const SKILL = { names: "names", locations: "locations", changing_facts: "changing facts", corrections: "corrections", references: "references", follow_ups: "follow-ups", uncertainty: "uncertainty",
+    repeated_greetings: "greeted again", paraphrases: "same question, other words", who_said_what: "who said what", latest_message: "the latest message",
+    topic_changes: "topic changes", misunderstandings: "misunderstandings", repeated_questions: "asked again" };
+  // Understanding tests: teacher-forced · free-running pairs passed.
+  const understandingText = u => `${u.teacher_forced.passed} · ${u.free_running.passed} /${u.teacher_forced.total}`;
+  function understandingCell(u) {
+    if (!u) return "—";
+    const per = (c, k) => { const s = c.skills.find(x => x[0] === k); return s ? `${s[1]}/${s[2]}` : "—"; };
+    const title = u.teacher_forced.skills.map(([k]) => `${SKILL[k] || k}: ${per(u.teacher_forced, k)} teacher-forced, ${per(u.free_running, k)} free-running`).join("\n");
+    return el("span", { title }, `${u.teacher_forced.passed}/${u.teacher_forced.total}`, el("div", { class: "note" }, `free ${u.free_running.passed}/${u.free_running.total}`));
+  }
   const pctOf = (a, b) => (b ? `${Math.round(100 * a / b)}%` : "—");
   function contextCell(c) {
     if (!c) return "—";
@@ -147,6 +168,8 @@
       $("convLine").textContent = `Before: held-out loss ${e.baseline_loss.toFixed(4)} (${e.baseline_stage_losses.map(l => l.toFixed(3)).join(" · ")})` +
         (e.baseline_listening != null ? ` · listening ${e.baseline_listening.toFixed(3)}` : "") +
         (e.baseline_context ? ` · context tests ${e.baseline_context.passed}/${e.baseline_context.total}` : "") +
+        (e.baseline_understanding ? ` · understanding ${e.baseline_understanding.teacher_forced.passed}/${e.baseline_understanding.teacher_forced.total} (free-running ${e.baseline_understanding.free_running.passed})` : "") +
+        (e.examples ? ` · ${fmt(e.examples)} example conversations` : "") +
         (e.classroom_total ? ` · Classroom ${fmt(e.baseline_classroom)}/${fmt(e.classroom_total)}` : "") +
         (e.baseline_reading != null ? ` · reading ${e.baseline_reading.toFixed(3)}` : "") +
         (e.left_out_assistant ? ` · ${fmt(e.left_out_assistant)} conversation(s) in an assistant's voice left out` : "");
@@ -156,6 +179,7 @@
         el("td", { class: "num" }, e.baseline_loss.toFixed(4), el("div", { class: "note nowrap", title: "short exchanges · a few turns · whole conversations" }, e.baseline_stage_losses.map(l => l.toFixed(2)).join(" · "))),
         el("td", { class: "num" }, e.baseline_listening != null ? e.baseline_listening.toFixed(3) : "—"),
         el("td", { class: "num" }, contextCell(e.baseline_context)),
+        el("td", { class: "num" }, understandingCell(e.baseline_understanding)),
         el("td", { class: "num" }, e.classroom_total ? `${fmt(e.baseline_classroom)} / ${fmt(e.classroom_total)}` : "—"),
         el("td", { class: "num" }, e.baseline_reading != null ? e.baseline_reading.toFixed(3) : "—"),
         el("td", {}, "starting point"), el("td", {}, checksView(e.baseline_reply_checks))));
@@ -171,16 +195,17 @@
         el("td", { class: "num" }, e.held_out_loss.toFixed(4), el("div", { class: "note nowrap", title: "short exchanges · a few turns · whole conversations" }, e.stage_losses.map(l => l.toFixed(2)).join(" · "))),
         el("td", { class: "num" }, e.listening != null ? e.listening.toFixed(3) : "—"),
         el("td", { class: "num" }, contextCell(e.context)),
+        el("td", { class: "num" }, understandingCell(e.understanding)),
         el("td", { class: "num" }, e.classroom_total ? `${fmt(e.classroom_correct)} / ${fmt(e.classroom_total)}` : "—",
           e.classroom_total ? el("div", { class: "note" }, `−${e.classroom_lost} +${e.classroom_gained}`) : ""),
         el("td", { class: "num" }, e.reading_loss != null ? e.reading_loss.toFixed(3) : "—"),
         el("td", { class: e.accepted ? "ok" : "" }, e.accepted ? "kept" : `not kept: ${e.reason}`),
-        el("td", {}, checksView(e.reply_checks), sampleView(e.samples), pairsView(e.context))));
+        el("td", {}, checksView(e.reply_checks), sampleView(e.samples), pairsView(e.context), pairsView(e.understanding?.teacher_forced, "Understanding tests (teacher-forced): one pair of each kind, in full"))));
     } else if (e.type === "stage") {
       log("INFO", `Conversation: now ${e.name}. ${e.reason}`);
-      $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 9, class: e.mastered ? "ok" : "warn" }, `→ ${e.name}: ${e.reason}`)));
+      $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 10, class: e.mastered ? "ok" : "warn" }, `→ ${e.name}: ${e.reason}`)));
     } else if (e.type === "learning_rate_lowered") {
-      $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 9, class: "warn" }, `${e.reason}: learning rate now ×${e.scale}`)));
+      $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 10, class: "warn" }, `${e.reason}: learning rate now ×${e.scale}`)));
     }
   }
   function onFinished(f) {
@@ -228,6 +253,9 @@
       readingRisePercent: n("convReadingRise"),
       skipAiVoice: $("convSkipAi").checked,
       keepBalanced: $("convBalanced").checked,
+      examplesPercent: n("convExamples"),
+      understandingPractice: $("convUnderstanding").checked,
+      understandingTests: n("convUnderstandingTests"),
     };
   }
   window.conversationOptions = async () => {
@@ -296,11 +324,24 @@
       $("convCancelDownload").hidden = true;
       if (e.error) { $("convDownloadLine").textContent = e.error; return; }
       $("convDownloadBar").style.width = "100%";
-      $("convDownloadLine").textContent = `Saved ${e.corpus.name}: ${mb(e.corpus.bytes)}, ${fmt(e.corpus.documents)} conversations.`;
+      $("convDownloadLine").textContent = `Saved ${e.corpus.name}: ${mb(e.corpus.bytes)}, ${fmt(e.corpus.documents)} conversations.` +
+        (e.corpus.filter ? ` Quality filter: ${filterText(e.corpus.filter)}.` : "");
       chosen.add(e.corpus.id);
       refresh().catch(err => log("ERROR", err));
     });
     invoke("conversation_sources").then(s => { sources = s; renderSources(); }).catch(e => log("ERROR", e));
+    // The Hugging Face token for gated datasets (only whether one is set comes back).
+    const tokenNote = set => { $("hfTokenNote").textContent = set ? "A token is set." : "No token set (needed only for gated datasets)."; };
+    invoke("hf_token_set").then(tokenNote).catch(e => log("ERROR", e));
+    $("hfTokenSave").addEventListener("click", safe(async () => {
+      const token = $("hfToken").value.trim();
+      if (!token) throw new Error("Paste your Hugging Face access token first");
+      tokenNote(await invoke("set_hf_token", { token }));
+      $("hfToken").value = "";
+    }, "Save token"));
+    $("hfTokenClear").addEventListener("click", safe(async () => {
+      tokenNote(await invoke("set_hf_token", { token: "" }));
+    }, "Remove token"));
     // Your own conversations: a file, or text written or pasted here.
     const added = c => {
       chosen.add(c.id);

@@ -1,6 +1,7 @@
 //! The Classroom's "Compare settings" experiment (learn::compare) from the command line, on a
 //! Studio model and its saved lessons: A the owner's Classroom settings, B + probation (3
-//! epochs), C + probation and the larger earlier-lesson check. To keep it affordable on a CPU,
+//! epochs), C + probation and the larger earlier-lesson check, D the earlier lessons' held-out loss allowed
+//! to rise 0.08 instead of 0.02, E the larger check judged by answers (loss capped at 0.25). To keep it affordable on a CPU,
 //! the earlier lessons are a sample of `earlier lessons` of the saved lessons, spread evenly
 //! over their names.
 //!
@@ -76,6 +77,19 @@ fn main() {
                 ..base.clone()
             },
         },
+        Variant {
+            name: "D: earlier-lesson loss may rise 0.08".into(),
+            cfg: SessionConfig { retention_loss_tolerance: 0.08, ..base.clone() },
+        },
+        Variant {
+            name: "E: larger earlier-lesson check, judged by answers".into(),
+            cfg: SessionConfig {
+                retention_per_lesson: Some(4),
+                earlier_panel_net: true,
+                earlier_by_answers: true,
+                ..base.clone()
+            },
+        },
     ];
     let variants: Vec<Variant> =
         all.into_iter().filter(|v| which.contains(v.name.chars().next().unwrap())).collect();
@@ -91,10 +105,11 @@ fn main() {
             ),
             CompareEvent::VariantStarted { name, .. } => println!("[{m} min] {name}"),
             CompareEvent::Tested { test: t, .. } => println!(
-                "[{m} min]   epoch {}: accepted new {}/{} earlier {}/{} | working new {}/{} earlier {}/{} loss {:.3}/{:.3}",
+                "[{m} min]   epoch {}: accepted new {}/{} earlier {}/{} context {:?} | working new {}/{} earlier {}/{} context {:?} loss {:.3}/{:.3}",
                 t.epoch, t.accepted.new_right, t.accepted.new_total, t.accepted.earlier_right,
-                t.accepted.earlier_total, t.working.new_right, t.working.new_total, t.working.earlier_right,
-                t.working.earlier_total, t.working.new_loss, t.working.earlier_loss
+                t.accepted.earlier_total, t.accepted_context, t.working.new_right, t.working.new_total,
+                t.working.earlier_right, t.working.earlier_total, t.working_context, t.working.new_loss,
+                t.working.earlier_loss
             ),
             CompareEvent::Session { event: Event::Epoch(rec), .. } => {
                 for c in &rec.candidates {

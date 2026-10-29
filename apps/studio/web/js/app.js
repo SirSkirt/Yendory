@@ -544,6 +544,8 @@ function teachOptions() {
     wordsFromNewLessons: $("optWordsNew").checked,
     guardBeforeGrowth: $("optGuardGrowth").checked,
     earlierEveryLesson: $("optEarlierEvery").checked,
+    earlierLossRise: Math.max(0, Math.min(1, Number($("optEarlierRise").value) || 0.02)),
+    earlierByAnswers: $("optEarlierAnswers").checked,
     continueRun: $("optContinue").checked,
   };
 }
@@ -564,8 +566,12 @@ $("teach").addEventListener("click", safe(async () => {
 // Comparing settings (an experiment on the open model; it is not changed).
 const compareRows = [];
 function testCell(t) { return `${t.new_right}/${t.new_total}`; }
+// Context-test pairs passed after an epoch, when the comparison asked them.
+const ctxText = c => c ? `, context ${c[0]}/${c[1]}` : "";
+let compareNames = [];
 function onCompareEvent(e) {
   if (e.type === "started") {
+    compareNames = e.variants.map(v => v.split(":")[0]);
     compareRows.length = 0;
     $("compareTable").tBodies[0].replaceChildren(el("tr", {}, el("td", {}, "Start (before teaching)"), el("td", {}, ""), el("td", {}, ""),
       el("td", { class: "num" }, testCell(e.start)), el("td", { class: "num" }, `${e.start.earlier_right}/${e.start.earlier_total}`), el("td", {}, ""),
@@ -578,11 +584,11 @@ function onCompareEvent(e) {
     $("compareTrajectory").append(el("h4", {}, e.name));
   } else if (e.type === "session" && e.event.type === "batch") {
     const s = e.event;
-    $("compareLine").textContent = `${["A", "B", "C"][e.index] ?? e.index} — epoch ${s.epoch} · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)}`;
+    $("compareLine").textContent = `${compareNames[e.index] ?? e.index} — epoch ${s.epoch} · batch ${s.batch}/${s.batches} · loss ${s.loss.toFixed(4)}`;
   } else if (e.type === "tested") {
     const t = e.test;
     $("compareTrajectory").append(el("div", { class: "note mono" },
-      `epoch ${t.epoch}: accepted ${testCell(t.accepted)} new, ${t.accepted.earlier_right}/${t.accepted.earlier_total} earlier · continues from ${testCell(t.working)} new, ${t.working.earlier_right}/${t.working.earlier_total} earlier (loss ${t.working.new_loss.toFixed(3)} / ${t.working.earlier_loss.toFixed(3)})`));
+      `epoch ${t.epoch}: accepted ${testCell(t.accepted)} new, ${t.accepted.earlier_right}/${t.accepted.earlier_total} earlier${ctxText(t.accepted_context)} · continues from ${testCell(t.working)} new, ${t.working.earlier_right}/${t.working.earlier_total} earlier${ctxText(t.working_context)} (loss ${t.working.new_loss.toFixed(3)} / ${t.working.earlier_loss.toFixed(3)})`));
   } else if (e.type === "variant_finished") {
     const r = e.result;
     const g = r.growth;
@@ -603,12 +609,14 @@ function onCompareEvent(e) {
 $("compareSettings").addEventListener("click", safe(async () => {
   if (!active) throw new Error("Open or create a model first");
   const options = teachOptions();
+  const variants = ["A", "B", "C", "D", "E"].filter(v => $(`cmp${v}`).checked);
+  if (!variants.length) throw new Error("Tick at least one set of settings to compare");
   $("compareEntry").hidden = false;
   $("compareTable").tBodies[0].replaceChildren();
   $("compareLine").textContent = "Starting…";
-  await invoke("compare_settings", { options });
+  await invoke("compare_settings", { options, variants });
   setTeaching(true);
-  say("Comparing settings: A, B and C are taught one after another.");
+  say(`Comparing settings: ${variants.join(", ")} are taught one after another.`);
 }, "Compare settings"));
 $("optEducation").addEventListener("change", () => {
   const f = stageFoci($("optEducation").value, true).join(", ");

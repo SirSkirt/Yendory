@@ -24,6 +24,7 @@ mod chat;
 mod conversation;
 mod courses;
 mod designer;
+mod filter;
 mod growth;
 mod memory;
 mod neuro;
@@ -1393,6 +1394,14 @@ struct TeachOptions {
     /// (`retention_per_lesson`, `earlier_panel_net`).
     #[serde(default)]
     earlier_every_lesson: bool,
+    /// How much the earlier lessons' held-out loss may rise in a session
+    /// (`SessionConfig::retention_loss_tolerance`; 0.02 unless changed).
+    #[serde(default = "default_earlier_loss_rise")]
+    earlier_loss_rise: f32,
+    /// Experimental: with the larger earlier-lesson check, judge the earlier lessons by their
+    /// answers; their loss only by the 0.25 cap (`SessionConfig::earlier_by_answers`).
+    #[serde(default)]
+    earlier_by_answers: bool,
     /// Continue the interrupted run a restored checkpoint came from (its epochs, learning rate
     /// and schedule), when there is one.
     #[serde(default = "yes")]
@@ -1491,6 +1500,9 @@ fn default_flat_epochs() -> u32 {
 fn default_pass_percent() -> f32 {
     50.
 }
+fn default_earlier_loss_rise() -> f32 {
+    0.02
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1503,6 +1515,9 @@ struct TeachFinished {
 
 /// The Classroom's session settings from the page's options (checkpoints aside).
 fn teach_config(options: &TeachOptions, meta: &Meta) -> Res<SessionConfig> {
+    if !(0. ..=1.).contains(&options.earlier_loss_rise) {
+        return Err("The earlier lessons' held-out loss rise allowed must be 0 to 1".into());
+    }
     Ok(SessionConfig {
         epochs: options.epochs,
         batch_size: options.batch_size,
@@ -1529,6 +1544,8 @@ fn teach_config(options: &TeachOptions, meta: &Meta) -> Res<SessionConfig> {
         guard_before_growth: options.guard_before_growth,
         retention_per_lesson: options.earlier_every_lesson.then_some(4),
         earlier_panel_net: options.earlier_every_lesson,
+        retention_loss_tolerance: options.earlier_loss_rise,
+        earlier_by_answers: options.earlier_by_answers,
         ..SessionConfig::default()
     })
 }
@@ -1702,7 +1719,12 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
 /// of every lesson's held-out questions are kept back to test each result. The model is never
 /// changed; results go to the page and the model's history.
 #[tauri::command]
-fn compare_settings(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()> {
+fn compare_settings(
+    app: AppHandle,
+    studio: State<Studio>,
+    options: TeachOptions,
+    variants: Option<Vec<String>>,
+) -> Res<()> {
     if !(1..=50).contains(&options.epochs)
         || !(1..=128).contains(&options.batch_size)
         || !(options.learning_rate > 0. && options.learning_rate <= 0.01)
@@ -1727,7 +1749,7 @@ fn compare_settings(app: AppHandle, studio: State<Studio>, options: TeachOptions
     // One seed for all three, so they differ only in the settings compared.
     let base =
         SessionConfig { probation_epochs: 0, override_first_epoch: false, ..teach_config(&options, &meta)? };
-    let variants = vec![
+    let all = vec![
         Variant { name: "A: your settings".into(), cfg: base.clone() },
         Variant {
             name: "B: + probation (3 epochs)".into(),
@@ -1742,7 +1764,26 @@ fn compare_settings(app: AppHandle, studio: State<Studio>, options: TeachOptions
                 ..base.clone()
             },
         },
+        Variant {
+            name: "D: earlier lessons' loss may rise 0.08".into(),
+            cfg: SessionConfig { retention_loss_tolerance: 0.08, ..base.clone() },
+        },
+        Variant {
+            name: "E: larger earlier-lesson check, judged by answers".into(),
+            cfg: SessionConfig {
+                retention_per_lesson: Some(4),
+                earlier_panel_net: true,
+                earlier_by_answers: true,
+                ..base.clone()
+            },
+        },
     ];
+    // Which to run (by letter); all when none are chosen.
+    let chosen: Vec<String> = variants.unwrap_or_default();
+    let variants: Vec<Variant> = all
+        .into_iter()
+        .filter(|v| chosen.is_empty() || chosen.iter().any(|c| v.name.starts_with(&format!("{c}:"))))
+        .collect();
     let stop = studio.stop.clone();
     append_history(
         &app,
@@ -1966,6 +2007,8 @@ pub fn run() {
         .setup(|app| {
             // The saved training memory settings, before any training starts.
             memory::apply_stored(app.handle());
+            // A Hugging Face token given earlier (for gated datasets).
+            reading::load_hf_token(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2032,6 +2075,8 @@ pub fn run() {
             reading::import_conversations,
             reading::save_conversations,
             reading::download_corpus,
+            reading::hf_token_set,
+            reading::set_hf_token,
             reading::cancel_download,
             reading::read_corpus,
             training_device,
