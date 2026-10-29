@@ -368,8 +368,9 @@
     <p class="note">Every conversation is kept as two named people (speakers without names get names), which lets Nova's speaker take Nova's name. Conversation corpora downloaded on § 2 Reading can be practised too (without names).</p>
     <div id="convSources"></div>
     <div class="settings" id="hfTokenBox">
-      <label>Hugging Face access token, for gated datasets such as LMSYS-Chat-1M (kept on this device, sent only to huggingface.co) <input type="password" id="hfToken" autocomplete="off" placeholder="hf_…"></label>
-      <div class="actions wide"><button type="button" id="hfTokenSave">Save token</button> <button type="button" id="hfTokenClear">Remove token</button> <span class="note" id="hfTokenNote"></span></div>
+      <label>Hugging Face account: an access token, for gated datasets such as LMSYS-Chat-1M (a <b>read</b> token is enough: Hugging Face → Settings → Access Tokens → New token → Read). It is kept in your system's credential store and sent only to huggingface.co. <input type="password" id="hfToken" autocomplete="off" placeholder="hf_…"></label>
+      <div class="actions wide"><button type="button" id="hfTokenSave">Save token</button> <button type="button" id="hfTokenCheck" class="quiet">Check</button> <button type="button" id="hfTokenClear">Disconnect</button></div>
+      <p class="note" id="hfTokenNote"></p>
     </div>
     <div class="entry" id="convDownload" hidden>
       <h4 id="convDownloadTitle">Downloading</h4>

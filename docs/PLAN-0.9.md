@@ -82,11 +82,14 @@ asked is there.
   requests, progress shows rows read and what the filter keeps, and "Finish now" keeps what was
   downloaded. Still to do in stage 4: the queue saved across restarts, pause / retry / reorder.
 
+- **0.8.4, stage 3 (Hugging Face)**: the token in the system's credential store, moved out of the
+  settings file and scrubbed from its copies; account check, disconnect, a clear message for gated
+  datasets not yet approved (docs/HUGGINGFACE.md). The 0.8.2 build was the first signed one: from
+  it on, Studio updates itself.
+
 ## Blockers and limits
 
-- **Updater secret**: the builds did not receive `TAURI_SIGNING_PRIVATE_KEY`. It must be a
-  *repository* secret (Settings → Secrets and variables → Actions → **Repository secrets**, not an
-  environment secret or a variable), named exactly `TAURI_SIGNING_PRIVATE_KEY`.
+- **Updater secret**: fixed; builds are signed since 0.8.2.
 - **End-to-end tests on Windows** (installing over a release, force-killing Studio, rebooting)
   cannot be run from the development container; they are simulated in tests and need a check on
   the owner's PC.

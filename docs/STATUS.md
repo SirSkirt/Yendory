@@ -215,6 +215,15 @@ conversation dataset still uses the full filter. Tests: each reason applies only
 flagged conversations only with that filter off, the tests always left out, the size cap; network
 check: UltraChat now stores all 51 usable conversations of a 300 KB sample (the full filter would
 pass none).
+0.8.4: the Hugging Face token (docs/HUGGINGFACE.md) is kept in the system's credential store
+(Windows Credential Manager, the Secret Service, the Keychain), or in a file only the user can
+read where there is none, never in the settings file; an old token is moved at start-up and
+scrubbed from the settings file and every copy of it; the page shows the connected account, the
+token's name and kind, and can check and disconnect; a 403 on a gated dataset says to accept its
+conditions. Tests: migration leaves no copy of the token in any file and keeps the other settings,
+the fallback file is owner-only, a store that becomes available takes over. Checked here: an
+invalid token gets 401 from /api/whoami-v2. Not checked here: Windows Credential Manager itself
+(this container has no credential service; the code path is the `keyring` crate's).
 Also measured (0.7.8's comparison, finished here; the owner's model, local only; the half of each
 lesson's held-out questions never trained or judged): with the earlier lessons' loss allowed to
 rise 0.08 instead of 0.02 (variant D), the accepted model ends with 26 of 51 new-course answers

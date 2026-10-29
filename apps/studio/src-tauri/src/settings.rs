@@ -23,7 +23,7 @@ static NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// One writer at a time, so two settings saved together both stay.
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn notice(text: String) {
+pub(crate) fn notice(text: String) {
     let mut n = NOTICES.lock().unwrap_or_else(|e| e.into_inner());
     if !n.contains(&text) {
         n.push(text);
@@ -88,6 +88,26 @@ pub(crate) fn write_in(dir: &Path, key: &str, value: serde_json::Value) -> Res<(
     let version = map.get("schemaVersion").and_then(|v| v.as_u64()).unwrap_or(0).max(SETTINGS_VERSION);
     map.insert("schemaVersion".into(), version.into());
     write_atomic(&file, &serde_json::to_vec_pretty(&map).map_err(|e| e.to_string())?)
+}
+
+/// Removes `key` from the settings file and from every copy of it (the backup, the copies kept
+/// when the layout was upgraded): for a secret that must not stay in any of them.
+pub(crate) fn scrub_in(dir: &Path, key: &str) -> Res<()> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let copy =
+            name == FILE || name == BACKUP || (name.starts_with("settings.v") && name.ends_with(".json"));
+        if !copy {
+            continue;
+        }
+        let Some(mut map) = std::fs::read(e.path()).ok().and_then(|b| parse(&b)) else { continue };
+        if map.remove(key).is_some() {
+            write_atomic(&e.path(), &serde_json::to_vec_pretty(&map).map_err(|e| e.to_string())?)?;
+        }
+    }
+    Ok(())
 }
 
 /// Brings the settings in `dir` to this version's layout (at start-up). Returns what the owner

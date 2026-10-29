@@ -32,5 +32,5 @@ interrupted does not change what the run continues with.
   none, its defaults), says so, and when a setting is next saved keeps the damaged file as
   `settings.damaged-<time>.json`.
 
-The Hugging Face token is not a setting: see docs/PLAN-0.9.md (it moves to the system's credential
-store in the next stage).
+The Hugging Face token is not a setting: it is kept in the system's credential store
+(docs/HUGGINGFACE.md).

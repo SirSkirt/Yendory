@@ -383,11 +383,10 @@ pub(crate) fn hf_token() -> Option<String> {
         .filter(|t| !t.trim().is_empty())
 }
 
-/// Loads the stored token (at start-up).
-pub(crate) fn load_hf_token(app: &AppHandle) {
-    let stored = read_settings(app).get("hfToken").and_then(|v| v.as_str()).map(str::to_string);
+/// The token in use (loaded at start-up by credentials.rs; never sent to the page).
+pub(crate) fn set_token_in_memory(token: Option<String>) {
     if let Ok(mut t) = HF_TOKEN.write() {
-        *t = stored.filter(|t| !t.trim().is_empty());
+        *t = token.filter(|t| !t.trim().is_empty());
     }
 }
 
@@ -397,19 +396,88 @@ pub fn hf_token_set() -> bool {
     hf_token().is_some()
 }
 
-/// Stores the Hugging Face access token on this device (an empty one removes it). It is sent
-/// only to huggingface.co, with downloads.
+/// Stores the Hugging Face access token in the system's credential store (an empty one
+/// disconnects: the token is removed). It is sent only to huggingface.co.
 #[tauri::command]
 pub fn set_hf_token(app: AppHandle, token: String) -> Res<bool> {
     let token = token.trim().to_string();
     if token.len() > 200 || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("That does not look like a Hugging Face access token".into());
     }
-    write_setting(&app, "hfToken", token.clone().into())?;
-    if let Ok(mut t) = HF_TOKEN.write() {
-        *t = (!token.is_empty()).then_some(token);
+    if token.is_empty() {
+        set_token_in_memory(None);
+        crate::credentials::delete(&app)?;
+    } else {
+        crate::credentials::save(&app, &token)?;
+        set_token_in_memory(Some(token));
     }
     Ok(hf_token().is_some())
+}
+
+/// The Hugging Face account the token belongs to, checked with Hugging Face (nothing secret is
+/// sent back to the page).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfAccount {
+    /// A token is set; it was accepted; the account name, the token's name and its kind
+    /// ("read", "write", "fineGrained").
+    token: bool,
+    valid: Option<bool>,
+    name: Option<String>,
+    token_name: Option<String>,
+    role: Option<String>,
+    /// Where the token is kept.
+    kept: Option<String>,
+    /// Why the check could not be made, or advice (a token that can write).
+    note: Option<String>,
+}
+
+#[tauri::command]
+pub async fn hf_account() -> HfAccount {
+    tauri::async_runtime::spawn_blocking(account_now).await.unwrap_or_else(|e| HfAccount {
+        token: hf_token().is_some(),
+        valid: None,
+        name: None,
+        token_name: None,
+        role: None,
+        kept: None,
+        note: Some(e.to_string()),
+    })
+}
+
+fn account_now() -> HfAccount {
+    let kept = crate::credentials::kept().map(|k| k.describe().to_string());
+    let mut out =
+        HfAccount { token: false, valid: None, name: None, token_name: None, role: None, kept, note: None };
+    let Some(token) = hf_token() else { return out };
+    out.token = true;
+    let r = agent()
+        .get("https://huggingface.co/api/whoami-v2")
+        .set("Authorization", &format!("Bearer {}", token.trim()))
+        .call();
+    match r {
+        Ok(r) => {
+            let v: serde_json::Value =
+                r.into_string().ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            out.valid = Some(true);
+            out.name = v.get("name").and_then(|n| n.as_str()).map(str::to_string);
+            let t = v.get("auth").and_then(|a| a.get("accessToken"));
+            out.token_name =
+                t.and_then(|t| t.get("displayName")).and_then(|n| n.as_str()).map(str::to_string);
+            out.role = t.and_then(|t| t.get("role")).and_then(|n| n.as_str()).map(str::to_string);
+            if out.role.as_deref() == Some("write") {
+                out.note = Some(
+                    "This token can also change things on your account; downloading needs only a read token (Hugging Face → Settings → Access Tokens → New token → Read).".into(),
+                );
+            }
+        }
+        Err(ureq::Error::Status(401, _)) => {
+            out.valid = Some(false);
+            out.note = Some("Hugging Face did not accept the token: it may have expired, been revoked, or been mistyped. Make a new one and save it here.".into());
+        }
+        Err(e) => out.note = Some(format!("The token could not be checked now ({e})")),
+    }
+    out
 }
 
 /// Rate limited: the server kept answering 429 after every wait.
@@ -468,6 +536,13 @@ pub(crate) fn get_json(
                     wait.as_secs()
                 )));
                 wait
+            }
+            Err(ureq::Error::Status(403, _)) if url.contains("huggingface.co") && hf_token().is_some() => {
+                return Err(format!(
+                    "Download failed: Hugging Face refused access (403) for {url}. Your token works, but your account \
+                     has not been given access to this gated dataset yet: open the dataset's page while signed in, \
+                     accept its conditions, and wait for approval if it asks for one."
+                ))
             }
             Err(ureq::Error::Status(401, _)) if url.contains("huggingface.co") => {
                 return Err(format!(

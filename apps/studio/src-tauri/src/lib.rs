@@ -23,6 +23,7 @@ use yendory_engine::{
 mod chat;
 mod conversation;
 mod courses;
+mod credentials;
 mod designer;
 mod filter;
 mod growth;
@@ -2082,8 +2083,11 @@ pub fn run() {
             load_lessons(app.handle());
             // The saved training memory settings, before any training starts.
             memory::apply_stored(app.handle());
-            // A Hugging Face token given earlier (for gated datasets).
-            reading::load_hf_token(app.handle());
+            // The Hugging Face token: moved out of the settings file if an earlier version kept it
+            // there, then loaded from the credential store.
+            for n in credentials::start(app.handle()) {
+                settings::notice(n);
+            }
             // Updates on the desktop (Android installs APKs).
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -2166,6 +2170,7 @@ pub fn run() {
             update::install_update,
             reading::set_hf_token,
             reading::cancel_download,
+            reading::hf_account,
             reading::finish_download,
             reading::download_queue,
             reading::remove_queued_download,

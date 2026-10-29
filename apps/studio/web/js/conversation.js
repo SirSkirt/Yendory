@@ -419,18 +419,33 @@
       refresh().catch(err => log("ERROR", err));
     });
     invoke("conversation_sources").then(s => { sources = s; renderSources(); }).catch(e => log("ERROR", e));
-    // The Hugging Face token for gated datasets (only whether one is set comes back).
-    const tokenNote = set => { $("hfTokenNote").textContent = set ? "A token is set." : "No token set (needed only for gated datasets)."; };
-    invoke("hf_token_set").then(tokenNote).catch(e => log("ERROR", e));
+    // The Hugging Face account: whether a token is set, whom it belongs to and where it is kept
+    // (the token itself never comes back to the page).
+    const showAccount = a => {
+      if (!a.token) { $("hfTokenNote").textContent = "Not connected (a token is needed only for gated datasets)."; return; }
+      const who = a.valid === true ? `Connected as ${a.name || "?"}${a.tokenName ? ` with the token “${a.tokenName}”` : ""}${a.role ? ` (${a.role === "fineGrained" ? "fine-grained" : a.role} access)` : ""}.`
+        : a.valid === false ? "The token was not accepted." : "A token is set.";
+      $("hfTokenNote").textContent = [who, a.kept ? `Kept in ${a.kept}.` : "", a.note || ""].filter(Boolean).join(" ");
+    };
+    const checkAccount = () => invoke("hf_account").then(showAccount).catch(e => log("ERROR", e));
+    checkAccount();
     $("hfTokenSave").addEventListener("click", safe(async () => {
       const token = $("hfToken").value.trim();
       if (!token) throw new Error("Paste your Hugging Face access token first");
-      tokenNote(await invoke("set_hf_token", { token }));
+      await invoke("set_hf_token", { token });
       $("hfToken").value = "";
+      $("hfTokenNote").textContent = "Saved; checking it with Hugging Face…";
+      await checkAccount();
     }, "Save token"));
+    $("hfTokenCheck").addEventListener("click", safe(async () => {
+      $("hfTokenNote").textContent = "Checking with Hugging Face…";
+      await checkAccount();
+    }, "Check token"));
     $("hfTokenClear").addEventListener("click", safe(async () => {
-      tokenNote(await invoke("set_hf_token", { token: "" }));
-    }, "Remove token"));
+      if (!await askYes("Disconnect from Hugging Face? The token is removed from this device; gated datasets cannot be downloaded until a token is saved again. Datasets already downloaded stay.")) return;
+      await invoke("set_hf_token", { token: "" });
+      await checkAccount();
+    }, "Disconnect"));
     // Your own conversations: a file, or text written or pasted here.
     const added = c => {
       chosen.add(c.id);
