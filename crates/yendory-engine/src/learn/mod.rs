@@ -148,67 +148,79 @@ pub fn batch_loss_and_gradients(
     Ok(((loss / denom) as f32, grads))
 }
 
+/// Runs `work` for every index `0..n` on the CPU's threads and returns the results in index
+/// order. Each thread takes the next index as soon as it is free, the costliest first (`cost`),
+/// so long and short items mixed together keep every thread busy to the end (fixed slices left
+/// most threads idle while a few worked through the long items). Each result is computed alone,
+/// so the results are the same as one by one.
+pub fn parallel_by<T: Send>(
+    n: usize,
+    cost: impl Fn(usize) -> usize,
+    work: impl Fn(usize) -> Result<T, String> + Sync,
+) -> Result<Vec<T>, String> {
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(cost(i)));
+    let threads = cpu_threads().max(1).min(n.max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (order, next, work) = (&order, &next, &work);
+    let parts: Vec<Result<Vec<(usize, T)>, String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut done = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&i) = order.get(k) else { return Ok(done) };
+                        done.push((i, work(i)?));
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("A worker thread failed".into())))
+            .collect()
+    });
+    let mut all = Vec::with_capacity(n);
+    for p in parts {
+        all.extend(p?);
+    }
+    all.sort_by_key(|(i, _)| *i);
+    Ok(all.into_iter().map(|(_, t)| t).collect())
+}
+
 /// The mean loss of a batch exactly as [`batch_loss_and_gradients`] reports it, without
-/// computing gradients (forward passes only, rows in parallel threads).
+/// computing gradients (forward passes only, rows spread over the CPU's threads; summed in row
+/// order, so the result does not depend on the threads).
 pub fn batch_loss(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<f32, String> {
     if rows.is_empty() {
         return Ok(0.);
     }
-    let threads = cpu_threads().min(rows.len());
-    let chunk = rows.len().div_ceil(threads);
-    let parts: Vec<Result<(f64, f64), String>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = rows
-            .chunks(chunk)
-            .map(|part| {
-                scope.spawn(move || {
-                    let (mut loss, mut weight) = (0f64, 0f64);
-                    for row in part {
-                        let sum: f32 = row.mask.iter().sum();
-                        let l = model.loss(&row.ids, &row.targets, &row.mask, abl)?;
-                        loss += l as f64 * sum.max(1.) as f64;
-                        weight += sum as f64;
-                    }
-                    Ok((loss, weight))
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().expect("scoring thread panicked")).collect()
-    });
+    let per = parallel_by(
+        rows.len(),
+        |i| rows[i].ids.len(),
+        |i| {
+            let row = &rows[i];
+            let sum: f32 = row.mask.iter().sum();
+            let l = model.loss(&row.ids, &row.targets, &row.mask, abl)?;
+            Ok((l as f64 * sum.max(1.) as f64, sum as f64))
+        },
+    )?;
     let (mut loss, mut weight) = (0f64, 0f64);
-    for p in parts {
-        let (l, w) = p?;
+    for (l, w) in per {
         loss += l;
         weight += w;
     }
     Ok((loss / weight.max(1.)) as f32)
 }
 
-/// Each row's own mean loss on the CPU (rows in parallel threads).
+/// Each row's own mean loss on the CPU (rows spread over the CPU's threads, longest first).
 pub fn row_losses(model: &Bicameral, rows: &[Row], abl: Ablation) -> Result<Vec<f32>, String> {
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    let threads = cpu_threads().max(1).min(rows.len());
-    let chunk = rows.len().div_ceil(threads);
-    let parts: Vec<Result<Vec<f32>, String>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = rows
-            .chunks(chunk)
-            .map(|part| {
-                scope.spawn(move || {
-                    part.iter().map(|r| model.loss(&r.ids, &r.targets, &r.mask, abl)).collect()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err("A scoring thread failed".into())))
-            .collect()
-    });
-    let mut out = Vec::with_capacity(rows.len());
-    for p in parts {
-        out.extend(p?);
-    }
-    Ok(out)
+    parallel_by(
+        rows.len(),
+        |i| rows[i].ids.len(),
+        |i| model.loss(&rows[i].ids, &rows[i].targets, &rows[i].mask, abl),
+    )
 }
 
 /// Like [`batch_loss_and_gradients`] for a part of a batch: the loss and gradient sums are
@@ -681,21 +693,29 @@ impl Trainer {
     /// In GPU training: the mean loss of rows computed on the GPU with the weights there (the
     /// same value as [`batch_loss`] on the synced model, much faster). `None` otherwise.
     ///
-    /// The rows are scored in parts the GPU's memory budget holds (at most 8 rows at a time):
-    /// a check of long rows (whole conversations) needs much more working memory than a training
-    /// window. A part that still does not fit is halved; when not even one row fits, the check
-    /// runs on the CPU (with a notice) instead of failing.
+    /// The rows are scored in parts the GPU's memory budget holds (see [`Trainer::in_parts`]);
+    /// rows too long for it even alone are scored on the CPU (with a notice) instead of failing.
     pub fn gpu_loss(&self, model: &Bicameral, rows: &[Row], abl: Ablation) -> Option<Result<f32, String>> {
         #[cfg(feature = "gpu")]
         {
             let g = self.gpu.as_ref()?;
-            Some(self.in_parts(
+            // Each row's loss enters with its weight, as in [`batch_loss`].
+            let per = self.in_parts(
                 model,
                 rows,
                 "held-out check",
-                |part| g.mean_loss(model, rows, abl, part),
-                || batch_loss(model, rows, abl),
-            ))
+                |part| g.row_losses(model, part, abl, part.len()),
+                |r| model.loss(&r.ids, &r.targets, &r.mask, abl),
+            );
+            Some(per.map(|per| {
+                let (mut loss, mut weight) = (0f64, 0f64);
+                for (l, r) in per.into_iter().zip(rows) {
+                    let sum: f32 = r.mask.iter().sum();
+                    loss += l as f64 * sum.max(1.) as f64;
+                    weight += sum as f64;
+                }
+                (loss / weight.max(1.)) as f32
+            }))
         }
         #[cfg(not(feature = "gpu"))]
         {
@@ -720,8 +740,8 @@ impl Trainer {
                 model,
                 rows,
                 "scoring",
-                |part| g.row_losses(model, rows, abl, part),
-                || row_losses(model, rows, abl),
+                |part| g.row_losses(model, part, abl, part.len()),
+                |r| model.loss(&r.ids, &r.targets, &r.mask, abl),
             ))
         }
         #[cfg(not(feature = "gpu"))]
@@ -743,8 +763,8 @@ impl Trainer {
                 model,
                 rows,
                 "answer check",
-                |part| g.greedy_hits(model, rows, eval::GREEDY_MARGIN, part),
-                || Ok(vec![false; rows.len()]),
+                |part| g.greedy_hits(model, part, eval::GREEDY_MARGIN, part.len()),
+                |_| Ok(false),
             ))
         }
         #[cfg(not(feature = "gpu"))]
@@ -754,56 +774,99 @@ impl Trainer {
         }
     }
 
-    /// Runs `gpu(part)` with as many rows at a time as the GPU's free budget holds (at most 8),
-    /// halving the part when it does not fit; when not even one row fits, `cpu()` runs instead
-    /// (with a notice) and training stays on the GPU.
+    /// Gives every row a result: `gpu(part)` on parts of rows of similar length (longest
+    /// first, so a part is padded to little more than its own rows), each part as large as the
+    /// GPU's free budget holds for rows of its length; a part that does not fit is halved. Only
+    /// the rows too long for the GPU even alone go to `cpu` (on all the CPU's threads, with a
+    /// notice): one long conversation no longer sends every row to the CPU. Training stays on
+    /// the GPU. Results come back in the rows' order.
     #[cfg(feature = "gpu")]
-    fn in_parts<T>(
+    fn in_parts<T: Send>(
         &self,
         model: &Bicameral,
         rows: &[Row],
         what: &str,
-        gpu: impl Fn(usize) -> Result<T, String>,
-        cpu: impl FnOnce() -> Result<T, String>,
-    ) -> Result<T, String> {
+        gpu: impl Fn(&[Row]) -> Result<Vec<T>, String>,
+        cpu: impl Fn(&Row) -> Result<T, String> + Sync,
+    ) -> Result<Vec<T>, String> {
         let g = self.gpu.as_ref().expect("on the GPU");
-        let shape = memory::StepShape {
-            parameters: model.parameter_count(),
-            activation_floats_per_token: Bicameral::activation_floats_for(
-                &model.config,
-                model.neuro.as_ref(),
-            ),
-            rows: rows.len(),
-            tokens: rows.iter().map(|r| r.ids.len()).max().unwrap_or(1),
-            vocab: model.config.vocab,
-        };
-        let mut part = match g.budget() {
-            Some(b) => {
-                let free = b.saturating_sub(g.memory_bytes());
-                ((free / shape.working_bytes(1).max(1)) as usize).clamp(1, 8)
+        let one_row = |tokens: usize| {
+            memory::StepShape {
+                parameters: model.parameter_count(),
+                activation_floats_per_token: Bicameral::activation_floats_for(
+                    &model.config,
+                    model.neuro.as_ref(),
+                ),
+                rows: 1,
+                tokens,
+                vocab: model.config.vocab,
             }
-            None => 8,
+            .working_bytes(1)
+            .max(1)
         };
-        loop {
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu(part)))
-                .unwrap_or_else(|p| Err(format!("GPU {what} failed: {}", panic_text(p))));
-            match r {
-                Ok(v) => return Ok(v),
-                Err(_) if part > 1 => {
-                    g.clear_pool();
-                    part /= 2;
-                }
-                Err(e) => {
-                    g.clear_pool();
-                    notice(format!(
-                        "A {what} of {} rows of up to {} tokens did not fit in the GPU's memory ({e}); it ran on the CPU, and training stays on the GPU.",
-                        rows.len(),
-                        shape.tokens
-                    ));
-                    return cpu();
+        let free = g.budget().map(|b| b.saturating_sub(g.memory_bytes()));
+        // At most 8 long rows at a time, more short ones (about 8,192 tokens per part, at most 64
+        // rows), and no more than the free budget holds.
+        let part_for = |tokens: usize| {
+            let cap = (8192 / tokens.max(1)).clamp(8, 64);
+            match free {
+                Some(f) => ((f / one_row(tokens)) as usize).clamp(1, cap),
+                None => cap,
+            }
+        };
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(rows[i].ids.len()));
+        let mut out: Vec<Option<T>> = (0..rows.len()).map(|_| None).collect();
+        let mut on_cpu = Vec::new();
+        // Rows at least this long did not fit alone (and the error that said so).
+        let mut too_long: Option<(usize, String)> = None;
+        let mut k = 0;
+        while k < order.len() {
+            let longest = rows[order[k]].ids.len();
+            if too_long.as_ref().is_some_and(|(t, _)| longest >= *t) {
+                on_cpu.push(order[k]);
+                k += 1;
+                continue;
+            }
+            let mut part = part_for(longest);
+            loop {
+                let take = &order[k..(k + part).min(order.len())];
+                let batch: Vec<Row> = take.iter().map(|&i| rows[i].clone()).collect();
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu(&batch)))
+                    .unwrap_or_else(|p| Err(format!("GPU {what} failed: {}", panic_text(p))));
+                match r {
+                    Ok(v) if v.len() == take.len() => {
+                        for (&i, t) in take.iter().zip(v) {
+                            out[i] = Some(t);
+                        }
+                        k += take.len();
+                        break;
+                    }
+                    Ok(_) => return Err(format!("GPU {what} returned the wrong number of results")),
+                    Err(_) if part > 1 => {
+                        g.clear_pool();
+                        part /= 2;
+                    }
+                    Err(e) => {
+                        g.clear_pool();
+                        too_long = Some((longest, e));
+                        break;
+                    }
                 }
             }
         }
+        if let Some((tokens, e)) = too_long {
+            notice(format!(
+                "In a {what}, {} of {} rows ({tokens} tokens or longer) did not fit in the GPU's memory ({e}); those ran on the CPU, the rest on the GPU, and training stays on the GPU.",
+                on_cpu.len(),
+                rows.len()
+            ));
+            let done = parallel_by(on_cpu.len(), |j| rows[on_cpu[j]].ids.len(), |j| cpu(&rows[on_cpu[j]]))?;
+            for (&i, t) in on_cpu.iter().zip(done) {
+                out[i] = Some(t);
+            }
+        }
+        Ok(out.into_iter().map(|t| t.expect("every row has a result")).collect())
     }
 
     /// GPU memory training uses (GPU and hybrid training).

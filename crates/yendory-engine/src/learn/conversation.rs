@@ -470,6 +470,19 @@ pub enum ConversationEvent {
         mastered: bool,
         reason: String,
     },
+    /// Work between batches that takes a while (so the page can say what it is): measuring the
+    /// practice pool (`rows` conversations of the stage's length) or a check. `seconds` is set
+    /// when it is done, with `note` when some of it could not run on the GPU (said at once, not
+    /// only at the end of the run).
+    Measuring {
+        what: String,
+        rows: usize,
+        stage: usize,
+        #[serde(default)]
+        seconds: Option<f32>,
+        #[serde(default)]
+        note: Option<String>,
+    },
     /// Stuck in a stage: the learning rate was lowered.
     LearningRateLowered {
         scale: f32,
@@ -763,24 +776,13 @@ fn spread(len: usize, n: usize) -> Vec<usize> {
 
 /// Greedy replies to many prompts (in parallel threads).
 pub(super) fn replies(model: &Bicameral, prompts: &[String], max_tokens: usize) -> Vec<String> {
-    if prompts.is_empty() {
-        return Vec::new();
-    }
-    let threads = super::cpu_threads().max(1).min(prompts.len());
-    let chunk = prompts.len().div_ceil(threads);
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = prompts
-            .chunks(chunk)
-            .map(|part| {
-                scope.spawn(move || {
-                    part.iter()
-                        .map(|p| reply(model, p, max_tokens, Ablation::default()).unwrap_or_default())
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-    })
+    // Every thread busy to the end (longest prompts first); a reply that fails is empty.
+    super::parallel_by(
+        prompts.len(),
+        |i| prompts[i].len(),
+        |i| Ok(reply(model, &prompts[i], max_tokens, Ablation::default()).unwrap_or_default()),
+    )
+    .unwrap_or_default()
 }
 
 fn words(text: &str) -> Vec<String> {
@@ -1844,7 +1846,28 @@ pub fn converse_with(
             }
             if let Some(stage) = rebuild.take() {
                 trainer.sync(&mut current)?;
+                let n = if cfg.targeted { cfg.pool_size.max(16).min(train.len()) } else { 0 };
+                let started = std::time::Instant::now();
+                if n > 0 {
+                    observer(&ConversationEvent::Measuring {
+                        what: "practice pool".into(),
+                        rows: n,
+                        stage,
+                        seconds: None,
+                        note: None,
+                    });
+                }
                 pool = new_pool(&trainer, &current, stage, &mut rng)?;
+                if n > 0 {
+                    let seconds = Some(started.elapsed().as_secs_f32());
+                    observer(&ConversationEvent::Measuring {
+                        what: "practice pool".into(),
+                        rows: n,
+                        stage,
+                        seconds,
+                        note: super::take_device_notice(),
+                    });
+                }
             }
             let stage = curriculum.stage;
             let mut rows = Vec::with_capacity(cfg.batch_size);
@@ -1928,11 +1951,36 @@ pub fn converse_with(
             // share of the learned conversations make way for new ones.
             if let Some(p) = pool.as_mut() {
                 let ids = p.next_ids(train.len(), &mut rng);
+                let (stage, started) = (curriculum.stage, std::time::Instant::now());
+                let what = || "practice pool".to_string();
+                observer(&ConversationEvent::Measuring {
+                    what: what(),
+                    rows: ids.len(),
+                    stage,
+                    seconds: None,
+                    note: None,
+                });
                 *p = Pool::new(
                     measure_pool(Some(&trainer), &current, cfg, &train, &ids, windows[curriculum.stage])?,
                     cfg,
                 );
+                let seconds = Some(started.elapsed().as_secs_f32());
+                let note = super::take_device_notice();
+                observer(&ConversationEvent::Measuring {
+                    what: what(),
+                    rows: ids.len(),
+                    stage,
+                    seconds,
+                    note,
+                });
             }
+            observer(&ConversationEvent::Measuring {
+                what: "check".into(),
+                rows: 0,
+                stage: curriculum.stage,
+                seconds: None,
+                note: None,
+            });
             let snapshot = current.clone();
             if trainer.on_gpu() {
                 // The losses on the GPU; the answers Nova writes (Classroom, context tests,

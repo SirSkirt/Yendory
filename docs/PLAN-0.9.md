@@ -95,6 +95,12 @@ asked is there.
   ZIPs; inspection, column mapping with preview, validation with counts, provenance; scripts never
   run (docs/IMPORTING.md).
 
+- **0.9.0, Conversation checks**: a check after "Short exchanges" took over an hour with the
+  GPU idle. Causes: a single conversation too long for the GPU's memory sent every pool row to
+  the CPU, and the CPU's fixed slices left most threads idle. Now only the rows too long go to
+  the CPU, GPU parts are sized by length, CPU work is shared longest first (results identical),
+  and the page shows what is being measured and for how long.
+
 ## Blockers and limits
 
 - **Updater secret**: fixed; builds are signed since 0.8.2.

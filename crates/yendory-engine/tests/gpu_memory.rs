@@ -422,6 +422,78 @@ fn held_out_checks_fit_the_budget_or_run_on_the_cpu() {
     memory::set_memory_settings(MemorySettings::default());
 }
 
+/// A pool of short rows with a few rows too long for the GPU even alone: only the long rows go
+/// to the CPU (said in the notice), the short ones are still scored on the GPU, and every row's
+/// loss is the CPU's, in the rows' order.
+#[test]
+fn only_rows_too_long_for_the_gpu_run_on_the_cpu() {
+    let _lock = GLOBALS.lock().unwrap();
+    std::env::set_var("YENDORY_GPU_SOFTWARE", "1");
+    if yendory_engine::learn::gpu_name().is_err() {
+        println!("no GPU available; skipped");
+        return;
+    }
+    let (_, start) = models().remove(0);
+    let mut rows = rows(&start, 20);
+    // Four long rows among the short ones (not at the end).
+    let long_text = "The dog ran to the park and played with a ball all day long. ".repeat(12);
+    let ids = start.tokenizer.encode(&long_text).unwrap();
+    let ids = &ids[..ids.len().min(start.config.max_tokens + 1)];
+    let n = ids.len() - 1;
+    let long = Row { ids: ids[..n].to_vec(), targets: ids[1..].to_vec(), mask: vec![1.; n] };
+    for at in [2, 7, 11, 19] {
+        rows.insert(at, long.clone());
+    }
+    let short = rows.iter().map(|r| r.ids.len()).filter(|&l| l < n).max().unwrap();
+    let shape = |tokens| StepShape {
+        parameters: start.parameter_count(),
+        activation_floats_per_token: Bicameral::activation_floats_for(&start.config, None),
+        rows: 1,
+        tokens,
+        vocab: start.config.vocab,
+    };
+    println!(
+        "one long row {} bytes, two short rows {} bytes",
+        shape(n).working_bytes(1),
+        shape(short).working_bytes(2)
+    );
+    assert!(
+        shape(n).working_bytes(1) > shape(short).working_bytes(2),
+        "a long row needs more than two short ones"
+    );
+    let budget = (GpuModel::fixed_bytes_for(start.parameter_count(), false) + shape(short).working_bytes(2))
+        * 100
+        / 90
+        + 100;
+    let ram =
+        MemorySettings { ram_limit_bytes: Some(1 << 40), ram_reserve_bytes: 0, ..MemorySettings::default() };
+    memory::set_memory_settings(MemorySettings { gpu_memory_bytes: Some(budget), ..ram });
+    let _ = yendory_engine::learn::take_device_notice();
+    set_device(Device::Gpu(yendory_engine::gpu::Api::Auto));
+    let t = Trainer::new(&start);
+    let on_gpu = t.on_gpu();
+    let per_gpu = t.gpu_row_losses(&start, &rows, Ablation::default());
+    let mean_gpu = t.gpu_loss(&start, &rows, Ablation::default());
+    set_device(Device::Cpu);
+    let notice = yendory_engine::learn::take_device_notice().unwrap_or_default();
+    memory::set_memory_settings(MemorySettings::default());
+    println!("{n} and {short} tokens; notice: {notice}");
+    if !on_gpu {
+        println!("training did not start on the GPU under this budget; skipped");
+        return;
+    }
+    assert!(notice.contains("4 of 24 rows"), "only the long rows ran on the CPU: {notice}");
+    let per_gpu = per_gpu.unwrap().unwrap();
+    let per_cpu = yendory_engine::learn::row_losses(&start, &rows, Ablation::default()).unwrap();
+    assert_eq!(per_gpu.len(), rows.len());
+    for (g, c) in per_gpu.iter().zip(&per_cpu) {
+        assert!((g - c).abs() <= 1e-4 * c.max(1.), "row loss {g} vs {c}");
+    }
+    let mean_cpu = yendory_engine::learn::batch_loss(&start, &rows, Ablation::default()).unwrap();
+    let mean_gpu = mean_gpu.unwrap().unwrap();
+    assert!((mean_gpu - mean_cpu).abs() <= 1e-4 * mean_cpu.max(1.), "{mean_gpu} vs {mean_cpu}");
+}
+
 /// Conversation practice trains on the GPU, scores its practice pool there, and reports every
 /// measure at every check.
 #[test]

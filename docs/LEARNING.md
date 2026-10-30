@@ -1286,6 +1286,18 @@ same measures either way.
   a CPU thread while the GPU keeps training; with GPU checks on, the GPU first confirms the
   Classroom answers it can (see Training on the GPU), and those are not written again. Training never waits for that thread: a check that
   falls due while the last one is still being written starts as soon as it is judged.
+  Scoring on the GPU goes longest first, in parts of rows of similar length (so a part is padded
+  to little more than its own rows), each as large as the GPU's free memory holds for that
+  length (at most 8 long rows, up to 64 short ones). Only rows too long for the GPU even alone
+  (a whole conversation of thousands of tokens needs gigabytes) are scored on the CPU, and the
+  page says so at once. Until 0.9.0 one such row sent the whole pool (4,096 conversations) to
+  the CPU, leaving the GPU idle while training waited (an hour or more was seen).
+  On the CPU, losses and replies are shared out longest first, each thread taking the next row as
+  soon as it is free (`learn::parallel_by`); fixed slices per thread left most threads idle while
+  a few worked through the long conversations (twice as slow on 4 threads with a quarter of the
+  rows long, more on more threads). Each row is computed alone and the results are added up in
+  row order, so the numbers are exactly those of one-by-one scoring. While the pool is measured
+  or a check runs, the page says so with the time so far (`ConversationEvent::Measuring`).
 - **Best balanced checkpoint** (experimental, `keep_balanced`, off by default; Studio checkbox).
   The checkpoint kept is the best language one (held-out loss, with the Classroom and reading
   protections). With this on, a second one is tracked: among checks that keep what an accepted

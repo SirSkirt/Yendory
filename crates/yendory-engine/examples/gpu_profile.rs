@@ -1,5 +1,5 @@
 //! Where a GPU training step's time goes: CPU preparation, GPU time per kernel, GPU memory.
-//! cargo run --release --features gpu --example gpu_profile -- [size] [context] [rows] [tokens] [api]
+//! cargo run --release --features gpu --example gpu_profile -- [size or model file] [context] [rows] [tokens] [api]
 use yendory_engine::gpu::{shared_with, Api, GpuModel};
 use yendory_engine::learn::Row;
 use yendory_engine::{Ablation, Bicameral, Config, Focus};
@@ -15,8 +15,13 @@ fn main() {
         Some("dx12") => Api::Dx12,
         _ => Api::Auto,
     };
-    let c = yendory_engine::size_presets().into_iter().find(|p| p.id == size).unwrap().config;
-    let model = Bicameral::with_config(Config { max_tokens: context, ..c }, 3);
+    // A size preset, or a model file (.nnova2 / .nneuro) as it is.
+    let model = if size.ends_with(".nnova2") || size.ends_with(".nneuro") {
+        Bicameral::load(size).unwrap()
+    } else {
+        let c = yendory_engine::size_presets().into_iter().find(|p| p.id == size).unwrap().config;
+        Bicameral::with_config(Config { max_tokens: context, ..c }, 3)
+    };
     let text: String = (0..len * n_rows).map(|i| (b'a' + (i * 7 % 26) as u8) as char).collect();
     let ids = model.tokenizer.encode(&text).unwrap();
     let rows: Vec<Row> = (0..n_rows)

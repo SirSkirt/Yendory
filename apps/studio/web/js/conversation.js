@@ -213,6 +213,7 @@
       (r.wrong_name ? ` · other name ${r.wrong_name}` : "") + (r.assistant ? ` · assistant's voice ${r.assistant}` : ""));
   }
   let baseline = null;
+  let measuringSince = 0, measuringTimer = null;
   let pendingPrevious = null;
   function onEvent(e) {
     if (e.type === "started") {
@@ -244,6 +245,7 @@
         log("INFO", `Conversation practice continues from its recovery point after step ${fmt(e.resumed_from)}.`);
       }
     } else if (e.type === "batch") {
+      clearInterval(measuringTimer);
       $("convBar").style.width = (100 * e.step / e.steps).toFixed(1) + "%";
       const secs = (Date.now() - started) / 1000;
       $("convLine").textContent = `Stage: ${STAGE[e.stage]} · step ${fmt(e.step)} of ${fmt(e.steps)} · ${fmt(e.tokens)} tokens · loss ${e.loss.toFixed(4)} · learning rate ${rateText(e.learning_rate)}` +
@@ -264,6 +266,25 @@
     } else if (e.type === "stage") {
       log("INFO", `Conversation: now ${e.name}. ${e.reason}`);
       $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 10, class: e.mastered ? "ok" : "warn" }, `→ ${e.name}: ${e.reason}`)));
+    } else if (e.type === "measuring") {
+      // Work that keeps training waiting: said on the line, with the time it took in the log.
+      const stageName = STAGE[e.stage] || "";
+      if (e.seconds == null) {
+        measuringSince = Date.now();
+        const what = e.what === "practice pool"
+          ? `Measuring Nova's loss on ${fmt(e.rows)} practice conversations (${stageName}) to choose what she practises`
+          : "Checking: held-out conversations, Classroom answers, context and understanding tests, replies";
+        $("convLine").textContent = `${what}… Training waits until this is done; Stop takes effect after it.`;
+        clearInterval(measuringTimer);
+        measuringTimer = setInterval(() => {
+          const s = Math.round((Date.now() - measuringSince) / 1000);
+          $("convLine").textContent = `${what}… ${s >= 60 ? `${Math.floor(s / 60)} min ` : ""}${s % 60} s so far. Training waits until this is done; Stop takes effect after it.`;
+        }, 5000);
+      } else {
+        clearInterval(measuringTimer);
+        log("INFO", `Conversation: measured ${fmt(e.rows)} practice conversations (${stageName}) in ${Math.round(e.seconds)} s.`);
+        if (e.note) log("WARN", e.note);
+      }
     } else if (e.type === "learning_rate_lowered") {
       $("convChecks").tBodies[0].prepend(el("tr", {}, el("td", { colspan: 10, class: "warn" }, `${e.reason}: learning rate now ×${e.scale}`)));
     }
