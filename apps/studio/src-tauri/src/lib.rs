@@ -41,6 +41,7 @@ mod rewards;
 mod settings;
 mod sources;
 mod study;
+mod trace;
 mod update;
 
 const MAX_LESSON_BYTES: usize = 8 << 20;
@@ -161,6 +162,8 @@ struct Studio {
     /// A chat reply is being written (one at a time), and the request to stop it.
     chatting: AtomicBool,
     chat_stop: Arc<AtomicBool>,
+    /// A per-network trace is being made for § 11 Brain (one at a time).
+    tracing: AtomicBool,
 }
 
 fn models_dir(app: &AppHandle) -> Res<PathBuf> {
@@ -2119,6 +2122,13 @@ pub fn run() {
             chat::chat_send,
             chat::chat_regenerate,
             chat::chat_stop,
+            trace::trace_turns,
+            trace::trace_load,
+            trace::trace_replay,
+            trace::trace_question,
+            trace::trace_influence,
+            trace::trace_storage,
+            trace::trace_delete,
             chat::chat_export,
             chat::chat_mark,
             conversation::conversation_sources,

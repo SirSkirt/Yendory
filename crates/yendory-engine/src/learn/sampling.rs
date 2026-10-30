@@ -3,6 +3,7 @@
 //! get different replies. Every reply is still the model's own: sampling only decides which of
 //! the tokens the model itself proposes is written next.
 use super::Rng;
+use crate::model::inspect::{ConversationTrace, TraceEvent, TraceReply};
 use crate::model::{argmax, Ablation, Bicameral};
 use crate::tokenizer::TokenId;
 use serde::{Deserialize, Serialize};
@@ -166,4 +167,47 @@ pub fn reply_with(
     let finished = out.last() == Some(&(b'\n' as TokenId));
     let text = model.tokenizer.decode(&out)?.trim_end_matches('\n').to_string();
     Ok(Reply { text, tokens: out.len(), finished, stopped })
+}
+
+/// [`reply_with`] with a per-network trace recorded as the reply is written: the same tokens
+/// (the same probabilities and draws; tracing only copies values out), the same `each`, and
+/// `event` sees the prompt once read and every step (for live display).
+pub fn reply_traced(
+    model: &Bicameral,
+    prompt: &str,
+    max_tokens: usize,
+    sampling: &Sampling,
+    mut each: impl FnMut(&str) -> bool,
+    mut event: impl FnMut(TraceEvent<'_>),
+) -> Result<(Reply, ConversationTrace), String> {
+    let ids = model.tokenizer.encode(prompt)?;
+    let sampling = sampling.clamped();
+    let mut rng = Rng::new(sampling.seed);
+    let (mut stopped, mut failed) = (false, None);
+    let mut choose = |probs: &[f32], so_far: &[TokenId]| sampling.pick(probs, so_far, &mut rng);
+    let trace = model.trace_turn(&ids, TraceReply::Generate { max_tokens, choose: &mut choose }, |e| {
+        let go = match &e {
+            TraceEvent::Step(s, _) if s.chosen.id != b'\n' as TokenId => {
+                match model.tokenizer.decode(&[s.chosen.id]) {
+                    Ok(text) => {
+                        stopped = !each(&text);
+                        !stopped
+                    }
+                    Err(e) => {
+                        failed = Some(e);
+                        false
+                    }
+                }
+            }
+            _ => true,
+        };
+        event(e);
+        go
+    })?;
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    let out: Vec<TokenId> = trace.steps.iter().map(|s| s.chosen.id).collect();
+    let text = model.tokenizer.decode(&out)?.trim_end_matches('\n').to_string();
+    Ok((Reply { text, tokens: out.len(), finished: trace.finished, stopped }, trace))
 }

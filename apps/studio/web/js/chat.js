@@ -3,7 +3,7 @@
 // Engine token by token and arrive here as "chat-token" events; this page only displays them.
 (() => {
   const DEFAULTS = {
-    context: "", history: "all", turns: 6, replyTokens: 0, fixedSeed: false, memories: true, rememberSelf: true,
+    context: "", history: "all", turns: 6, replyTokens: 0, fixedSeed: false, memories: true, rememberSelf: true, trace: false,
     sampling: { temperature: 0, topK: 0, topP: 1, repetitionPenalty: 1, seed: 0 },
   };
   const SAMPLED_TEMPERATURE = 0.8;
@@ -132,6 +132,7 @@
       el("button", { type: "button", class: "chat-act", onclick: () => copy(m.text) }, "Copy"),
       mine ? el("button", { type: "button", class: "chat-act", onclick: () => startEdit(i) }, "Edit") : "",
       !mine && last ? el("button", { type: "button", class: "chat-act", onclick: safe(regenerate, "Regenerate") }, "Regenerate") : "",
+      !mine && i > 0 ? el("button", { type: "button", class: "chat-act", title: m.info?.trace ? "Open the trace recorded while Nova wrote this reply (§ 11 Brain)" : "Replay this reply through the model on § 11 Brain", onclick: () => window.openTrace?.(chat.id, i) }, m.info?.trace ? "Brain trace" : "Trace on Brain page") : "",
       mine ? "" : markButtons(m, i));
     const body = el("div", { class: "chat-body" },
       el("div", { class: "chat-who" }, mine ? "You" : modelName(), el("time", {}, m.time ? new Date(m.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "")),
@@ -194,6 +195,7 @@
     $("chatSeed").hidden = !s.fixedSeed;
     $("chatMemories").checked = s.memories;
     $("chatRememberSelf").checked = s.rememberSelf;
+    $("chatTrace").checked = !!s.trace;
     outputs();
     windowNote();
   }
@@ -213,6 +215,7 @@
       fixedSeed: $("chatFixedSeed").checked,
       memories: $("chatMemories").checked,
       rememberSelf: $("chatRememberSelf").checked,
+      trace: $("chatTrace").checked,
       sampling: {
         temperature: sample ? num("chatTemp", SAMPLED_TEMPERATURE) : 0,
         topP: num("chatTopP", 1), topK: Math.max(0, Math.round(num("chatTopK", 0))),

@@ -364,3 +364,7 @@ Not measured yet: whether these networks help. The open question from review poi
 following new names through a story (`where` with unseen names: 0 of 320 exact for both
 architectures); the relational network is built for it. The comparison of section 10 is the next
 step.
+
+## Tracing
+
+What each network does at every step of a reply, measured, is on § 11 Brain: see [BRAIN-TRACE.md](BRAIN-TRACE.md).

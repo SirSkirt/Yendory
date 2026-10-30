@@ -7,7 +7,7 @@
 //! chat for networks that can see them later (no current network reads images).
 use super::*;
 use yendory_engine::learn::corpus::normalize_ascii;
-use yendory_engine::learn::sampling::{reply_with, Sampling};
+use yendory_engine::learn::sampling::{reply_traced, reply_with, Sampling};
 
 /// Longest message in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
@@ -52,6 +52,9 @@ pub(crate) struct ChatSettings {
     /// What Nova says about itself is remembered (Study Mode memory, shown to it again as
     /// "I said: ..."), so it can stay consistent from one chat to the next.
     pub remember_self: bool,
+    /// Each reply is written with a per-network trace recorded and saved (§ 11 Brain shows it,
+    /// live while it is written). Off: replies are written without tracing.
+    pub trace: bool,
 }
 impl Default for ChatSettings {
     fn default() -> Self {
@@ -64,6 +67,7 @@ impl Default for ChatSettings {
             fixed_seed: false,
             memories: true,
             remember_self: true,
+            trace: false,
         }
     }
 }
@@ -118,6 +122,10 @@ pub(crate) struct ReplyInfo {
     /// Earlier memories a remembered statement may contradict.
     #[serde(default)]
     pub may_contradict: Vec<String>,
+    /// The per-network trace recorded while this reply was written (its name in the chat's
+    /// trace folder), when the chat records traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,7 +174,7 @@ pub(crate) struct ChatSummary {
     preview: String,
 }
 
-fn chats_dir(app: &AppHandle, model_id: &str) -> Res<PathBuf> {
+pub(crate) fn chats_dir(app: &AppHandle, model_id: &str) -> Res<PathBuf> {
     Ok(model_dir(app, model_id)?.join("chats"))
 }
 
@@ -177,7 +185,7 @@ fn chat_path(app: &AppHandle, model_id: &str, id: &str) -> Res<PathBuf> {
     Ok(chats_dir(app, model_id)?.join(format!("{id}.json")))
 }
 
-fn load_chat(app: &AppHandle, model_id: &str, id: &str) -> Res<Chat> {
+pub(crate) fn load_chat(app: &AppHandle, model_id: &str, id: &str) -> Res<Chat> {
     let path = chat_path(app, model_id, id)?;
     let bytes = std::fs::read(&path).map_err(|_| "This chat no longer exists".to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| format!("This chat could not be read: {e}"))
@@ -321,8 +329,8 @@ fn attachment_of(model: &Bicameral, name: &str, bytes: Vec<u8>) -> Res<Attachmen
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Budget {
     #[serde(skip)]
-    prompt: String,
-    prompt_tokens: usize,
+    pub(crate) prompt: String,
+    pub(crate) prompt_tokens: usize,
     context: usize,
     reply_limit: usize,
     context_text_tokens: usize,
@@ -356,14 +364,14 @@ fn attached_text(attachments: &[Attachment]) -> String {
     out
 }
 
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The prompt: the context text, Study Mode memories, earlier turns (newest kept first, each
 /// with its attached text when it fits), this message's attached text (cut if it does not fit)
 /// and the message. Turns are written as the model was taught them: `U: …` then `N: …`.
-fn build_prompt(
+pub(crate) fn build_prompt(
     model: &Bicameral,
     settings: &ChatSettings,
     earlier: &[Message],
@@ -485,7 +493,7 @@ fn build_prompt(
     })
 }
 
-fn user_message(model: &Bicameral, text: &str, attachments: Vec<Attachment>) -> Res<Message> {
+pub(crate) fn user_message(model: &Bicameral, text: &str, attachments: Vec<Attachment>) -> Res<Message> {
     if text.chars().count() > MAX_MESSAGE_CHARS {
         return Err(format!("Write a message of at most {MAX_MESSAGE_CHARS} characters"));
     }
@@ -601,6 +609,7 @@ pub(crate) fn chat_delete(app: AppHandle, studio: State<Studio>, id: String) -> 
     if path.exists() {
         std::fs::remove_file(path).map_err(|e| e.to_string())?;
     }
+    crate::trace::forget_chat(&app, &model_id, &id);
     Ok(())
 }
 
@@ -725,16 +734,39 @@ async fn respond(
     let started = std::time::Instant::now();
     let prompt = budget.prompt.clone();
     let limit = budget.reply_limit;
-    let reply = tauri::async_runtime::spawn_blocking(move || {
-        reply_with(&model, &prompt, limit, &sampling, |text| {
+    let tracing = chat.settings.trace;
+    let (reply, trace) = tauri::async_runtime::spawn_blocking(move || {
+        let token = |text: &str| {
             // Shown readably: a marker the model writes appears as "Action:" and so on.
             let text = yendory_engine::nexus::readable(text);
             let _ = app2.emit("chat-token", Token { chat: &id, text: &text });
             !stop.load(Ordering::Acquire)
-        })
+        };
+        if tracing {
+            let (reply, trace) = reply_traced(&model, &prompt, limit, &sampling, token, |e| {
+                crate::trace::emit(&app2, "chat", Some(&id), e)
+            })?;
+            Ok::<_, String>((reply, Some(trace)))
+        } else {
+            Ok((reply_with(&model, &prompt, limit, &sampling, token)?, None))
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
+    let trace = match trace {
+        Some(mut t) => {
+            if !memories.is_empty() {
+                t.notes.push(format!(
+                    "{} Study Mode memories were in front of the message (lines marked [memory]).",
+                    memories.len()
+                ));
+            }
+            let name = crate::trace::save(&app, &model_id, &chat.id, &t)?;
+            crate::trace::emit_done(&app, "chat", Some(&chat.id), Some(&name));
+            Some(name)
+        }
+        None => None,
+    };
     let text = yendory_engine::nexus::readable(&reply.text);
     // What Nova said about itself, remembered (finished replies only: a stopped reply may end
     // mid-sentence).
@@ -772,6 +804,7 @@ async fn respond(
             step,
             remembered,
             may_contradict,
+            trace,
         }),
     });
     chat.updated = now();
@@ -782,6 +815,7 @@ async fn respond(
 /// Replies that are taken back (regenerated, or after an edited message) were not said after
 /// all: what they put in memory goes.
 fn forget_replies(app: &AppHandle, model_id: &str, removed: &[Message]) -> Res<()> {
+    crate::trace::forget(app, model_id, removed);
     let ids: Vec<u64> = removed
         .iter()
         .filter_map(|m| m.info.as_ref())
@@ -1006,6 +1040,19 @@ mod tests {
             info: None,
             mark: None,
         }
+    }
+
+    /// Chats saved before brain traces existed open unchanged, with recording off.
+    #[test]
+    fn older_chats_open_without_recording() {
+        let s: ChatSettings = serde_json::from_str(r#"{"history":"all","turns":6,"memories":true}"#).unwrap();
+        assert!(!s.trace);
+        assert!(!ChatSettings::default().trace);
+        let m: Message = serde_json::from_str(
+            r#"{"role":"model","text":"Hi","time":1,"info":{"tokens":2,"millis":5,"promptTokens":4,"context":64,"replyLimit":16,"turnsUsed":0,"turnsLeftOut":0,"attachmentTokensCut":0,"memories":[],"finished":true,"stopped":false,"sampling":{},"step":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.info.unwrap().trace, None);
     }
 
     #[test]

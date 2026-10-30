@@ -962,6 +962,42 @@
     </div>
 
     <div id="neuroActivity" hidden></div>
+
+    <section class="trace-section" id="traceSection" aria-labelledby="traceHeading">
+      <h3 id="traceHeading">Per-network trace</h3>
+      <p class="note">What each of Nova's networks did while she wrote a reply, step by step. Every figure is measured from the model's own computation (the same computation that writes the reply; recording changes no value). Nothing here names a concept or describes a thought: a high attention weight or a recalled pattern is a number, and what it means is for you to judge. Figures marked <span class="trace-tag inferred">inferred</span> combine measurements in a way that needs care; everything else is <span class="trace-tag measured">measured</span>.</p>
+      <div class="trace-controls">
+        <div class="trace-pick">
+          <label for="traceChat">Conversation</label>
+          <select id="traceChat"><option value="">The question above (on its own)</option></select>
+          <label for="traceTurn" id="traceTurnLabel" hidden>Reply</label>
+          <select id="traceTurn" hidden></select>
+        </div>
+        <div class="actions">
+          <button type="button" id="traceRun" class="primary">Trace</button>
+          <button type="button" id="traceOpen" hidden>Open the recorded trace</button>
+          <button type="button" id="traceInfluenceRun" hidden>Measure each network's influence</button>
+          <label class="check-inline"><input type="checkbox" id="traceInfluence"> Also measure each network's influence (one extra pass per network)</label>
+        </div>
+        <p class="note" id="traceHint">Chats record a trace of every reply while it is written when "Record a brain trace of each reply" is on (§ 13 Chat, settings). Any earlier reply can also be replayed through the model.</p>
+        <p class="note" id="traceStorage"></p>
+      </div>
+      <div id="traceView" hidden>
+        <div id="traceHeader" class="trace-header"></div>
+        <ul id="traceNotes" class="trace-notes"></ul>
+        <div class="trace-nets" id="traceNets" role="tablist" aria-label="Network"></div>
+        <div class="trace-reply" id="traceReply" aria-label="The reply, one token per step"></div>
+        <div class="trace-scrub">
+          <button type="button" id="tracePrev" class="quiet" aria-label="Previous step">◀</button>
+          <input type="range" id="traceStep" min="0" max="0" value="0" aria-label="Step">
+          <button type="button" id="traceNext" class="quiet" aria-label="Next step">▶</button>
+          <span id="traceStepLabel" class="trace-step-label"></span>
+          <label class="check-inline" id="traceFollowWrap" hidden><input type="checkbox" id="traceFollow" checked> Follow the newest step</label>
+        </div>
+        <div id="traceChart" class="trace-chart"></div>
+        <div id="traceDetail" class="trace-detail"></div>
+      </div>
+    </section>
     <h3>Thinking tree</h3>
     <p class="note">Nova-2 does not write out reasoning steps. For every token, its lower stage runs once and its upper stage runs several thinking rounds, exchanging signals with the dense hemisphere before each round. This tree records that computation while the model answers the question above: the token chosen at each step and the alternatives it weighed, what it would have said after the lower stage and after each round, how much the dense hemisphere changed the decision, and, at the closest calls, where the runner-up would have led. Every value is measured from the model.</p>
     <div class="actions">
@@ -1056,6 +1092,8 @@
         <p class="note">A token already in the reply becomes this many times less likely (1: off).</p>
         <label class="cs-check"><input type="checkbox" id="chatMemories"> Study Mode memories in front of each message</label>
         <label class="cs-check"><input type="checkbox" id="chatRememberSelf"> Nova remembers what it says about itself</label>
+        <label class="cs-check"><input type="checkbox" id="chatTrace"> Record a brain trace of each reply</label>
+        <p class="note">Each reply is written with a per-network trace recorded (§ 11 Brain shows it, live while Nova writes). The reply is the one it would be without recording; writing takes about a fifth longer and each trace takes roughly 0.5–5 MB on disk.</p>
         <p class="note">Its own statements ("I like the sea.") go into Study Mode memory and come back as "I said: …" when they are related, so it can stay consistent from one chat to the next. A statement that may contradict an earlier one is pointed out. A reply you regenerate, or one after a message you edit, is forgotten.</p>
         <p class="note" id="chatMemoryNote"></p>
         <h4>Context window</h4>
@@ -1154,5 +1192,6 @@
 <script src="js/chat.js"></script>
 <script src="js/conversation.js"></script>
 <script src="js/datasets.js"></script>
+<script src="js/trace.js"></script>
 </body>
 </html>

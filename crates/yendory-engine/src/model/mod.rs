@@ -6,6 +6,7 @@ mod checkpoint;
 #[cfg(test)]
 mod golden;
 pub mod grow;
+pub mod inspect;
 mod linalg;
 mod measure;
 pub mod neuro;

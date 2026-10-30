@@ -36,6 +36,13 @@ pub struct KvCache {
     memory: Vec<Vec<f32>>,
     /// Nova Neuro: the relational network's slots (`slots x width`, this context only).
     slots: Vec<f32>,
+    /// Tracing only: the line (of the whole text read, counted from 0) of each token in the
+    /// window, and the line the next token belongs to (a new line starts after a line break).
+    token_lines: Vec<usize>,
+    next_line: usize,
+    /// Tracing only, Nova Neuro: the working memory's state split exactly into what each line
+    /// wrote (per layer: (line, contribution)); the contributions sum to the state.
+    pub(crate) memory_lines: Vec<Vec<(usize, Vec<f32>)>>,
 }
 
 /// Attention weights of one transformer block execution for the newest token.
@@ -46,6 +53,11 @@ pub struct StageTrace {
     pub round: usize,
     /// `[head][position]`: how much the newest token attends to each token in the window.
     pub attention: Vec<Vec<f32>>,
+    /// Length of the newest token's state after this block, and of what the block added to it.
+    #[serde(default)]
+    pub state_norm: f32,
+    #[serde(default)]
+    pub update_norm: f32,
 }
 /// One right->left injection: `h + gate * A z`.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -104,6 +116,16 @@ pub struct NeuroRound {
     /// Consolidation: the compressed code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code: Vec<f32>,
+    /// What went onto the bus: the transformer's projection (length) and the working memory's
+    /// output (length, 0 without working memory).
+    #[serde(default)]
+    pub read_norm: f32,
+    #[serde(default)]
+    pub memory_in_norm: f32,
+    /// Associative memory: entropy of the retrieval over all patterns, in bits (0 = one
+    /// pattern; log2(patterns) = all equally).
+    #[serde(default)]
+    pub retrieval_entropy: f32,
 }
 
 /// Recalled associative patterns kept in a trace, per round.
@@ -122,6 +144,17 @@ pub struct NeuroTrace {
     /// Working memory: each layer's state after this token.
     #[serde(default)]
     pub memory_state: Vec<Vec<f32>>,
+    /// Working memory: the share of each layer's channels whose update gate is above one half
+    /// (more overwritten than kept by this token).
+    #[serde(default)]
+    pub memory_overwrite: Vec<f32>,
+    /// Working memory, per layer: (line, length of what that line's tokens still contribute to
+    /// the state). Exact: the state is the sum of these contributions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_lines: Vec<Vec<(usize, f32)>>,
+    /// The line this token belongs to (counted from 0 over everything read).
+    #[serde(default)]
+    pub line: usize,
     /// Relational network: how this token was written into each slot (address weight) and the
     /// length of each slot after it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -147,6 +180,9 @@ impl KvCache {
             trace: None,
             memory: fresh_memory(model),
             slots: fresh_slots(model),
+            token_lines: Vec::new(),
+            next_line: 0,
+            memory_lines: Vec::new(),
         }
     }
     /// A cache that also records a [`Trace`] of every token's forward pass (the latest one is
@@ -195,6 +231,9 @@ impl KvCache {
         }
         // Window full: drop the oldest token and recompute the window from position 0.
         let evicted = self.tokens.remove(0);
+        if !self.token_lines.is_empty() {
+            self.token_lines.remove(0);
+        }
         self.before.extend_from_slice(&token_text(model, evicted));
         if self.before.len() > c.window_chars {
             self.before.drain(..self.before.len() - c.window_chars);
@@ -208,6 +247,11 @@ impl KvCache {
         self.sequence = 0;
         self.memory = fresh_memory(model);
         self.slots = fresh_slots(model);
+        // The window is read again: its lines are counted as before, the memory split anew.
+        let after = self.next_line;
+        self.next_line = self.token_lines.first().copied().unwrap_or(after);
+        self.token_lines.clear();
+        self.memory_lines.clear();
         let mut last = Vec::new();
         for t in window {
             last = self.step(model, t);
@@ -232,6 +276,7 @@ impl KvCache {
         let mut stage = 0;
         for i in 0..c.split {
             let mut heads = Vec::new();
+            let before = if tracing { h.clone() } else { Vec::new() };
             h = block(
                 model,
                 &mut self.stages[stage],
@@ -243,7 +288,7 @@ impl KvCache {
                 c.max_tokens,
             );
             if tracing {
-                trace.stages.push(StageTrace { block: i, round: 0, attention: heads });
+                trace.stages.push(stage_trace(i, 0, heads, &before, &h));
             }
             stage += 1;
         }
@@ -275,6 +320,7 @@ impl KvCache {
             }
             for i in c.split..c.blocks {
                 let mut heads = Vec::new();
+                let before = if tracing { h.clone() } else { Vec::new() };
                 h = block(
                     model,
                     &mut self.stages[stage],
@@ -286,7 +332,7 @@ impl KvCache {
                     c.max_tokens,
                 );
                 if tracing {
-                    trace.stages.push(StageTrace { block: i, round: round + 1, attention: heads });
+                    trace.stages.push(stage_trace(i, round + 1, heads, &before, &h));
                 }
                 stage += 1;
             }
@@ -302,12 +348,35 @@ impl KvCache {
             trace.readouts.push(logits.clone());
         }
         self.tokens.push(token);
+        if tracing {
+            self.count_line(token);
+        }
         self.sequence += 1;
         self.stats.cached_tokens = self.tokens.len();
         if tracing {
             self.trace = Some(trace);
         }
         logits
+    }
+}
+/// A block's trace: its attention and how it changed the newest token's state.
+fn stage_trace(
+    block: usize,
+    round: usize,
+    attention: Vec<Vec<f32>>,
+    before: &[f32],
+    after: &[f32],
+) -> StageTrace {
+    let update: Vec<f32> = after.iter().zip(before).map(|(a, b)| a - b).collect();
+    StageTrace { block, round, attention, state_norm: l2(after), update_norm: l2(&update) }
+}
+impl KvCache {
+    /// Tracing: the newest token's line is kept; a line break ends its line.
+    fn count_line(&mut self, token: TokenId) {
+        self.token_lines.push(self.next_line);
+        if token == b'\n' as TokenId {
+            self.next_line += 1;
+        }
     }
 }
 fn fresh_slots(model: &Bicameral) -> Vec<f32> {
@@ -354,15 +423,18 @@ impl KvCache {
         let n = model.neuro.as_ref().expect("Nova Neuro");
         let id = token as usize;
         let tracing = self.trace.is_some();
+        let line = self.next_line;
         let mut trace = Trace::default();
         let mut nt = NeuroTrace {
             modules: n.modules().iter().map(|m| m.name().to_string()).collect(),
+            line,
             ..NeuroTrace::default()
         };
         let mut h = model.val("embed")[id * c.d..(id + 1) * c.d].to_vec();
         let mut stage = 0;
         for i in 0..c.split {
             let mut heads = Vec::new();
+            let before = if tracing { h.clone() } else { Vec::new() };
             h = block(
                 model,
                 &mut self.stages[stage],
@@ -374,7 +446,7 @@ impl KvCache {
                 c.max_tokens,
             );
             if tracing {
-                trace.stages.push(StageTrace { block: i, round: 0, attention: heads });
+                trace.stages.push(stage_trace(i, 0, heads, &before, &h));
             }
             stage += 1;
         }
@@ -397,6 +469,29 @@ impl KvCache {
                 nt.memory_update.push(z.iter().sum::<f32>() / z.len().max(1) as f32);
                 if tracing {
                     nt.memory_state.push(self.memory[l].clone());
+                    let over = z.iter().filter(|&&g| g > 0.5).count();
+                    nt.memory_overwrite.push(over as f32 / z.len().max(1) as f32);
+                    // The state split by line: every earlier contribution is kept by (1 - z),
+                    // this token's line gains z * candidate (the same update, term by term).
+                    if self.memory_lines.len() <= l {
+                        self.memory_lines.push(Vec::new());
+                    }
+                    let parts = &mut self.memory_lines[l];
+                    for (_, v) in parts.iter_mut() {
+                        for (x, g) in v.iter_mut().zip(&z) {
+                            *x *= 1. - g;
+                        }
+                    }
+                    let written: Vec<f32> = z.iter().zip(&cand).map(|(g, c)| g * c).collect();
+                    match parts.last_mut() {
+                        Some((at, v)) if *at == line => {
+                            for (x, w) in v.iter_mut().zip(&written) {
+                                *x += w;
+                            }
+                        }
+                        _ => parts.push((line, written)),
+                    }
+                    nt.memory_lines.push(parts.iter().map(|(at, v)| (*at, l2(v))).collect());
                 }
                 x = self.memory[l].clone();
             }
@@ -436,6 +531,7 @@ impl KvCache {
             }
             for i in c.split..c.blocks {
                 let mut heads = Vec::new();
+                let before = if tracing { h.clone() } else { Vec::new() };
                 h = block(
                     model,
                     &mut self.stages[stage],
@@ -447,7 +543,7 @@ impl KvCache {
                     c.max_tokens,
                 );
                 if tracing {
-                    trace.stages.push(StageTrace { block: i, round: round + 1, attention: heads });
+                    trace.stages.push(stage_trace(i, round + 1, heads, &before, &h));
                 }
                 stage += 1;
             }
@@ -461,6 +557,9 @@ impl KvCache {
             trace.neuro = Some(nt);
         }
         self.tokens.push(token);
+        if tracing {
+            self.count_line(token);
+        }
         self.sequence += 1;
         self.stats.cached_tokens = self.tokens.len();
         if tracing {
@@ -493,7 +592,9 @@ impl KvCache {
         if abl.no_efferent {
             bus.fill(0.);
         }
+        r.read_norm = l2(&bus);
         if let Some(m) = memory {
+            r.memory_in_norm = l2(m);
             bus = add(&bus, m);
         }
         let bn = norm(&bus, model.val("n.bus_norm"));
@@ -530,6 +631,8 @@ impl KvCache {
                     let mut p = affine(model, "n.as_keys", None, &q);
                     softmax(&mut p);
                     if tracing {
+                        r.retrieval_entropy =
+                            -p.iter().filter(|&&w| w > 0.).map(|&w| w * w.log2()).sum::<f32>();
                         let mut top: Vec<(usize, f32)> = p.iter().copied().enumerate().collect();
                         top.sort_by(|a, b| b.1.total_cmp(&a.1));
                         r.patterns = top.into_iter().take(TRACE_PATTERNS).collect();
