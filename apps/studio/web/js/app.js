@@ -1709,8 +1709,46 @@ $("recoveryMinutes").addEventListener("change", safe(async () => {
 })();
 
 // ---- start ---------------------------------------------------------------------------------
+// ---- a model handed over by Yendory Hub (--model <id>) ---------------------------------------
+function handoffNotice(text, kind, offer) {
+  const box = $("handoffNotice");
+  box.className = "handoff-notice" + (kind ? " " + kind : "");
+  box.replaceChildren(el("span", {}, text));
+  if (offer) box.append(el("button", { type: "button", class: "small", onclick: safe(() => openHanded(offer, false), "Open model") }, `Open ${offer.name || offer.id}`));
+  box.append(el("button", { type: "button", class: "small quiet", "aria-label": "Dismiss", onclick: () => { box.hidden = true; } }, "✕"));
+  box.hidden = false;
+}
+// Opens the model as if the owner had chosen it, unless training runs or the owner opened another
+// model while answering the start-up questions (then it is offered); a problem is always said.
+async function openHanded(h, ownerChose) {
+  if (!h) return;
+  if (h.problem) { log("WARN", h.problem); handoffNotice(h.problem, "warn"); return; }
+  const label = h.name ? `“${h.name}”` : h.id;
+  if (active?.id === h.id) { $("handoffNotice").hidden = true; say(`${label} is open.`); return; }
+  if (teaching) {
+    handoffNotice(`Yendory Hub asked Studio to open ${label}, but training is running, so it was not opened. Open it when training has finished.`, "warn", h);
+    return;
+  }
+  if (ownerChose && active) {
+    handoffNotice(`Yendory Hub asked Studio to open ${label}. You opened ${active.name} while answering about unfinished training, so it stays open.`, "", h);
+    return;
+  }
+  try {
+    showActive(await invoke("open_model", { id: h.id }));
+  } catch (e) {
+    const why = `Studio was asked to open ${label}, but it could not be opened: ${typeof e === "string" ? e : e?.message || e}`;
+    log("WARN", why);
+    handoffNotice(why, "warn");
+    return;
+  }
+  $("handoffNotice").hidden = true;
+  say(`Opened ${label} from Yendory Hub.`);
+}
+
 async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
+  // A second start of Studio (desktop) hands its --model to this window.
+  await tauri.event.listen("model-handed", ev => safe(() => openHanded(ev.payload, false), "Open model")());
   await tauri.event.listen("teach-event", ev => { try { onTeachEvent(ev.payload); } catch (err) { log("ERROR", err); } });
   await tauri.event.listen("teach-finished", ev => onTeachFinished(ev.payload));
   await tauri.event.listen("compare-event", ev => { try { onCompareEvent(ev.payload); } catch (err) { log("ERROR", err); } });
@@ -1742,12 +1780,14 @@ async function boot() {
   renderFamilies();
   applyReadSettings(await invoke("page_settings", { page: "reading" }).catch(() => null));
   await restorePageSettings();
-  checkUpdate(false);
+  // Yendory Hub installs and updates Studio; Studio no longer checks for updates itself.
   await refreshCorpora();
   updateReadNote();
   const s = await invoke("status");
   showActive(s.active);
   setTeaching(s.teaching);
+  $("studioVersion").textContent = s.engine;
+  const openAtStart = active?.id ?? null;
   sizes = await invoke("model_sizes");
   renderSizes();
   invoke("training_device").then(showDevice).catch(e => log("ERROR", e));
@@ -1756,5 +1796,8 @@ async function boot() {
   await refreshLessons();
   say(`Yendory Studio ${s.engine} · every reply and measurement comes from the model itself.`);
   await refreshUnfinished(!s.teaching).catch(e => log("ERROR", e));
+  // A model handed over by Yendory Hub (--model), once the questions above are answered.
+  const handed = await invoke("handed_model").catch(e => { log("ERROR", e); return null; });
+  await openHanded(handed, (active?.id ?? null) !== openAtStart);
 }
 document.addEventListener("DOMContentLoaded", safe(boot, "Startup"));

@@ -1,6 +1,6 @@
 [package]
 name = "yendory-studio"
-version = "0.9.2"
+version = "0.9.3"
 description = "Yendory Studio: create, teach, examine and export Bicameral AI models"
 edition = "2021"
 publish = false
@@ -36,6 +36,8 @@ yendory-engine = { path = "../../../crates/yendory-engine", features = ["gpu"] }
 # Desktop: updates from the release page (signed; see src/update.rs).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+# A second copy of Studio hands its --model to the running one (src/handoff.rs).
+tauri-plugin-single-instance = "2"
 # The Hugging Face token in the system's credential store (src/credentials.rs): Windows Credential
 # Manager, the Secret Service on Linux (pure Rust), the Keychain on macOS.
 keyring = { version = "3", features = ["windows-native", "apple-native", "async-secret-service", "async-io", "crypto-rust"] }

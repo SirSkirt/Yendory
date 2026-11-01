@@ -1,8 +1,16 @@
 # Notes for development sessions
 
+## Branches
+
+This is the **`yendory-studio`** branch: Yendory Studio (`apps/studio`) and the Engine
+(`crates/yendory-engine`). Yendory Hub lives on `yendory-hub` (the default branch) and takes
+`apps/studio` and `crates/yendory-engine` from here (docs/INTEGRATION.md). Change the Engine here.
+Models are handed between the programs through Studio's models folder (`docs/HANDOFF.md` on the
+Hub branch); keep that contract when changing either side.
+
 ## Version numbers
 
-The current version is **0.9.2**. Every update (each set of changes pushed for the owner) raises
+The current version is **0.9.3**. Every update (each set of changes pushed for the owner) raises
 the last digit by one, and the last digit carries over after 9:
 
 0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → … → 0.9.9 → 1.0.0

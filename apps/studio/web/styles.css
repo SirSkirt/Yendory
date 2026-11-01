@@ -951,3 +951,8 @@ body.sidebar-collapsed .chat-dock.large { width: calc(100vw - var(--side-rail) -
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 .section-settings input[type=checkbox] { flex: none; width: 15px; height: 15px; }
+/* A model handed over by Yendory Hub: why it was not opened, or the offer to open it */
+.handoff-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px max(16px, calc((100% - 1080px) / 2)); background: var(--accent-soft); border-bottom: 1px solid var(--rule); font-size: 14px; }
+.handoff-notice.warn { background: color-mix(in srgb, var(--warn) 12%, var(--sheet)); }
+.handoff-notice > span { flex: 1 1 320px; }
+.handoff-notice[hidden] { display: none; }

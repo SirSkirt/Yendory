@@ -47,6 +47,7 @@
     <button type="button" id="sectionSettingsOpen" aria-expanded="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span id="sectionSettingsLabel">Settings</span></button>
   </div>
 </header>
+<div class="handoff-notice" id="handoffNotice" role="status" hidden></div>
 
 <main>
   <!-- Models -->
@@ -1289,7 +1290,9 @@
     </div>
     </section>
     <section class="global-group" id="global-updates" hidden aria-labelledby="global-updates-h"><h3 id="global-updates-h">Updates</h3>
-      <div class="line-form" id="updateBox">
+      <p class="note">Yendory Hub installs and updates Studio (Hub ▸ Downloads &amp; updates). This is Studio <b id="studioVersion">—</b>.</p>
+      <!-- Studio's own updater: kept, not shown (the Hub updates the suite). -->
+      <div class="line-form" id="updateBox" hidden>
       <button type="button" id="checkUpdate">Check for updates</button>
       <button type="button" id="installUpdate" class="primary" hidden>Update and restart</button>
       <span class="note" id="updateNote">Studio looks for a newer build when it starts. Updating installs over this version and keeps your models, datasets, chats and settings.</span>

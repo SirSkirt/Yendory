@@ -28,6 +28,7 @@ mod designer;
 mod downloads;
 mod filter;
 mod growth;
+mod handoff;
 mod hfparquet;
 mod imports;
 mod memory;
@@ -164,6 +165,9 @@ struct Studio {
     chat_stop: Arc<AtomicBool>,
     /// A per-network trace is being made for Analyze ▸ Brain (one at a time).
     tracing: AtomicBool,
+    /// The model the command line asked Studio to open (`--model <id>`, from Yendory Hub), until
+    /// the page takes it.
+    handed: Mutex<Option<handoff::Asked>>,
 }
 
 fn models_dir(app: &AppHandle) -> Res<PathBuf> {
@@ -2053,7 +2057,13 @@ fn status(studio: State<Studio>) -> Status {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Desktop: a second copy of Studio hands its --model to this one and closes, so two copies
+    // never write the same files (registered first, as the plugin asks).
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| handoff::second_start(app, argv)));
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Studio::default())
@@ -2084,6 +2094,9 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // A model to open, handed over by Yendory Hub (`--model <id>`); the page opens it once
+            // the start-up questions are answered.
+            *app.state::<Studio>().handed.lock().unwrap() = handoff::model_argument(std::env::args());
             // The settings file brought to this version's layout (a copy of the old one kept).
             settings::migrate(app.handle());
             // The download queue as it was left (paused unless the owner chose otherwise).
@@ -2104,6 +2117,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            handoff::handed_model,
             settings::settings_notices,
             recovery::unfinished_runs,
             recovery::interrupted_classroom,
