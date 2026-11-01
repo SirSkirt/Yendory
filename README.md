@@ -6,11 +6,11 @@ Yendory is an open-source kit for creating, teaching and exporting AI models bui
 Bicameral neural architecture first developed for Neural Nova. A model can have any name; Nova
 is the first student, not the engine.
 
-- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`dependency/engine`).
-- **Yendory Network** — the background service that runs the Engine for every program (`dependency/network`; [docs/NETWORK.md](docs/NETWORK.md)).
-- **Yendory Hub** — the front door and the suite's installer: models on shelves, and it installs and updates the Network, Studio and itself (`apps/hub`; this branch, `yendory-hub`).
-- **Yendory Studio** — the training app (`apps/studio`, on the `yendory-studio` branch).
-- **Yendory Tools** — apps and games that put trained models to work, through the Nexus technology (later).
+- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`dependency/engine`, on the `yendory-hub` branch).
+- **Yendory Network** — the background service that runs the Engine for every program (`dependency/network`, on `yendory-hub`).
+- **Yendory Hub** — the front door and the suite's installer (`apps/hub`, on `yendory-hub`).
+- **Yendory Studio** — the training app (`apps/studio`, on `yendory-studio`).
+- **Yendory Tools** — games and apps that put trained models to work, through the Nexus technology (`apps/tools`; this branch, `yendory-tools`; [docs/GAMES.md](docs/GAMES.md)).
 
 *Studio teaches. Engine thinks. Nexus connects.*
 
@@ -22,31 +22,21 @@ is the first student, not the engine.
 | Right hemisphere (Dense) | 336,320 | last 64 characters × 16 fixed features → 256 → 192, hears the left state |
 | Interconnect | 90,624 | gated right→left injections, left→right efferent path |
 
-It is deliberately not a Llama-style network. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+It is deliberately not a Llama-style network. See [docs/ARCHITECTURE.md](https://github.com/SirSkirt/Yendory/blob/yendory-hub/docs/ARCHITECTURE.md) on the `yendory-hub` branch.
 
-## Repository
+## Repository (this branch)
 
 ```
-dependency/engine/       the Engine library (no UI, no Tauri)
-dependency/network/      the Yendory Network service (runs the Engine for every program)
-dependency/client/       how a program finds, starts and talks to the Network
-apps/hub/                Yendory Hub (Tauri 2: Rust backend + HTML/JS); Studio is on the yendory-studio branch
-reference/               numpy reference = the specification, plus golden/compat generators
-tests/compat/            golden vectors, a real trained checkpoint, expected reference outputs
-docs/                    architecture, checkpoint format, verification status, the hand-off between programs
+apps/tools/              Yendory Tools (Tauri 2: Rust backend + HTML/JS)
+docs/GAMES.md            the games, turns, lessons, held-out positions and the scoreboard
+.github/                 the release workflow (Tools' signed package for Yendory Hub)
 ```
 
 ## Build and test
 
-```
-cargo test --release
-```
-
-This runs the golden-vector tests and checks the Rust Engine against the numpy reference on a
-real trained checkpoint (logits, KV-cached and uncached greedy generation, gradients, byte-exact
-checkpoint round trip). GPU training is behind the `gpu` feature:
-`cargo test --release --features gpu --test gpu` checks it against the CPU (set
-`YENDORY_GPU_SOFTWARE=1` to use a software GPU). See [docs/STATUS.md](docs/STATUS.md) for what is and is not verified.
+See [apps/tools/README.md](apps/tools/README.md): `cargo test --release` in `apps/tools/src-tauri`
+checks the games, turns, lessons and the scoreboard. The Engine's own tests (against the numpy
+reference) run on the `yendory-hub` branch.
 
 ## Principles
 

@@ -2,33 +2,35 @@
 
 ## Branches and parts
 
-This is the **`yendory-hub`** branch: Yendory Hub (`apps/hub`) and the shared parts in
-`dependency/`: the Engine (`dependency/engine`), the Yendory Network service that runs it for
-every program (`dependency/network`, docs/NETWORK.md) and the client library programs use to
-reach it (`dependency/client`). Yendory Studio lives on the `yendory-studio` branch; it is moving
-onto the Network (docs/NETWORK.md, "Studio on the Network"). Keep one Engine: there is no second
-copy to change. Models are handed between programs through Studio's models folder
-(docs/HANDOFF.md); the Hub installs everything from signed packages (docs/PACKAGES.md).
+This is the **`yendory-tools`** branch: Yendory Tools (`apps/tools`), where trained models play
+games (and later use apps) through Nexus (docs/GAMES.md). The suite's other parts live on their
+own branches: Yendory Hub and the shared `dependency/` (the Engine, the Yendory Network, the
+client library) on `yendory-hub`, Yendory Studio on `yendory-studio`.
+
+Tools holds no copy of the Engine or the Network: it uses `yendory-client` and `yendory-engine`
+from yendory-hub, pinned to one commit in `apps/tools/src-tauri/Cargo.toml`; move the pin on
+purpose. Every model is opened and every line it writes comes through the Network. Tools uses the
+Engine only for what needs no model (Nexus's announcements and actions, checking lessons). A
+change Tools needs in the Network is made on yendory-hub by whoever owns the Network there.
+
+Models are handed between programs through Studio's models folder and `--model <id>`
+(docs/HANDOFF.md on yendory-hub). Yendory Hub installs and updates Tools from its signed package
+(docs/PACKAGES.md on yendory-hub); Tools has no installer and doesn't update itself.
 
 ## Version numbers
 
-The Hub is at **0.1.2** and the Yendory Network at **0.1.0**. The Hub updates each part on its
-own, so each part's version goes up only when that part changes: a push that changes the Hub
-(`apps/hub`) raises the Hub's last digit; a push that changes `dependency/` (the Network, the
-client or the Engine the Network carries) raises the Network's. A push that changes only
-`dependency/` leaves the Hub's version alone, and no Hub update is published. The last digit
-carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0.
+Tools is at **0.1.0**. A push that changes Tools raises its last digit by one, and the last digit
+carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
+in every place that holds it:
 
-The new number goes in the same push as the changes, in every place that holds it:
+- `apps/tools/package.json`
+- `apps/tools/package-lock.json` (the two entries for `yendory-tools`)
+- `apps/tools/src-tauri/tauri.conf.json`
+- `apps/tools/src-tauri/Cargo.toml`
+- `apps/tools/src-tauri/Cargo.lock` (update with cargo, e.g. `cargo metadata`)
 
-- Hub: `apps/hub/package.json`, `apps/hub/package-lock.json` (the two entries for `yendory-hub`),
-  `apps/hub/src-tauri/tauri.conf.json`, `apps/hub/src-tauri/Cargo.toml`,
-  `apps/hub/src-tauri/Cargo.lock` (update with cargo, e.g. `cargo metadata`).
-- Network: `dependency/network/Cargo.toml` and the root `Cargo.lock`.
-
-The Engine keeps its own version (`dependency/engine/Cargo.toml`). The release workflow publishes
-each part only when its version is new: the Hub as `hub-v<version>-dev.<run>` (named after
-`apps/hub/package.json`), the Network as `network-v<version>`.
+The release workflow publishes Tools only when its version is new (`tools-v<version>` and
+`package.json` on `tools-updates`).
 
 ## Switches must work
 

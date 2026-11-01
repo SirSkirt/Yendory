@@ -1,5 +1,3 @@
 /target
-# Checkpoints and expected values the owner has not chosen to publish (see tests/compat/README.md).
-/tests/compat/private/
 __pycache__/
 *.pyc

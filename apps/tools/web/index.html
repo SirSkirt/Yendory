@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yendory Tools</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+<aside class="sidebar" id="sidebar">
+  <div class="side-top">
+    <button type="button" class="icon-button" id="sidebarToggle" aria-controls="sidebar" aria-expanded="true" title="Collapse the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9 4.5v15"/></svg></button>
+    <div class="wordmark"><span class="mark">Y</span><div class="nav-label"><h1>Yendory Tools</h1><p class="motto">Where artificial minds begin</p></div></div>
+  </div>
+  <nav class="side-nav" aria-label="Sections">
+    <div class="nav-group nav-games" role="group" aria-labelledby="nav-games"><div class="nav-head" id="nav-games" title="Games"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7" width="17" height="11" rx="4"/><path d="M8 10.5v4M6 12.5h4"/><circle cx="15.5" cy="11.5" r="1"/><circle cx="17.5" cy="13.8" r="1"/></svg><span class="nav-label">Games</span></div>
+      <button type="button" class="nav-item" data-route="games" title="Games"><span class="nav-num">1.1</span><span class="nav-label">Games</span></button>
+      <button type="button" class="nav-item" data-route="play" title="Play"><span class="nav-num">1.2</span><span class="nav-label">Play</span></button>
+      <button type="button" class="nav-item" data-route="lessons" title="Lessons"><span class="nav-num">1.3</span><span class="nav-label">Lessons</span></button>
+      <button type="button" class="nav-item" data-route="scoreboard" title="Scoreboard"><span class="nav-num">1.4</span><span class="nav-label">Scoreboard</span></button>
+    </div>
+    <div class="nav-group nav-apps" role="group" aria-labelledby="nav-apps"><div class="nav-head" id="nav-apps" title="Apps"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Apps</span></div>
+      <button type="button" class="nav-item" data-route="apps" title="Apps"><span class="nav-num">2.1</span><span class="nav-label">Apps</span></button>
+    </div>
+  </nav>
+  <div class="side-bottom">
+    <div class="side-run" id="sideRun" hidden><b id="sideRunTitle">Measuring</b><div class="meter"><div id="sideRunBar"></div></div></div>
+    <button type="button" class="nav-item side-gear" data-route="settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="nav-label">Settings</span></button>
+  </div>
+</aside>
+<div class="workspace">
+<header class="pagebar">
+  <div class="pagebar-title"><div class="crumb" id="pageCrumb">Games</div><h2 id="pageTitle">Games</h2></div>
+  <div class="pagebar-side">
+    <div class="current" id="currentModel" aria-live="polite">No model open</div>
+    <button type="button" id="openModel">Open a model…</button>
+  </div>
+</header>
+<div class="handoff-notice" id="notice" role="status" hidden></div>
+
+<main>
+  <!-- 1.1 Games -->
+  <section class="page lead-section" id="page-games">
+    <h2>Games</h2>
+    <p class="lede">Small text games a Yendory model plays through Nexus: it sees the game's rules, looks to see the position, makes a move, and gets the result back, the way it will later use apps. Every game has a perfect player, so every move the model makes can be graded.</p>
+    <div id="gameList"></div>
+  </section>
+
+  <!-- 1.2 Play -->
+  <section class="page lead-section" id="page-play" hidden>
+    <h2>Play</h2>
+    <p class="lede">A game between the open model and the perfect player, a random player, or you. Step through it turn by turn and see what the model wrote: the actions it took, the results it got, and how each move compares with the perfect player's.</p>
+    <div class="line-form">
+      <label for="playGame">Game</label><select id="playGame"></select>
+      <label for="playOpponent" id="opponentLabel">Against</label>
+      <select id="playOpponent">
+        <option value="perfect" data-note="Never makes a mistake">the perfect player</option>
+        <option value="random" data-note="Any legal move">a random player</option>
+        <option value="person" data-note="You make the other side's moves">you</option>
+      </select>
+      <label class="check-inline" id="firstWrap"><input type="checkbox" id="modelFirst" checked> The model goes first</label>
+      <button type="button" class="primary" id="newGame">New game</button>
+    </div>
+    <div class="play" id="playArea" hidden>
+      <div class="play-board">
+        <div id="board"></div>
+        <p class="status" id="playStatus">—</p>
+        <div class="actions">
+          <button type="button" class="primary" id="stepTurn">Next turn</button>
+          <button type="button" id="playOut">Play to the end</button>
+        </div>
+        <p class="note" id="playNote"></p>
+      </div>
+      <div class="play-log">
+        <h3>The game, as the model saw it</h3>
+        <div class="turns" id="turns"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 1.3 Lessons -->
+  <section class="page lead-section" id="page-lessons" hidden>
+    <h2>Lessons</h2>
+    <p class="lede">The perfect player's turns, written as lessons: in each, it looks, makes the best move and replies, exactly as the model will be asked to. One position in ten is held out and never written, so the Scoreboard can tell whether a model plays well where it was never taught.</p>
+    <div class="line-form">
+      <label for="lessonGame">Game</label><select id="lessonGame"></select>
+      <label for="lessonCount">Sessions</label><input id="lessonCount" type="number" min="1" max="20000" value="600" class="narrow-num">
+      <label for="lessonSeed">Seed</label><input id="lessonSeed" type="number" min="0" value="1" class="narrow-num">
+      <button type="button" id="previewLessons">Preview</button>
+      <button type="button" class="primary" id="saveLessons">Save lesson file…</button>
+    </div>
+    <div id="lessonSummary"></div>
+    <div class="entry">
+      <h3>Teaching</h3>
+      <p class="note">Tools will teach these lessons through the Yendory Network once the Network can train (its training job is on the way); the Hub will update the Network, and this button will start. Until then, the saved file is a Multi-Turn Conversation lesson, the format Studio's Classroom reads, with Nexus's Environment, Action and Result lines.</p>
+      <div class="actions"><button type="button" class="primary" disabled title="Waiting for the Yendory Network's training job">Teach the open model</button></div>
+    </div>
+  </section>
+
+  <!-- 1.4 Scoreboard -->
+  <section class="page lead-section" id="page-scoreboard" hidden>
+    <h2>Scoreboard</h2>
+    <p class="lede">The open model plays a game many times, half the games going first. Every move is graded: legal or not, and whether it is the perfect player's. The last columns count only held-out positions, never in any lesson, so they show what the model learned rather than what it memorised.</p>
+    <div class="line-form">
+      <label for="scoreGame">Game</label><select id="scoreGame"></select>
+      <label for="scoreGames">Games per opponent</label><input id="scoreGames" type="number" min="2" max="200" value="20" class="narrow-num">
+      <button type="button" class="primary" id="measure">Measure</button>
+      <button type="button" id="stopMeasure" hidden>Stop</button>
+    </div>
+    <div class="meter" id="measureMeter" hidden><div id="measureBar"></div></div>
+    <p class="note" id="measureNote"></p>
+    <table class="ledger" id="scoreTable">
+      <thead><tr><th>Measured</th><th>Game</th><th class="num">Step</th><th>Results</th><th class="num">Legal moves</th><th class="num">Best moves</th><th class="num">Held out: best</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- 2.1 Apps -->
+  <section class="page lead-section" id="page-apps" hidden>
+    <h2>Apps</h2>
+    <p class="lede">Apps come after games: tools a model uses through Nexus the same way it plays, such as a calculator or a notebook, where it acts, reads the result and answers. Games come first because every move in them can be graded.</p>
+  </section>
+
+  <!-- Settings -->
+  <section class="page lead-section" id="page-settings" hidden>
+    <h2>Settings</h2>
+    <h3>Yendory Network</h3>
+    <p class="network-status" id="networkStatus">—</p>
+    <p class="note">Tools holds no model of its own: it opens one through the Yendory Network, which writes every line the model writes. Yendory Hub installs and updates the Network, and Tools itself.</p>
+    <h3>Folders</h3>
+    <table class="figures">
+      <tr><th>Models</th><td id="modelsFolder">—</td></tr>
+      <tr><th>Tools</th><td id="dataFolder">—</td></tr>
+    </table>
+    <p class="note">The scoreboard keeps every measurement in the Tools folder, one file per model.</p>
+    <h3>Version</h3>
+    <p class="mono" id="versions">—</p>
+  </section>
+</main>
+</div>
+</div>
+
+<script src="js/dropdown.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

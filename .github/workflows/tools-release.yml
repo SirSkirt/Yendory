@@ -1,0 +1,180 @@
+name: tools-release
+
+# Builds Yendory Tools on GitHub's machines and publishes it as a Yendory package
+# (docs/PACKAGES.md on yendory-hub): Yendory Hub installs and updates it, so there is no
+# installer of its own.
+#
+# - Windows: tools' .exe in a signed zip; Linux: its AppImage in a signed zip.
+# - When apps/tools/package.json's version is new: a pre-release `tools-v<version>` with the
+#   packages, and `package.json` on the fixed `tools-updates` release, where the Hub looks.
+#   A pushed `tools-v*` tag or a manual run publishes whatever the version.
+# - Every package is signed with the project's updater key (repository secret
+#   TAURI_SIGNING_PRIVATE_KEY); the Hub installs nothing unsigned.
+
+on:
+  push:
+    tags: ["tools-v*"]
+    branches: ["**"]
+    paths:
+      - "apps/tools/**"
+      - ".github/workflows/tools-release.yml"
+      - ".github/scripts/package.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tools-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  check:
+    name: Tools checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux GUI libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/tools/src-tauri -> target"
+      - run: node --check apps/tools/web/js/app.js && node --check apps/tools/web/js/dropdown.js
+      - run: cargo fmt --check
+        working-directory: apps/tools/src-tauri
+      - run: cargo clippy --release --all-targets -- -D warnings
+        working-directory: apps/tools/src-tauri
+      - run: cargo test --release
+        working-directory: apps/tools/src-tauri
+
+  desktop:
+    name: ${{ matrix.name }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            platform: windows-x86_64
+          - name: Linux
+            os: ubuntu-22.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/tools/src-tauri -> target"
+      - name: Tauri CLI
+        working-directory: apps/tools
+        run: npm ci --no-audit --no-fund
+      - name: Signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is missing: packages can't be signed, and the Hub installs nothing unsigned"
+            exit 1
+          fi
+      - name: Build
+        working-directory: apps/tools
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            npx tauri build --no-bundle
+          else
+            npx tauri build --bundles appimage
+          fi
+      - name: Make and sign the package
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/tools/package.json').version")"
+          P=.github/scripts/package.py
+          B=apps/tools/src-tauri/target/release
+          mkdir -p out
+          # This version's files only (the build cache can hold earlier versions').
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            python $P zip "out/yendory-tools_${VERSION}_windows-x86_64.zip" "$B/yendory-tools.exe"
+          else
+            python3 $P zip "out/yendory-tools_${VERSION}_linux-x86_64.zip" "$B/bundle/appimage/Yendory Tools_${VERSION}_amd64.AppImage=Yendory-Tools.AppImage"
+          fi
+          for f in out/*.zip; do
+            npx --prefix apps/tools tauri signer sign "$f" > /dev/null
+            test -s "$f.sig"
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: out
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: [desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish when the version is new
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/tools/package.json').version")"
+          TAG="tools-v$VERSION"
+          PUBLISHED="$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/tools-updates/package.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"
+          if [[ "$PUBLISHED" == "$VERSION" && "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" != refs/tags/* ]]; then
+            echo "Yendory Tools $VERSION is already published"
+            exit 0
+          fi
+          mapfile -d '' FILES < <(find dist -type f -print0 | sort -z)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Tools $VERSION" --prerelease --latest=false \
+              --notes "Yendory Tools $VERSION, built from ${GITHUB_SHA:0:7}. Install and update it from Yendory Hub (Downloads & updates); these are the Hub's signed packages, not installers." \
+              "${FILES[@]}"
+          fi
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          # Tools needs the Hub's package installer (0.1.1) and the Network's model.reply (API 1, 0.1.0).
+          python3 .github/scripts/package.py manifest --id tools --name "Yendory Tools" --version "$VERSION" --notes "Yendory Tools $VERSION" \
+            --requires hub=0.1.1 --requires network=0.1.0 \
+            --platform "windows-x86_64=dist/windows-x86_64/yendory-tools_${VERSION}_windows-x86_64.zip,yendory-tools.exe,$URL/yendory-tools_${VERSION}_windows-x86_64.zip" \
+            --platform "linux-x86_64=dist/linux-x86_64/yendory-tools_${VERSION}_linux-x86_64.zip,Yendory-Tools.AppImage,$URL/yendory-tools_${VERSION}_linux-x86_64.zip" \
+            > package.json
+          cat package.json
+          if ! gh release view tools-updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create tools-updates --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Tools updates" --prerelease --latest=false \
+              --notes "Where Yendory Hub looks for Yendory Tools (package.json)."
+          fi
+          gh release upload tools-updates --repo "$GITHUB_REPOSITORY" --clobber package.json
