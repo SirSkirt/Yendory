@@ -1249,7 +1249,7 @@
 <div class="global-settings" id="globalSettings" role="dialog" aria-modal="true" aria-labelledby="globalSettingsTitle" hidden>
   <header><h2 id="globalSettingsTitle">Global Settings</h2><span class="note">How Yendory Studio works as an application. <span class="scope studio">Studio</span> these apply everywhere, on this computer.</span><button type="button" class="icon-button" id="globalSettingsClose" aria-label="Close Global Settings">✕</button></header>
   <div class="global-split">
-    <nav class="global-nav" aria-label="Global Settings"><button type="button" data-global="appearance" aria-current="true">Appearance</button><button type="button" data-global="hardware" aria-current="false">Hardware and performance</button><button type="button" data-global="safety" aria-current="false">Training safety</button><button type="button" data-global="accounts" aria-current="false">Accounts</button><button type="button" data-global="updates" aria-current="false">Updates</button><button type="button" data-global="logs" aria-current="false">Notifications and logs</button></nav>
+    <nav class="global-nav" aria-label="Global Settings"><button type="button" data-global="appearance" aria-current="true">Appearance</button><button type="button" data-global="hardware" aria-current="false">Hardware and performance</button><button type="button" data-global="safety" aria-current="false">Training safety</button><button type="button" data-global="network" aria-current="false">Yendory Network</button><button type="button" data-global="accounts" aria-current="false">Accounts</button><button type="button" data-global="updates" aria-current="false">Updates</button><button type="button" data-global="logs" aria-current="false">Notifications and logs</button></nav>
     <div class="global-body">
     <section class="global-group" id="global-appearance" aria-labelledby="global-appearance-h"><h3 id="global-appearance-h">Appearance</h3>
       <div class="line-form"><label for="uiTheme">Theme</label><select id="uiTheme"><option value="system">Follow the system</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
@@ -1281,6 +1281,11 @@
       <input type="number" id="recoveryMinutes" min="0" max="240" step="1" value="10" class="inline-num">
       <span class="note">minutes while reading or practising conversations (0: only when stopped). A recovery point is about the size of the model file (which holds the optimizer state too); a run keeps two.</span>
     </div>
+    </section>
+    <section class="global-group" id="global-network" hidden aria-labelledby="global-network-h"><h3 id="global-network-h">Yendory Network</h3>
+      <p class="note">The background service Yendory Hub installs to run the Engine for every program of the suite. While Studio is connected, the model it has open is held there too (no other program renames or deletes it meanwhile) and chat replies are written there. Training still runs in Studio. Without the Network, Studio does everything itself.</p>
+      <p id="networkStatus" class="network-status">Connecting…</p>
+      <div class="actions"><button type="button" id="networkConnect">Connect again</button></div>
     </section>
     <section class="global-group" id="global-accounts" hidden aria-labelledby="global-accounts-h"><h3 id="global-accounts-h">Accounts</h3>
       <div class="settings" id="hfTokenBox">

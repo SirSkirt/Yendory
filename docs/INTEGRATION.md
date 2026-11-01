@@ -1,40 +1,54 @@
-# Bringing Studio into the Hub branch
+# Studio, the Engine and the Yendory Network
 
-Yendory Studio lives on the `yendory-studio` branch; Yendory Hub on `yendory-hub` (the default
-branch). Both branches use the same layout, so Studio drops into the Hub branch unchanged:
+Yendory Studio lives on the `yendory-studio` branch (`apps/studio`). Yendory Hub lives on
+`yendory-hub` (the default branch), together with the parts every program shares, once:
 
-| Path | What | Owned by |
-|---|---|---|
-| `apps/studio` | Yendory Studio (Tauri 2 app: `src-tauri/`, `web/`) | `yendory-studio` |
-| `crates/yendory-engine` | The Engine, shared by Studio and the Hub | `yendory-studio` (changed here, brought to the Hub) |
-| `apps/hub` | Yendory Hub | `yendory-hub` |
+| Path on `yendory-hub` | What |
+|---|---|
+| `dependency/engine` | The Yendory Engine (Rust library) |
+| `dependency/network` | The Yendory Network: the background service that runs the Engine for every program (docs/NETWORK.md) |
+| `dependency/client` | How a program finds, starts and talks to the Network |
+| `apps/hub` | Yendory Hub |
 
-Studio finds the Engine at `../../../crates/yendory-engine` (from `apps/studio/src-tauri`), which
-is where the Hub branch keeps it too.
+## Building Studio
 
-## Taking Studio (and the Engine) into the Hub branch
+Studio takes the Engine (for work that needs no model: tokenizer, lessons, parsing, filters) and
+the client from `yendory-hub`, pinned to one commit in `apps/studio/src-tauri/Cargo.toml`:
 
+```toml
+yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "<commit>", features = ["gpu"] }
+yendory-client = { git = "https://github.com/SirSkirt/Yendory", rev = "<commit>" }
 ```
-git fetch origin yendory-studio
-git checkout yendory-hub
-git checkout origin/yendory-studio -- apps/studio crates/yendory-engine
-git commit -m "Studio <version> and Engine from yendory-studio"
-```
 
-The same two paths, taken again, bring later versions. Nothing else on `yendory-studio` is needed
-by the Hub: its `docs/`, `tests/` and workflows describe and check Studio and the Engine.
+To move to a newer Engine or Network, change `rev` (all three places) and run
+`cargo update -p yendory-engine -p yendory-client` in `apps/studio/src-tauri`. Engine changes are
+made on `yendory-hub`, in `dependency/engine`; there is no copy here.
+
+## At run time
+
+Yendory Hub installs the Network (a package, docs/PACKAGES.md). Studio connects to it when it
+starts (`Client::start_and_connect`, which starts the copy the Hub installed), and shows how in
+Global Settings ▸ Yendory Network. Without it, Studio does everything itself.
+
+What goes through the Network so far (step 1 of docs/NETWORK.md, "Studio on the Network"):
+
+- the model Studio has open is opened there too (no other program renames or deletes it);
+- chat replies (`model.chat`, streamed; Stop reaches it with `model.stop`), except replies that
+  record a brain trace, which Studio writes itself;
+- after Studio saves a model (it still trains on its own), the Network reads it again
+  (`models.reload`).
 
 ## Builds and installing
 
-Every push to `yendory-studio` that changes Studio or the Engine builds Studio
-(`studio-v<version>-dev.<run>`): its Hub packages, signed zips of the program itself
-(`yendory-studio_<version>_windows-x86_64.zip` with `yendory-studio.exe`,
-`yendory-studio_<version>_linux-x86_64.zip` with `Yendory-Studio.AppImage`), and `package.json`
-with `icon.png` on the fixed `studio-updates` release (docs/PACKAGES.md on the Hub branch;
-`.github/scripts/package.py` is the Hub branch's, unchanged). The Hub installs and updates Studio
-from there, checking each package against the project's updater key. The installers
-(`-setup.exe`, `.deb`, `.AppImage`) and `latest.json` are still published for anyone without the
-Hub. Studio does not update itself (its updater code is kept, not shown).
+Every push to `yendory-studio` that changes Studio builds it (`studio-v<version>-dev.<run>`): its
+Hub packages, signed zips of the program itself (`yendory-studio_<version>_windows-x86_64.zip`
+with `yendory-studio.exe`, `yendory-studio_<version>_linux-x86_64.zip` with
+`Yendory-Studio.AppImage`), and `package.json` with `icon.png` on the fixed `studio-updates`
+release (docs/PACKAGES.md on the Hub branch; `.github/scripts/package.py` is the Hub branch's,
+unchanged). `package.json` names the Network version Studio needs (`requires.network`), so the
+Hub installs that Network first: a Network change is pushed and published before the Studio that
+needs it. The installers (`-setup.exe`, `.deb`, `.AppImage`) and `latest.json` are still
+published for anyone without the Hub. Studio does not update itself.
 
 ## Handing a model to Studio
 

@@ -1745,8 +1745,26 @@ async function openHanded(h, ownerChose) {
   say(`Opened ${label} from Yendory Hub.`);
 }
 
+// ---- the Yendory Network (Global Settings ▸ Yendory Network) ---------------------------------
+function showNetwork(s) {
+  if (!s) return;
+  const line = $("networkStatus");
+  line.classList.toggle("ok", !!s.connected);
+  line.classList.toggle("warn", !s.connected && !s.connecting);
+  line.textContent = s.connected
+    ? `Connected: Yendory Network ${s.network} with Engine ${s.engine} (API ${s.api}).`
+    : s.connecting ? "Connecting…" : (s.problem || "Not connected.");
+  $("networkConnect").hidden = !!s.connected;
+}
+$("networkConnect").addEventListener("click", safe(async () => {
+  showNetwork({ connecting: true });
+  await invoke("network_connect");
+}, "Yendory Network"));
+
 async function boot() {
   if (!tauri?.core) { say("Open this page inside the Yendory Studio app."); return; }
+  await tauri.event.listen("network-status", ev => showNetwork(ev.payload));
+  invoke("network_status").then(showNetwork).catch(e => log("ERROR", e));
   // A second start of Studio (desktop) hands its --model to this window.
   await tauri.event.listen("model-handed", ev => safe(() => openHanded(ev.payload, false), "Open model")());
   await tauri.event.listen("teach-event", ev => { try { onTeachEvent(ev.payload); } catch (err) { log("ERROR", err); } });

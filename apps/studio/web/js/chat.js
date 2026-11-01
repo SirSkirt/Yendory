@@ -110,6 +110,7 @@
         f.attachmentTokensCut ? el("dt", {}, "Attached text") : "", f.attachmentTokensCut ? el("dd", {}, `${fmt(f.attachmentTokensCut)} tokens cut to fit`) : "",
         el("dt", {}, "Words chosen"), el("dd", {}, samplingText(f.sampling)),
         el("dt", {}, "Model"), el("dd", {}, `step ${fmt(f.step)}`),
+        el("dt", {}, "Written by"), el("dd", {}, f.writtenBy || "Yendory Studio"),
         f.memories?.length ? el("dt", {}, "Memories") : "", f.memories?.length ? el("dd", {}, el("ul", {}, ...f.memories.map(t => el("li", {}, t)))) : ""));
     return details;
   }

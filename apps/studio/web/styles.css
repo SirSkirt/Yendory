@@ -956,3 +956,6 @@ body.sidebar-collapsed .chat-dock.large { width: calc(100vw - var(--side-rail) -
 .handoff-notice.warn { background: color-mix(in srgb, var(--warn) 12%, var(--sheet)); }
 .handoff-notice > span { flex: 1 1 320px; }
 .handoff-notice[hidden] { display: none; }
+.network-status { font-size: 14.5px; padding: 6px 10px; border-left: 3px solid var(--rule-strong); background: var(--paper); }
+.network-status.ok { border-left-color: var(--good); }
+.network-status.warn { border-left-color: var(--warn); }

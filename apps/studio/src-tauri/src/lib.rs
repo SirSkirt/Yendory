@@ -32,6 +32,7 @@ mod handoff;
 mod hfparquet;
 mod imports;
 mod memory;
+mod network;
 mod neuro;
 mod practice;
 mod reading;
@@ -168,6 +169,8 @@ struct Studio {
     /// The model the command line asked Studio to open (`--model <id>`, from Yendory Hub), until
     /// the page takes it.
     handed: Mutex<Option<handoff::Asked>>,
+    /// The Yendory Network, when it is connected (src/network.rs).
+    network: network::Link,
 }
 
 fn models_dir(app: &AppHandle) -> Res<PathBuf> {
@@ -244,7 +247,10 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
 }
 
 fn save_all(app: &AppHandle, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
-    save_in(&model_dir(app, &meta.id)?, meta, model, archive)
+    save_in(&model_dir(app, &meta.id)?, meta, model, archive)?;
+    // The Network reads it again, so its replies come from the saved weights.
+    network::saved(app, &meta.id);
+    Ok(())
 }
 
 /// Saves a model, its lesson archive and meta.json into its folder (each file atomically).
@@ -305,6 +311,7 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
     *studio.active.lock().unwrap() = Some(Active { meta: meta.clone(), model, archive: Vec::new() });
+    network::opened(app, &meta.id);
     Ok(meta)
 }
 
@@ -1022,6 +1029,7 @@ fn open_model_in(app: &AppHandle, studio: &Studio, id: &str) -> Res<Meta> {
         Err(_) => Vec::new(),
     };
     *studio.active.lock().unwrap() = Some(Active { meta: meta.clone(), model, archive });
+    network::opened(app, &meta.id);
     Ok(meta)
 }
 
@@ -1139,6 +1147,7 @@ fn discard_checkpoints(app: AppHandle, studio: State<Studio>) -> Res<()> {
 fn delete_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<()> {
     not_teaching(&studio)?;
     let dir = model_dir(&app, &id)?;
+    network::closed(&studio, &id);
     let mut active = studio.active.lock().unwrap();
     if active.as_ref().is_some_and(|a| a.meta.id == id) {
         *active = None;
@@ -2110,6 +2119,8 @@ pub fn run() {
             for n in credentials::start(app.handle()) {
                 settings::notice(n);
             }
+            // The Yendory Network (installed by Yendory Hub), in the background.
+            network::connect(app.handle());
             // Updates on the desktop (Android installs APKs).
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -2118,6 +2129,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             status,
             handoff::handed_model,
+            network::network_status,
+            network::network_connect,
             settings::settings_notices,
             recovery::unfinished_runs,
             recovery::interrupted_classroom,

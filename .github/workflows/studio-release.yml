@@ -17,7 +17,6 @@ on:
     branches: ["**"]
     paths:
       - "apps/studio/**"
-      - "crates/yendory-engine/src/**"
       - ".github/workflows/studio-release.yml"
       - ".github/scripts/package.py"
   workflow_dispatch:
@@ -349,10 +348,10 @@ jobs:
           L="dist/Package-Linux/yendory-studio_${V}_linux-x86_64.zip"
           [[ -f "$W" ]] && ARGS+=(--platform "windows-x86_64=$W,yendory-studio.exe,$URL/$(basename "$W")")
           [[ -f "$L" ]] && ARGS+=(--platform "linux-x86_64=$L,Yendory-Studio.AppImage,$URL/$(basename "$L")")
-          # Studio still runs the Engine itself; it needs a Hub that installs packages and hands
-          # it models (--model).
+          # Studio needs a Hub that installs packages and hands it models (--model), and the
+          # Network version whose methods it calls (published before this Studio).
           python3 .github/scripts/package.py manifest --id studio --name "Yendory Studio" --version "$V" \
-            --notes "Yendory Studio $TAG" --requires hub=0.1.1 "${ARGS[@]}" > package.json
+            --notes "Yendory Studio $TAG" --requires hub=0.1.1 --requires network=0.1.1 "${ARGS[@]}" > package.json
           cat package.json
           cp apps/studio/src-tauri/icons/128x128.png icon.png
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber package.json

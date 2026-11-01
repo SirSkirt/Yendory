@@ -482,14 +482,23 @@ mod tests {
 
     /// An existing trained model (the real step-15,000 checkpoint) and a Nova Neuro model grow
     /// with a verified recovery checkpoint, reload at their new size, train on, and roll back
+    /// A model of Nova-2's layout with a little training (the Engine's trained checkpoint fixture
+    /// lives with the Engine, on yendory-hub).
+    fn nova2() -> Bicameral {
+        let mut m = Bicameral::new();
+        for _ in 0..3 {
+            m.train_text("U: Where is the key?\nN: In the box.\n", 3e-3, yendory_engine::Focus::Joint)
+                .unwrap();
+        }
+        m
+    }
+
     /// to exactly the weights they had, keeping the grown model too.
     #[test]
     fn grow_reload_train_and_roll_back() {
-        let fixture =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../../tests/compat/fixtures/nova2-step15000.nnova2");
         let p = yendory_engine::model::neuro::presets().into_iter().next().unwrap();
         for (tag, model, option) in [
-            ("bicameral", Bicameral::load(fixture).unwrap(), "balanced"),
+            ("bicameral", nova2(), "balanced"),
             ("neuro", Bicameral::with_design(p.config, Some(p.design), 3), "memory"),
         ] {
             let dir = temp_dir(tag);
@@ -534,10 +543,16 @@ mod tests {
     /// is still improving, memorising, over its limit or set to grow manually.
     #[test]
     fn automatic_growth_follows_the_evidence_and_the_limits() {
-        let fixture =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../../tests/compat/fixtures/nova2-step15000.nnova2");
         let dir = temp_dir("auto");
-        let mut a = active(Bicameral::load(fixture).unwrap(), "auto");
+        // As far into training as the checkpoint these rules were first checked on (step 15,000).
+        let mut a = active(
+            {
+                let mut m = nova2();
+                m.step = 15_000;
+                m
+            },
+            "auto",
+        );
         save_in(&dir, &a.meta, &a.model, &a.archive).unwrap();
         let checks = |held: &[f32], gap: f32| -> Vec<Check> {
             held.iter().map(|&h| Check { train_loss: h * (1. - gap), held_out_loss: h }).collect()

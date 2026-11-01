@@ -6,7 +6,7 @@ Yendory is an open-source kit for creating, teaching and exporting AI models bui
 Bicameral neural architecture first developed for Neural Nova. A model can have any name; Nova
 is the first student, not the engine.
 
-- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (this repo, `crates/yendory-engine`).
+- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`dependency/engine` on the `yendory-hub` branch; Studio builds against it, docs/INTEGRATION.md).
 - **Yendory Studio** — the training app for Windows, Linux and Android (`apps/studio`, Tauri).
 - **Yendory Nexus** — tools, apps and games for trained models (later).
 
@@ -25,24 +25,24 @@ It is deliberately not a Llama-style network. See [docs/ARCHITECTURE.md](docs/AR
 ## Repository
 
 ```
-crates/yendory-engine/   the Engine library (no UI, no Tauri)
 apps/studio/             Yendory Studio, the GUI app (Tauri 2: Rust backend + HTML/JS)
-reference/               numpy reference = the specification, plus golden/compat generators
-tests/compat/            golden vectors, a real trained checkpoint, expected reference outputs
 docs/                    architecture, checkpoint format, verification status
+
+The Engine (with its numpy reference and compatibility tests), the Yendory Network and its
+client are on the yendory-hub branch, in dependency/; Studio builds against them.
 ```
 
 ## Build and test
 
 ```
+cd apps/studio/src-tauri
 cargo test --release
 ```
 
-This runs the golden-vector tests and checks the Rust Engine against the numpy reference on a
-real trained checkpoint (logits, KV-cached and uncached greedy generation, gradients, byte-exact
-checkpoint round trip). GPU training is behind the `gpu` feature:
-`cargo test --release --features gpu --test gpu` checks it against the CPU (set
-`YENDORY_GPU_SOFTWARE=1` to use a software GPU). See [docs/STATUS.md](docs/STATUS.md) for what is and is not verified.
+This builds Studio against the Engine and client pinned in `apps/studio/src-tauri/Cargo.toml` and
+runs Studio's tests. The Engine's own tests (golden vectors, the numpy reference on a real trained
+checkpoint, GPU against CPU) and the Network's run on the yendory-hub branch. See
+[docs/STATUS.md](docs/STATUS.md) for what is and is not verified.
 
 ## Principles
 

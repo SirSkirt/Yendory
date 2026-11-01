@@ -122,6 +122,9 @@ pub(crate) struct ReplyInfo {
     /// Earlier memories a remembered statement may contradict.
     #[serde(default)]
     pub may_contradict: Vec<String>,
+    /// What wrote the reply: "Yendory Network <version>", or none when Studio wrote it itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_by: Option<String>,
     /// The per-network trace recorded while this reply was written (its name in the chat's
     /// trace folder), when the chat records traces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -735,7 +738,8 @@ async fn respond(
     let prompt = budget.prompt.clone();
     let limit = budget.reply_limit;
     let tracing = chat.settings.trace;
-    let (reply, trace) = tauri::async_runtime::spawn_blocking(move || {
+    let model_id2 = model_id.clone();
+    let (reply, trace, written_by) = tauri::async_runtime::spawn_blocking(move || {
         let token = |text: &str| {
             // Shown readably: a marker the model writes appears as "Action:" and so on.
             let text = yendory_engine::nexus::readable(text);
@@ -746,9 +750,16 @@ async fn respond(
             let (reply, trace) = reply_traced(&model, &prompt, limit, &sampling, token, |e| {
                 crate::trace::emit(&app2, "chat", Some(&id), e)
             })?;
-            Ok::<_, String>((reply, Some(trace)))
+            Ok::<_, String>((reply, Some(trace), None))
         } else {
-            Ok((reply_with(&model, &prompt, limit, &sampling, token)?, None))
+            // Written by the Yendory Network when it has this model open (its tokens arrive as
+            // the same "chat-token" events); else here, as before.
+            let studio = app2.state::<Studio>();
+            if let Some(r) = network::chat(&studio, &model_id2, &id, &prompt, limit, &sampling) {
+                let (reply, by) = r?;
+                return Ok((reply, None, Some(by)));
+            }
+            Ok((reply_with(&model, &prompt, limit, &sampling, token)?, None, None))
         }
     })
     .await
@@ -805,6 +816,7 @@ async fn respond(
             remembered,
             may_contradict,
             trace,
+            written_by,
         }),
     });
     chat.updated = now();
@@ -965,6 +977,7 @@ pub(crate) fn marked_dialogues(
 #[tauri::command]
 pub(crate) fn chat_stop(studio: State<Studio>) -> bool {
     studio.chat_stop.store(true, Ordering::Release);
+    crate::network::stop(&studio);
     studio.chatting.load(Ordering::Acquire)
 }
 
