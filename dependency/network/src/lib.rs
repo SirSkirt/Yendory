@@ -111,6 +111,9 @@ struct State {
     started: Instant,
     service_file: PathBuf,
     token: String,
+    /// Replies being written (`model.chat` with a `stream`), by program and stream, and the flag
+    /// that stops each one (`model.stop`).
+    streams: Mutex<HashMap<(u64, String), Arc<AtomicBool>>>,
 }
 
 impl State {
@@ -157,9 +160,24 @@ impl State {
         }
         Ok(())
     }
+    /// A model this program has open (methods on a model need it open first).
+    fn held(&self, id: &str, client: u64) -> Result<Arc<Mutex<Bicameral>>, (&'static str, String)> {
+        let open = self.open.lock().unwrap();
+        open.get(id)
+            .filter(|o| o.clients.contains(&client))
+            .map(|o| o.model.clone())
+            .ok_or_else(|| refused("Open the model first".into()))
+    }
     /// A program left: its open models are closed (dropped when no one else has them).
     fn forget_client(&self, id: u64) {
         self.clients.lock().unwrap().remove(&id);
+        self.streams.lock().unwrap().retain(|(c, _), stop| {
+            // Its replies stop at the next token.
+            if *c == id {
+                stop.store(true, Ordering::Release);
+            }
+            *c != id
+        });
         let mut open = self.open.lock().unwrap();
         for o in open.values_mut() {
             o.clients.remove(&id);
@@ -237,6 +255,7 @@ pub fn serve(opts: Options) -> Res<()> {
         started: Instant::now(),
         service_file,
         token,
+        streams: Mutex::new(HashMap::new()),
     });
     {
         let state = state.clone();
@@ -515,19 +534,77 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
             let id = str_param(p, "id")?;
             let prompt = str_param(p, "prompt")?;
             let max = p.get("maxTokens").and_then(Value::as_u64).unwrap_or(48).clamp(1, 4096) as usize;
-            let model = {
-                let open = state.open.lock().unwrap();
-                let o = open
-                    .get(id)
-                    .filter(|o| o.clients.contains(&client))
-                    .ok_or_else(|| refused("Open the model first".into()))?;
-                o.model.clone()
-            };
+            let model = state.held(id, client)?;
             let model = model.lock().unwrap();
             let (text, cut) =
                 yendory_engine::learn::eval::reply_limited(&model, prompt, max, Ablation::default())
                     .map_err(refused)?;
             Ok(json!({"text": text, "cut": cut}))
+        }
+        "model.chat" => {
+            // A conversation reply as Studio's chat writes it: the model's continuation of the
+            // prompt, each token chosen with `sampling` (Engine `Sampling`; greedy when absent),
+            // up to a line break or `maxTokens`. With `stream`, each token's text is sent to this
+            // program as it is written (`model.token` events: `stream`, `text`; the final line
+            // break is not sent), and `model.stop` with the same `stream` stops it after the
+            // token being written.
+            let id = str_param(p, "id")?;
+            let prompt = str_param(p, "prompt")?;
+            let max = p.get("maxTokens").and_then(Value::as_u64).unwrap_or(48).clamp(1, 4096) as usize;
+            let sampling: yendory_engine::learn::sampling::Sampling = match p.get("sampling") {
+                Some(s) if !s.is_null() => {
+                    serde_json::from_value(s.clone()).map_err(|e| invalid(e.to_string()))?
+                }
+                _ => Default::default(),
+            };
+            let stream: String =
+                p.get("stream").and_then(Value::as_str).unwrap_or("").chars().take(80).collect();
+            // The weights as they are now (a reload while writing does not change this reply).
+            let model = state.held(id, client)?.lock().unwrap().clone();
+            let stop = Arc::new(AtomicBool::new(false));
+            let writer = state.clients.lock().unwrap().get(&client).map(|c| c.writer.clone());
+            if !stream.is_empty() {
+                state.streams.lock().unwrap().insert((client, stream.clone()), stop.clone());
+            }
+            let reply = yendory_engine::learn::sampling::reply_with(&model, prompt, max, &sampling, |text| {
+                if let (Some(w), false) = (&writer, stream.is_empty()) {
+                    State::send(
+                        w,
+                        &json!({"event": "model.token", "data": {"stream": stream, "text": text}}),
+                    );
+                }
+                !stop.load(Ordering::Acquire)
+            });
+            if !stream.is_empty() {
+                state.streams.lock().unwrap().remove(&(client, stream.clone()));
+            }
+            let reply = reply.map_err(refused)?;
+            Ok(json!({
+                "text": reply.text, "tokens": reply.tokens, "finished": reply.finished,
+                "stopped": reply.stopped, "step": model.step, "sampling": sampling,
+            }))
+        }
+        "model.stop" => {
+            // Stops this program's reply on `stream`; false when none is being written.
+            let stream = str_param(p, "stream")?;
+            let found = state.streams.lock().unwrap().get(&(client, stream.to_string())).cloned();
+            if let Some(stop) = &found {
+                stop.store(true, Ordering::Release);
+            }
+            Ok(json!(found.is_some()))
+        }
+        "models.reload" => {
+            // Reads an open model's file again (a program that wrote it itself, such as Studio
+            // after training, says so); every program that has it open gets the new weights.
+            let id = str_param(p, "id")?;
+            let held = state.held(id, client)?;
+            let (_, model) = library::load(models, id).map_err(refused)?;
+            *held.lock().unwrap() = model;
+            let dir = library::model_dir(models, id).map_err(invalid)?;
+            let meta: Value =
+                serde_json::from_slice(&std::fs::read(dir.join("meta.json")).unwrap_or_default())
+                    .unwrap_or_default();
+            Ok(library::entry(&dir, meta))
         }
         "hello" => Err(invalid("Already connected")),
         _ => Err(("unknown_method", format!("The Yendory Network {VERSION} has no method `{method}`"))),

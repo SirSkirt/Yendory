@@ -71,9 +71,13 @@ Error codes: `unauthorized`, `invalid`, `refused` (a rule said no; the message s
 | `models.open` | `id` | the entry; the model is held in memory for this program |
 | `models.close` | `id` | `true` |
 | `model.reply` | `id`, `prompt`, `maxTokens` | `{text, cut}`; the model must be open by this program |
+| `model.chat` | `id`, `prompt`, `maxTokens`, `sampling` (optional: `temperature`, `topK`, `topP`, `repetitionPenalty`, `seed`; greedy without), `stream` (optional) | `{text, tokens, finished, stopped, step, sampling}`: Studio's chat reply, the same the Engine writes with those settings. With `stream`, each token's text arrives first as a `model.token` event to this program only (Network 0.1.1) |
+| `model.stop` | `stream` | `true` when that reply of this program was being written (it stops after the current token), else `false` (0.1.1) |
+| `models.reload` | `id` | the entry; reads the model's file again for every program that has it open, after the caller wrote it itself (Studio, while it still trains on its own) (0.1.1) |
 
-Events: `models.changed` (`id`, `change`: created, imported, renamed, deleted) and
-`network.stopping` (`reason`). A model a program opened is closed when it disconnects; another
+Events: `models.changed` (`id`, `change`: created, imported, renamed, deleted),
+`network.stopping` (`reason`), and `model.token` (`stream`, `text`; only to the program whose
+`model.chat` is being written). A model a program opened is closed when it disconnects; another
 program can't rename it, and no one can delete it, while it is open.
 
 ## Studio on the Network (the port)

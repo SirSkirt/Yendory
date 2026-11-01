@@ -161,3 +161,93 @@ fn version_is_reported_without_starting() {
     assert_eq!(v["network"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["api"], yendory_client::API);
 }
+
+/// Studio's chat through the Network: a sampled reply streamed token by token (the same reply
+/// the Engine writes on its own with those settings), stopped on request, and new weights read
+/// after Studio wrote the model file itself.
+#[test]
+fn chat_streams_stops_and_reloads() {
+    use yendory_engine::learn::sampling::{reply_with, Sampling};
+    let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let n = Network::start("chat", 60);
+    let studio = n.connect("Yendory Studio").unwrap();
+    let events = studio.take_events().unwrap();
+    let make = |name: &str| {
+        studio
+            .call(
+                "models.create",
+                json!({"name": name, "architecture": "bicameral", "preset": "nova2", "context": 256}),
+            )
+            .unwrap()["meta"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let a = make("Robin");
+    let b = make("Wren");
+    // models.changed events of the two creations.
+    while events.recv_timeout(Duration::from_millis(300)).is_ok() {}
+    let models = n.data.join(paths::STUDIO_ID).join("models");
+    let prompt = "U: hello, how are you?\nN: ";
+    let sampling = Sampling { temperature: 0.9, top_k: 40, top_p: 0.95, repetition_penalty: 1.2, seed: 7 };
+
+    // A chat needs the model open.
+    let ask = json!({"id": a, "prompt": prompt, "maxTokens": 16, "sampling": sampling, "stream": "chat-1"});
+    assert_eq!(studio.call("model.chat", ask.clone()).unwrap_err().code, "refused");
+    studio.call("models.open", json!({"id": a})).unwrap();
+    let r = studio.call("model.chat", ask).unwrap();
+    let mut streamed = String::new();
+    while let Ok(e) = events.recv_timeout(Duration::from_millis(300)) {
+        assert_eq!((e.name.as_str(), e.data["stream"].as_str()), ("model.token", Some("chat-1")));
+        streamed.push_str(e.data["text"].as_str().unwrap());
+    }
+    let local = yendory_engine::Bicameral::load(models.join(&a).join("model.nnova2")).unwrap();
+    let mut expected = String::new();
+    let reply = reply_with(&local, prompt, 16, &sampling, |t| {
+        expected.push_str(t);
+        true
+    })
+    .unwrap();
+    assert_eq!(r["text"], json!(reply.text));
+    assert_eq!(r["tokens"], json!(reply.tokens));
+    assert_eq!(r["finished"], json!(reply.finished));
+    assert_eq!(streamed, expected);
+
+    // Stopping: false for no reply, and a long reply stops soon after it is asked to.
+    assert_eq!(studio.call("model.stop", json!({"stream": "none"})).unwrap(), json!(false));
+    let studio = std::sync::Arc::new(studio);
+    let long = {
+        let studio = studio.clone();
+        let a = a.clone();
+        std::thread::spawn(move || {
+            studio.call(
+                "model.chat",
+                json!({"id": a, "prompt": prompt, "maxTokens": 4096, "stream": "chat-2",
+                       "sampling": {"temperature": 1.5, "seed": 3}}),
+            )
+        })
+    };
+    let first = events.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert_eq!(first.data["stream"], json!("chat-2"));
+    let found = studio.call("model.stop", json!({"stream": "chat-2"})).unwrap();
+    let r = long.join().unwrap().unwrap();
+    if found == json!(true) {
+        assert_eq!(r["stopped"], json!(true), "{r}");
+        assert!(r["tokens"].as_u64().unwrap() < 4096);
+    } else {
+        // It had already ended with a line break.
+        assert_eq!(r["finished"], json!(true), "{r}");
+    }
+    while events.recv_timeout(Duration::from_millis(300)).is_ok() {}
+
+    // Studio writes the model file itself (training), then asks the Network to read it again.
+    std::fs::copy(models.join(&b).join("model.nnova2"), models.join(&a).join("model.nnova2")).unwrap();
+    let greedy = json!({"id": a, "prompt": prompt, "maxTokens": 12});
+    studio.call("models.reload", json!({"id": a})).unwrap();
+    let after = studio.call("model.chat", greedy).unwrap();
+    let wren = yendory_engine::Bicameral::load(models.join(&b).join("model.nnova2")).unwrap();
+    let want = reply_with(&wren, prompt, 12, &Sampling::default(), |_| true).unwrap();
+    assert_eq!(after["text"], json!(want.text));
+    // Only a program that has the model open may reload it.
+    assert_eq!(studio.call("models.reload", json!({"id": b})).unwrap_err().code, "refused");
+}
