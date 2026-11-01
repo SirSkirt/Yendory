@@ -127,7 +127,7 @@ pub fn model_turn(
 
 /// The perfect player's turn: it looks, makes `best`, and replies. Changes the game.
 pub fn teacher_turn(game: &mut dyn Game, prompt: &str, best: &str) -> TurnRecord {
-    let mut script = vec![format!("\x05look"), format!("\x05{} {best}", game.info().verb)].into_iter();
+    let mut script = vec!["\x05look".to_string(), format!("\x05{} {best}", game.info().verb)].into_iter();
     let mut turn = model_turn(game, prompt, |_| Ok((script.next().unwrap_or_default(), false)));
     // The reply depends on how the move ended the game.
     if let Some(last) = turn.lines.last_mut() {
