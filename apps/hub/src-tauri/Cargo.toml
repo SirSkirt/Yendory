@@ -1,0 +1,42 @@
+[package]
+name = "yendory-hub"
+version = "0.1.0"
+description = "Yendory Hub: create and open models, install and launch the Yendory programs"
+edition = "2021"
+publish = false
+
+# Built on its own (not part of the root workspace) so Engine CI needs no GUI toolkits.
+[workspace]
+
+[lib]
+name = "yendory_hub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+# Installers downloaded for Studio are checked against the project's updater key before they run.
+minisign-verify = "0.2"
+base64 = "0.22"
+# Whether Studio is running (it must be closed before a model it may have open is changed).
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+# Creating and importing models: the one Engine (CPU only; the Hub never trains).
+yendory-engine = { path = "../../../crates/yendory-engine" }
+
+# Desktop: the Hub updates itself from the release page (signed; see src/update.rs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+
+# Windows: where Studio's installer recorded it (the uninstall entry in the registry).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

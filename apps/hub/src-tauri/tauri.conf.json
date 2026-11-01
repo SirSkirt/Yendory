@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Yendory Hub",
+  "version": "0.1.0",
+  "identifier": "org.yendory.hub",
+  "build": {
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Yendory Hub",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 640,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Education",
+    "shortDescription": "Create and open Yendory models, and install and launch the Yendory programs",
+    "longDescription": "Yendory Hub is the front door of the Yendory suite: make or import a model, keep your models on shelves, and open them in Yendory Studio and the other programs.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdFODg4NzFBRTE1MTU5NzAKUldSd1dWSGhHb2VJZm9ZTklCb3A5L3lqd05wS3NnV0dpM0NkRFhGRVdTYjhNQ3lCaXU4MU1DazQK",
+      "endpoints": [
+        "https://github.com/SirSkirt/Yendory/releases/download/hub-updates/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
