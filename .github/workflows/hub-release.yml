@@ -4,7 +4,8 @@ name: hub-release
 # (docs/PACKAGES.md):
 #
 # - The Hub's installers, the one thing people download: Windows `-setup.exe`, Linux `.deb` and
-#   `.AppImage`, on a pre-release `hub-v<version>-dev.<run>` (the newest 5 are kept).
+#   `.AppImage`, on a pre-release `hub-v<version>-dev.<run>` (the newest 5 are kept), when the
+#   Hub's version is new (a push changing only the Network doesn't publish the Hub again).
 # - The Hub's own packages (how it updates itself, without an installer window) and
 #   `package.json` on the fixed `hub-updates` release.
 # - The Yendory Network's packages on `network-v<version>` and `package.json` on the fixed
@@ -189,8 +190,19 @@ jobs:
             TAG="hub-v$HUB-dev.$GITHUB_RUN_NUMBER"; DEV=true
           fi
           [[ "$TAG" =~ ^hub-v[0-9A-Za-z.+-]+$ ]] || { echo "::error::Bad tag: $TAG"; exit 1; }
-          { echo "tag=$TAG"; echo "dev=$DEV"; echo "hub=$HUB"; echo "network=$NET"; } >> "$GITHUB_OUTPUT"
+          # Each part is published only when its version is new (CLAUDE.md): a push that changes
+          # only the Network raises the Network's version, and the Hub isn't published again.
+          # A pushed tag or a manual run publishes the Hub whatever its version.
+          PUBLISHED="$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/hub-updates/package.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"
+          if [[ "$DEV" == true && "$PUBLISHED" == "$HUB" ]]; then
+            echo "Yendory Hub $HUB is already published: only new parts are published"
+            HUB_NEW=false
+          else
+            HUB_NEW=true
+          fi
+          { echo "tag=$TAG"; echo "dev=$DEV"; echo "hub=$HUB"; echo "network=$NET"; echo "hub_new=$HUB_NEW"; } >> "$GITHUB_OUTPUT"
       - name: Publish the Hub
+        if: steps.tag.outputs.hub_new == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -294,7 +306,7 @@ jobs:
           fi
           gh release upload network-updates --repo "$GITHUB_REPOSITORY" --clobber package.json
       - name: Remove old development pre-releases
-        if: steps.tag.outputs.dev == 'true'
+        if: steps.tag.outputs.dev == 'true' && steps.tag.outputs.hub_new == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

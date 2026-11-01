@@ -12,10 +12,12 @@ copy to change. Models are handed between programs through Studio's models folde
 
 ## Version numbers
 
-The Hub is at **0.1.2** and the Yendory Network at **0.1.0**. Every update (each set of changes
-pushed for the owner) raises the Hub's last digit by one; the Network's goes up by one in a push
-that changes `dependency/` (the Network or the Engine it carries). The last digit carries over
-after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0.
+The Hub is at **0.1.2** and the Yendory Network at **0.1.0**. The Hub updates each part on its
+own, so each part's version goes up only when that part changes: a push that changes the Hub
+(`apps/hub`) raises the Hub's last digit; a push that changes `dependency/` (the Network, the
+client or the Engine the Network carries) raises the Network's. A push that changes only
+`dependency/` leaves the Hub's version alone, and no Hub update is published. The last digit
+carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0.
 
 The new number goes in the same push as the changes, in every place that holds it:
 
@@ -24,9 +26,9 @@ The new number goes in the same push as the changes, in every place that holds i
   `apps/hub/src-tauri/Cargo.lock` (update with cargo, e.g. `cargo metadata`).
 - Network: `dependency/network/Cargo.toml` and the root `Cargo.lock`.
 
-The Engine keeps its own version (`dependency/engine/Cargo.toml`). The release workflow names
-the Hub's builds after `apps/hub/package.json` (`hub-v<version>-dev.<run>`) and publishes the
-Network only when its version is new (`network-v<version>`).
+The Engine keeps its own version (`dependency/engine/Cargo.toml`). The release workflow publishes
+each part only when its version is new: the Hub as `hub-v<version>-dev.<run>` (named after
+`apps/hub/package.json`), the Network as `network-v<version>`.
 
 ## Switches must work
 
