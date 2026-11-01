@@ -66,6 +66,6 @@ works through the Network, the Hub refuses renames and deletes while Studio runs
 
 | Program | Reads `--model` | Hands it to a running copy | Through the Network |
 |---|---|---|---|
-| Hub 0.1.1 | — (starts programs with it) | — | yes |
+| Hub 0.1.2 | — (starts programs with it) | — | yes |
 | Studio 0.9.3 | yes | yes | not yet (docs/NETWORK.md, "Studio on the Network") |
 | Tools | not released | | |

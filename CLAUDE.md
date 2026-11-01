@@ -12,7 +12,7 @@ copy to change. Models are handed between programs through Studio's models folde
 
 ## Version numbers
 
-The Hub is at **0.1.1** and the Yendory Network at **0.1.0**. Every update (each set of changes
+The Hub is at **0.1.2** and the Yendory Network at **0.1.0**. Every update (each set of changes
 pushed for the owner) raises the Hub's last digit by one; the Network's goes up by one in a push
 that changes `dependency/` (the Network or the Engine it carries). The last digit carries over
 after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0.

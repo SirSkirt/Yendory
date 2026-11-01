@@ -138,15 +138,18 @@ jobs:
           P=.github/scripts/package.py
           mkdir -p out/installers out/packages
           B=apps/hub/src-tauri/target/release
+          # This version's files only (the build cache can hold earlier versions' installers).
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp $B/bundle/nsis/*.exe $B/bundle/nsis/*.exe.sig out/installers/
+            SETUP="$B/bundle/nsis/Yendory Hub_${HUB}_x64-setup.exe"
+            cp "$SETUP" "$SETUP.sig" out/installers/
             python $P zip "out/packages/yendory-hub_${HUB}_windows-x86_64.zip" "$B/yendory-hub.exe"
             python $P zip "out/packages/yendory-network_${NET}_windows-x86_64.zip" "target/release/yendory-network.exe"
           else
-            cp $B/bundle/deb/*.deb $B/bundle/appimage/*.AppImage $B/bundle/appimage/*.AppImage.sig out/installers/
-            APPIMAGE="$(ls $B/bundle/appimage/*.AppImage | head -n 1)"
+            DEB="$B/bundle/deb/Yendory Hub_${HUB}_amd64.deb"
+            APPIMAGE="$B/bundle/appimage/Yendory Hub_${HUB}_amd64.AppImage"
+            cp "$DEB" "$APPIMAGE" "$APPIMAGE.sig" out/installers/
             python3 $P zip "out/packages/yendory-hub_${HUB}_linux-x86_64-appimage.zip" "$APPIMAGE=Yendory-Hub.AppImage"
-            cp $B/bundle/deb/*.deb "out/packages/yendory-hub_${HUB}_amd64.deb"
+            cp "$DEB" "out/packages/yendory-hub_${HUB}_amd64.deb"
             python3 $P zip "out/packages/yendory-network_${NET}_linux-x86_64.zip" "target/release/yendory-network"
           fi
           for f in out/packages/*; do
