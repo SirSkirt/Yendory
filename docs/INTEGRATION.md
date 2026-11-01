@@ -26,10 +26,15 @@ by the Hub: its `docs/`, `tests/` and workflows describe and check Studio and th
 
 ## Builds and installing
 
-Every push to `yendory-studio` that changes Studio or the Engine builds Studio's signed installers
-(`studio-v<version>-dev.<run>`) and publishes `latest.json` on the `studio-updates` release. The Hub
-installs and updates Studio from there, checking each installer against the project's updater key.
-Studio no longer updates itself (its updater code is kept, not shown).
+Every push to `yendory-studio` that changes Studio or the Engine builds Studio
+(`studio-v<version>-dev.<run>`): its Hub packages, signed zips of the program itself
+(`yendory-studio_<version>_windows-x86_64.zip` with `yendory-studio.exe`,
+`yendory-studio_<version>_linux-x86_64.zip` with `Yendory-Studio.AppImage`), and `package.json`
+with `icon.png` on the fixed `studio-updates` release (docs/PACKAGES.md on the Hub branch;
+`.github/scripts/package.py` is the Hub branch's, unchanged). The Hub installs and updates Studio
+from there, checking each package against the project's updater key. The installers
+(`-setup.exe`, `.deb`, `.AppImage`) and `latest.json` are still published for anyone without the
+Hub. Studio does not update itself (its updater code is kept, not shown).
 
 ## Handing a model to Studio
 

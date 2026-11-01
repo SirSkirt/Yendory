@@ -19,6 +19,7 @@ on:
       - "apps/studio/**"
       - "crates/yendory-engine/src/**"
       - ".github/workflows/studio-release.yml"
+      - ".github/scripts/package.py"
   workflow_dispatch:
     inputs:
       tag:
@@ -115,6 +116,39 @@ jobs:
           name: ${{ runner.os }}
           path: ${{ matrix.files }}
           if-no-files-found: error
+      - name: Make and sign the Hub package
+        # Yendory Hub installs Studio from a signed zip of the program itself (docs/PACKAGES.md
+        # on yendory-hub): Windows the .exe, Linux the AppImage. Signed with the updater key.
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY secret: no Hub package"
+            exit 0
+          fi
+          V="$(node -p "require('./apps/studio/package.json').version")"
+          P=.github/scripts/package.py
+          B=apps/studio/src-tauri/target/release
+          mkdir -p hubpkg
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            python $P zip "hubpkg/yendory-studio_${V}_windows-x86_64.zip" "$B/yendory-studio.exe"
+          else
+            APPIMAGE="$(ls $B/bundle/appimage/*.AppImage | head -n 1)"
+            python3 $P zip "hubpkg/yendory-studio_${V}_linux-x86_64.zip" "$APPIMAGE=Yendory-Studio.AppImage"
+          fi
+          for f in hubpkg/*.zip; do
+            npx --prefix apps/studio tauri signer sign "$f" > /dev/null
+            test -s "$f.sig"
+          done
+          ls -la hubpkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Package-${{ runner.os }}
+          path: hubpkg
+          if-no-files-found: ignore
 
   android:
     name: Android APK
@@ -186,7 +220,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: apps/studio/package.json
+          sparse-checkout: |
+            apps/studio/package.json
+            apps/studio/src-tauri/icons/128x128.png
+            .github/scripts/package.py
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
@@ -230,7 +267,8 @@ jobs:
             fi
             cat <<'NOTES'
 
-          - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". It installs over an earlier version and keeps your models and settings (do not uninstall first). From 0.8.0, Studio can also update itself: § 1 Models → "Check for updates".
+          - **With Yendory Hub (recommended):** the Hub installs and updates Studio itself from the `yendory-studio_*.zip` packages here; there is nothing to download by hand.
+          - **Windows:** or run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". It installs over an earlier version and keeps your models and settings (do not uninstall first).
           - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
           - **Android:** install the `.apk` (allow installs from this source). Every build is signed with the same debug key, so it installs over the previous one and keeps your models. Keep Studio open while it teaches.
 
@@ -291,6 +329,39 @@ jobs:
               --notes "Where Yendory Studio looks for updates (latest.json). Download installers from the build releases."
           fi
           gh release upload studio-updates --repo "$GITHUB_REPOSITORY" --clobber latest.json
+      - name: Hub package manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # package.json tells Yendory Hub where Studio's signed packages are (docs/PACKAGES.md on
+          # yendory-hub); it reads it from the fixed `studio-updates` release.
+          if ! ls dist/Package-*/*.zip.sig > /dev/null 2>&1; then
+            echo "::notice::No signed Hub packages (no TAURI_SIGNING_PRIVATE_KEY secret): no package.json"
+            exit 0
+          fi
+          V="$(node -p "require('./apps/studio/package.json').version")"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          ARGS=()
+          W="dist/Package-Windows/yendory-studio_${V}_windows-x86_64.zip"
+          L="dist/Package-Linux/yendory-studio_${V}_linux-x86_64.zip"
+          [[ -f "$W" ]] && ARGS+=(--platform "windows-x86_64=$W,yendory-studio.exe,$URL/$(basename "$W")")
+          [[ -f "$L" ]] && ARGS+=(--platform "linux-x86_64=$L,Yendory-Studio.AppImage,$URL/$(basename "$L")")
+          # Studio still runs the Engine itself; it needs a Hub that installs packages and hands
+          # it models (--model).
+          python3 .github/scripts/package.py manifest --id studio --name "Yendory Studio" --version "$V" \
+            --notes "Yendory Studio $TAG" --requires hub=0.1.1 "${ARGS[@]}" > package.json
+          cat package.json
+          cp apps/studio/src-tauri/icons/128x128.png icon.png
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber package.json
+          if ! gh release view studio-updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create studio-updates --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Studio updates" --prerelease --latest=false \
+              --notes "Where Yendory Hub finds Studio (package.json). Download installers from the build releases."
+          fi
+          gh release upload studio-updates --repo "$GITHUB_REPOSITORY" --clobber package.json icon.png
       - name: Remove old development pre-releases
         if: steps.tag.outputs.dev == 'true'
         shell: bash
