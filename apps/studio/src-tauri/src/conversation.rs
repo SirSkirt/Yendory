@@ -499,7 +499,7 @@ fn converse_in(
                 "{}: no two-person conversations {}",
                 info.name,
                 if report.is_some() {
-                    "pass the filters chosen (§ 4: switch some off)"
+                    "pass the filters chosen (Train ▸ Conversation: switch some off)"
                 } else {
                     "found in it"
                 }

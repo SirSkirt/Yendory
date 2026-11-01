@@ -52,7 +52,7 @@ pub(crate) struct ChatSettings {
     /// What Nova says about itself is remembered (Study Mode memory, shown to it again as
     /// "I said: ..."), so it can stay consistent from one chat to the next.
     pub remember_self: bool,
-    /// Each reply is written with a per-network trace recorded and saved (§ 11 Brain shows it,
+    /// Each reply is written with a per-network trace recorded and saved (Analyze ▸ Brain shows it,
     /// live while it is written). Off: replies are written without tracing.
     pub trace: bool,
 }
@@ -389,7 +389,7 @@ pub(crate) fn build_prompt(
     let message_tokens = tok(&question)?;
     if context_text_tokens + message_tokens > room {
         return Err(format!(
-            "The context text and the message take {} tokens; this model reads {context} tokens at once and {reply} are kept for the reply. Shorten them, the reply length, or change the model's context on § 1 Models.",
+            "The context text and the message take {} tokens; this model reads {context} tokens at once and {reply} are kept for the reply. Shorten them, the reply length, or change the model's context on Models.",
             context_text_tokens + message_tokens
         ));
     }

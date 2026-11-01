@@ -7,55 +7,57 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="masthead">
-  <div class="wordmark">
-    <span class="mark">Y</span>
-    <div><h1>Yendory Studio</h1><p class="motto">Where artificial minds begin</p></div>
+<div class="shell">
+<aside class="sidebar" id="sidebar">
+  <div class="side-top">
+    <button type="button" class="icon-button" id="sidebarToggle" aria-controls="sidebar" aria-expanded="true" title="Collapse the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9 4.5v15"/></svg></button>
+    <div class="wordmark"><span class="mark">Y</span><div class="nav-label"><h1>Yendory Studio</h1><p class="motto">Where artificial minds begin</p></div></div>
   </div>
-  <div class="current" id="currentModel" aria-live="polite">No model open</div>
-  <nav class="contents" aria-label="Sections">
-    <button type="button" data-page="models" class="active"><span>1</span>Models</button>
-    <button type="button" data-page="reading"><span>2</span>Reading</button>
-    <button type="button" data-page="classroom"><span>3</span>Classroom</button>
-    <button type="button" data-page="conversation"><span>4</span>Conversation</button>
-    <button type="button" data-page="designer"><span>5</span>Designer</button>
-    <button type="button" data-page="courses"><span>6</span>Courses</button>
-    <button type="button" data-page="planner"><span>7</span>Planner</button>
-    <button type="button" data-page="study"><span>8</span>Study</button>
-    <button type="button" data-page="rewards"><span>9</span>Rewards</button>
-    <button type="button" data-page="exams"><span>10</span>Exams</button>
-    <button type="button" data-page="brain"><span>11</span>Brain</button>
-    <button type="button" data-page="library"><span>12</span>Library</button>
-    <button type="button" data-page="chat"><span>13</span>Chat</button>
-    <button type="button" data-page="datasets"><span>14</span>Datasets</button>
+  <nav class="side-nav" aria-label="Sections">
+      <div class="nav-group nav-train" role="group" aria-labelledby="nav-train"><div class="nav-head" id="nav-train" title="Train"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16"/><path d="M6 16l4-5 3 3 5-7"/><circle cx="18" cy="7" r="1.4"/></svg><span class="nav-label">Train</span></div>
+        <button type="button" class="nav-item" data-route="reading" title="Reading"><span class="nav-num">1.1</span><span class="nav-label">Reading</span></button>
+        <button type="button" class="nav-item" data-route="classroom" title="Classroom"><span class="nav-num">1.2</span><span class="nav-label">Classroom</span></button>
+        <button type="button" class="nav-item" data-route="conversation" title="Conversation"><span class="nav-num">1.3</span><span class="nav-label">Conversation</span></button>
+        <button type="button" class="nav-item" data-route="planner" title="Planner"><span class="nav-num">1.4</span><span class="nav-label">Planner</span></button>
+      </div>
+      <div class="nav-group nav-datasets" role="group" aria-labelledby="nav-datasets"><div class="nav-head" id="nav-datasets" title="Datasets"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6"/><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6"/></svg><span class="nav-label">Datasets</span></div>
+        <button type="button" class="nav-item" data-route="rdata" title="Reading Datasets"><span class="nav-num">2.1</span><span class="nav-label">Reading Datasets</span></button>
+        <button type="button" class="nav-item" data-route="lessons" title="Classroom Lessons"><span class="nav-num">2.2</span><span class="nav-label">Classroom Lessons</span></button>
+        <button type="button" class="nav-item" data-route="cdata" title="Conversation Datasets"><span class="nav-num">2.3</span><span class="nav-label">Conversation Datasets</span></button>
+      </div>
+      <div class="nav-group nav-analyze" role="group" aria-labelledby="nav-analyze"><div class="nav-head" id="nav-analyze" title="Analyze"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/><path d="M8 12v-2M10.5 12V8.5M13 12v-3"/></svg><span class="nav-label">Analyze</span></div>
+        <button type="button" class="nav-item" data-route="brain" title="Brain"><span class="nav-num">3.1</span><span class="nav-label">Brain</span></button>
+        <button type="button" class="nav-item" data-route="exams" title="Exams"><span class="nav-num">3.2</span><span class="nav-label">Exams</span></button>
+        <button type="button" class="nav-item" data-route="history" title="History"><span class="nav-num">3.3</span><span class="nav-label">History</span></button>
+        <button type="button" class="nav-item" data-route="progress" title="Progress"><span class="nav-num">3.4</span><span class="nav-label">Progress</span></button>
+        <button type="button" class="nav-item" data-route="memory" title="Memory"><span class="nav-num">3.5</span><span class="nav-label">Memory</span></button>
+      </div>
   </nav>
+  <div class="side-bottom">
+    <div class="side-run" id="sideRun" hidden><b id="sideRunTitle">Training</b><div class="meter"><div id="sideRunBar"></div></div></div>
+    <button type="button" class="nav-item side-gear" id="globalSettingsOpen" title="Global Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="nav-label">Settings</span></button>
+  </div>
+</aside>
+<div class="workspace">
+<header class="pagebar">
+  <div class="pagebar-title"><div class="crumb" id="pageCrumb">Train</div><h2 id="pageTitle">Reading</h2></div>
+  <div class="pagebar-side">
+    <div class="current" id="currentModel" aria-live="polite">No model open</div>
+    <button type="button" id="openModelHere" class="quiet" title="Until Yendory Hub opens models in Studio">Open a model…</button>
+    <button type="button" id="sectionSettingsOpen" aria-expanded="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span id="sectionSettingsLabel">Settings</span></button>
+  </div>
 </header>
 
 <main>
-  <!-- § 1 Models -->
+  <!-- Models -->
   <section class="page" id="page-models">
-    <h2><span class="sec">§ 1</span> Models</h2>
+    <h2>Models</h2>
     <p class="lede">Every model runs on the same Yendory Engine. Nova Bicameral is the default architecture; Nova Neuro is an experimental one you can build from specialised networks. What makes Nova different from Echo is what each one is taught.</p>
-    <div class="line-form" id="updateBox">
-      <button type="button" id="checkUpdate">Check for updates</button>
-      <button type="button" id="installUpdate" class="primary" hidden>Update and restart</button>
-      <span class="note" id="updateNote">Studio looks for a newer build when it starts. Updating installs over this version and keeps your models, datasets, chats and settings.</span>
-    </div>
+    
 
-    <div class="entry" id="unfinishedBox" hidden>
-      <h3>Unfinished training</h3>
-      <p class="note">Reading and Conversation save a recovery point on an interval and when stopped: the working model with its optimizer state and the run's position (step, random draws, best loss, curriculum stage). Continuing picks the run up where that point was, with the settings it was started with; the accepted model is never replaced by a recovery point. Nothing here continues or is deleted unless you choose it.</p>
-      <div id="unfinishedList"></div>
-    </div>
-    <div class="line-form">
-      <label for="recoveryMinutes">Recovery point every</label>
-      <input type="number" id="recoveryMinutes" min="0" max="240" step="1" value="10" class="inline-num">
-      <span class="note">minutes while reading or practising conversations (0: only when stopped). A recovery point is about the size of the model file (which holds the optimizer state too); a run keeps two.</span>
-    </div>
-    <div class="line-form">
-      <label class="check"><input type="checkbox" id="resumeDownloads"> Resume the download queue when Studio starts</label>
-      <span class="note">Off: the queue is kept as it was and waits, paused, until you resume it (a download that was running continues from where it stopped).</span>
-</div>
+    
+    
+    
 
     <div class="entry" id="activeEntry" hidden>
       <h3 id="activeName">—</h3>
@@ -80,23 +82,10 @@
 
     <h3>New model</h3>
     <p class="note">Every size keeps Nova-2's division of the brain (about 64% transformer, 28.5% dense pathway, 7.7% interconnect) and its tokenizer, context and thinking rounds. Memory is computed from the size; speed is measured on this device when you press Measure.</p>
-    <div class="line-form">
-      <label for="deviceChoice">Training device</label>
-      <select id="deviceChoice">
-        <option value="auto">Auto</option>
-      </select>
-      <label for="threadChoice">CPU threads</label>
-      <select id="threadChoice"><option value="0">All</option></select>
-      <label class="check" title="In GPU training: the Classroom's losses are computed on the GPU, the GPU confirms the answers Nova certainly writes exactly (Classroom, courses, the Planner and Conversation's Classroom guard) so the CPU writes out only the rest, and Reading keeps reading while the CPU writes a check's samples. The results are the same. Off: the CPU does the checks as before."><input type="checkbox" id="gpuChecks" checked> Check answers on the GPU</label>
-      <label class="check" title="Each reply gets room to spell its expected answer one letter at a time (its characters plus the line break; half as much again for answers graded by a key), never less than 24 tokens. A right answer never needs more, so long answers can be answered right. Off: every reply stops at 24 tokens, as before."><input type="checkbox" id="fittedReplies" checked> Fit the reply limit to each answer</label>
-      <span class="note" id="deviceNote">Looking for a GPU…</span>
-    </div>
-    <div class="line-form">
-      <button type="button" id="benchTraining">Benchmark training on this computer</button>
-      <span class="note" id="benchNote">Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest.</span>
-    </div>
-    <div id="benchResult" hidden></div>
-    <div id="memoryPanel"></div>
+    
+    
+    
+    
     <div class="line-form">
       <label for="archChoice">Architecture</label>
       <select id="archChoice">
@@ -164,11 +153,60 @@
     </table>
   </section>
 
-  <!-- § 2 Reading -->
+  <!-- Train ▸ Reading -->
   <section class="page" id="page-reading" hidden>
-    <h2><span class="sec">§ 2</span> Reading</h2>
+    <h2>Reading</h2>
     <p class="lede">Before its lessons, a model can read ordinary text and learn how words and sentences go together (pre-training). One document in ten is held out and never read; a checkpoint is kept only when it predicts those unseen documents better than every earlier one.</p>
 
+    <p class="note page-link">Corpora are added and ticked in <a href="#" data-route="rdata">Datasets ▸ Reading Datasets</a>; this run's settings are under <a href="#" data-open-settings>Reading settings</a>.</p>
+    <div class="actions">
+      <button type="button" id="read" class="primary">Read</button>
+      <button type="button" id="stopRead" disabled>Stop</button>
+      <span class="note" id="readNote">—</span>
+    </div>
+
+    <div class="entry" id="readEntry" hidden>
+      <h3 id="readTitle">Reading</h3>
+      <div id="readCard" hidden></div>
+      <p class="note memory-live" data-memory-live hidden></p>
+      <table class="ledger compact" id="evalTable">
+        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Each corpus: held-out loss and a sample written by the model</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  
+    <aside class="section-settings" id="settings-reading" hidden aria-labelledby="settings-reading-title">
+      <header><h3 id="settings-reading-title">Reading settings</h3><button type="button" class="drawer-close" data-close-settings aria-label="Close Reading settings">✕</button></header>
+      <p class="note scope-note">How a reading run works. <span class="scope studio">Studio</span> remembered on this computer; a run keeps its own copy.</p>
+      <div class="drawer-body">
+    <div class="settings">
+      <label>Tokens to read <input type="number" id="readTokens" min="10000" step="100000" value="2000000"></label>
+      <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
+      <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
+      <label>Window (tokens per example) <input type="number" id="readWindow" min="16" step="16" value="128"></label>
+      <label class="wide">Training
+        <select id="readMode">
+        <option value="joint">Joint: the whole brain reads everything (conventional)</option>
+        <option value="bicameral">Bicameral (experimental): each kind of text is read in its own stage</option>
+        </select></label>
+      <div class="wide stage-map" id="stageMap" hidden>
+        <label>Knowledge <select data-cat="knowledge"></select></label>
+        <label>Conversation <select data-cat="conversation"></select></label>
+        <label>Reasoning <select data-cat="reasoning"></select></label>
+        <label>Stories and prose <select data-cat="general"></select></label>
+      </div>
+      <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
+    </div>
+    
+      </div>
+    </aside>
+</section>
+
+
+  <!-- Datasets ▸ Reading Datasets -->
+  <section class="page" id="page-rdata" hidden>
+    <h2>Reading Datasets</h2>
+    <p class="lede">Text for Reading: download a corpus, generate practice on this computer, or use your own files. Tick the corpora a reading run uses in the table below.</p>
     <h3>Get a corpus</h3>
     <p class="note">Every source shows its licence. Records are converted into Nova's own format: conversations become <code>U:</code> / <code>N:</code> turns, problems a question with its worked answer. Large sources can be downloaded in part.</p>
     <div id="sourceList"></div>
@@ -209,45 +247,55 @@
     </table>
     <p class="note" id="corpusBudget">—</p>
 
-    <h3>Settings</h3>
-    <div class="settings">
-      <label>Tokens to read <input type="number" id="readTokens" min="10000" step="100000" value="2000000"></label>
-      <label>Batch size <input type="number" id="readBatch" min="1" max="128" value="16"></label>
-      <label>Learning rate <input type="number" id="readRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
-      <label>Window (tokens per example) <input type="number" id="readWindow" min="16" step="16" value="128"></label>
-      <label class="wide">Training
-        <select id="readMode">
-        <option value="joint">Joint: the whole brain reads everything (conventional)</option>
-        <option value="bicameral">Bicameral (experimental): each kind of text is read in its own stage</option>
-        </select></label>
-      <div class="wide stage-map" id="stageMap" hidden>
-        <label>Knowledge <select data-cat="knowledge"></select></label>
-        <label>Conversation <select data-cat="conversation"></select></label>
-        <label>Reasoning <select data-cat="reasoning"></select></label>
-        <label>Stories and prose <select data-cat="general"></select></label>
-      </div>
-      <label class="check"><input type="checkbox" id="readWords" checked> Learn word units from the corpus, up to <input type="number" id="readMaxWords" min="0" value="192" class="inline-num"> in total (the rest stay free for lessons)</label>
-    </div>
-    <div class="actions">
-      <button type="button" id="read" class="primary">Read</button>
-      <button type="button" id="stopRead" disabled>Stop</button>
-      <span class="note" id="readNote">—</span>
-    </div>
-
-    <div class="entry" id="readEntry" hidden>
-      <h3 id="readTitle">Reading</h3>
-      <div id="readCard" hidden></div>
-      <p class="note memory-live" data-memory-live hidden></p>
-      <table class="ledger compact" id="evalTable">
-        <thead><tr><th class="num">Tokens read</th><th class="num">Train loss</th><th class="num">Held-out loss</th><th class="num" title="How much the held-out loss rises when Dense's input to the transformer is cut">Dense reliance</th><th>Decision</th><th>Each corpus: held-out loss and a sample written by the model</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
+    
   </section>
 
-  <!-- § 3 Classroom -->
+  <!-- Datasets ▸ Conversation Datasets -->
+  <section class="page" id="page-cdata" hidden>
+    <h2>Conversation Datasets</h2>
+    <p class="lede">Conversations for Conversation practice: download, filter, or add your own. Tick the datasets practice uses in the table below.</p>
+    <h3>Conversations</h3>
+    <p class="note">Every conversation is kept as two named people (speakers without names get names), which lets Nova's speaker take Nova's name. Conversation corpora downloaded on Train ▸ Reading can be practised too (without names).</p>
+    <div id="convSources"></div>
+    
+    <div class="entry" id="convDownload" hidden>
+      <h4 id="convDownloadTitle">Downloading</h4>
+      <div class="meter"><div id="convDownloadBar"></div></div>
+      <p class="mono" id="convDownloadLine">—</p>
+      <div class="actions"><button type="button" id="convFinishDownload" title="Stop downloading and keep what has been downloaded and filtered so far">Finish now (keep what's downloaded)</button> <button type="button" id="convCancelDownload" title="Stop and keep nothing">Cancel download</button></div>
+      <div class="download-queue" id="convDownloadQueue"></div>
+    </div>
+    <table class="ledger" id="convTable">
+      <thead><tr><th>Practise</th><th>Dataset</th><th class="num">Size</th><th class="num">Conversations</th><th class="num" title="Use at most this many megabytes of the dataset (after the filters); empty: all of it">Use up to</th><th>Licence</th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">No conversation dataset yet. Download one above.</td></tr></tbody>
+    </table>
+    
+    <details class="entry" id="convOwn">
+      <summary><b>Your own conversations</b>: add a file, or write or paste conversations here. They are kept as a dataset you can tick above.</summary>
+      <p class="note">Write each conversation as lines of <code>Name: what they say</code> (two people; <code>U:</code> / <code>N:</code> also works), with a blank line between conversations. An optional first line <code>Situation: …</code> sets the scene. Files can be plain text in that form, or JSON / JSON lines with <code>messages</code> (<code>role</code> / <code>content</code>), <code>dialog</code> lists, or <code>&lt;|im_start|&gt;</code> text. A handful is fine: progress is then checked on the other datasets practised with it.</p>
+      <div class="actions"><button type="button" id="convImport">Add a file of conversations…</button></div>
+      <label>Name <input id="convOwnName" maxlength="80" value="My conversations" autocomplete="off"></label>
+      <textarea id="convOwnText" rows="8" placeholder="Situation: Two friends meet after school.&#10;Mia: Hi! How was the test?&#10;Leo: Hard. I didn't finish the last page.&#10;Mia: Oh no. Do you want to study together for the next one?&#10;&#10;Ann: Did you see the rain this morning?&#10;Ben: Yes, my shoes are still wet."></textarea>
+      <div class="actions"><button type="button" id="convOwnSave">Save as a dataset</button> <span class="note" id="convOwnNote"></span></div>
+    </details>
+    
+  </section>
+
+    <aside class="section-settings shared" id="settings-datasets" hidden aria-labelledby="settings-datasets-title">
+      <header><h3 id="settings-datasets-title">Datasets settings</h3><button type="button" class="drawer-close" data-close-settings aria-label="Close Datasets settings">✕</button></header>
+      <p class="note scope-note">How downloads and imports behave. <span class="scope studio">Studio</span> this computer.</p>
+      <div class="drawer-body">
+<h4>Downloads</h4>
+<div class="line-form">
+      <label class="check"><input type="checkbox" id="resumeDownloads"> Resume the download queue when Studio starts</label>
+      <span class="note">Off: the queue is kept as it was and waits, paused, until you resume it (a download that was running continues from where it stopped).</span>
+</div>
+      </div>
+    </aside>
+
+  <!-- Train ▸ Classroom -->
   <section class="page" id="page-classroom" hidden>
-    <h2><span class="sec">§ 3</span> Classroom</h2>
+    <h2>Classroom</h2>
     <p class="lede">Add Unified lesson files (.txt) or a whole course (.zip). About one unit in ten is held out by a stable hash and never taught; it is used to judge progress.</p>
 
     <div class="actions">
@@ -278,38 +326,9 @@
       </table>
     </details>
 
-    <h3>Settings</h3>
-    <div class="settings">
-      <label>Epochs <input type="number" id="optEpochs" min="1" max="50" value="4"></label>
-      <label>Batch size <input type="number" id="optBatch" min="1" max="128" value="16"></label>
-      <label>Learning rate <input type="number" id="optRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
-      <label>Pass mark (% of held-out questions exactly right) <input type="number" id="optPass" min="0" max="100" step="5" value="50"></label>
-      <label title="Training continues through epochs that improve too little to be accepted; the best checkpoint is kept and restored if training goes wrong">Flat epochs before stopping <input type="number" id="optFlat" min="1" max="20" value="4"></label>
-      <label class="wide">Bicameral education (experimental)
-        <select id="optEducation">
-        <option value="off">Off: the whole brain learns together</option>
-        <option value="dense">Stage A: Dense knowledge (Dense + interconnect learn; transformer frozen)</option>
-        <option value="transformer">Stage B: Transformer language and reasoning (Dense + interconnect frozen)</option>
-        <option value="cooperative">Stage C: Cooperation (whole brain; Dense's contribution protected)</option>
-        </select></label>
-      <label class="check"><input type="checkbox" id="optFoundation" checked> Foundation: try Dense, Transformer, Interconnect and Joint each epoch and keep the best (in a bicameral education stage: each part the stage may train, on its own and together)</label>
-      <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
-      <label class="check"><input type="checkbox" id="optTrainEarlier" checked> Train the saved earlier lessons together with the lessons taught together (they are still guarded: a checkpoint is accepted only when they are not worse)</label>
-      <label class="check"><input type="checkbox" id="optRecoverEarlier" checked> When an epoch is rejected only because earlier lessons slipped, keep training from it without saving it, so the next epochs can win them back</label>
-      <label class="check"><input type="checkbox" id="optBackoff" checked> If the first epochs only make the model worse (answers or earlier lessons lost), halve the learning rate and try again (up to 3 times)</label>
-      <label class="check" title="Experimental. When no candidate of an epoch is accepted, training continues from its most promising candidate (most held-out answers, then lowest loss) for up to this many epochs, so a change that first costs something can recover. It comes before the flat-epoch rule (continuing from a safe but flat candidate). The accepted checkpoint changes only when a later candidate passes every safeguard; when the limit is reached, training restarts from the accepted checkpoint. 0 = off (the flat-epoch rule works as before).">Probation (experimental): when an epoch is rejected, keep training from it for up to <input type="number" id="optProbation" min="0" max="10" value="0" class="inline-num"> epochs before going back to the accepted checkpoint (it is accepted only if a later epoch passes every safeguard; 0 = off)</label>
-      <label class="check"><input type="checkbox" id="optWordsNew" checked> Add new word units only from the lessons being taught, not from the saved earlier lessons trained with them (turning words Nova already reads letter by letter into new units costs answers she had)</label>
-      <label class="check"><input type="checkbox" id="optGuardGrowth"> Experimental: guard the earlier lessons' answers as Nova gave them before new words were added, so answers lost to the new words must be won back before a checkpoint is accepted</label>
-      <label class="check"><input type="checkbox" id="optEarlierEvery"> Experimental: check up to 4 answers of every earlier lesson (instead of 8 in all) and judge them by net change, so widespread forgetting is caught and a few changed answers do not block learning</label>
-      <label class="check" title="A checkpoint is rejected when the earlier lessons' held-out loss rises more than this above where the session started. 0.02 is the usual setting; 0.08 matches the allowance the new lessons' own loss gets. The answer checks still apply.">Earlier lessons' held-out loss may rise by <input type="number" id="optEarlierRise" min="0" max="1" step="0.01" value="0.02" class="inline-num"> (0.02 unless changed; the answer checks still apply)</label>
-      <label class="check" title="Experimental. Needs the check above of every earlier lesson. The earlier lessons are judged by their answers (net change); their loss may rise up to 0.25 before a checkpoint is rejected, so a small loss rise with the answers kept no longer blocks learning, and a large one still does."><input type="checkbox" id="optEarlierAnswers"> Experimental: with the check of every earlier lesson, judge the earlier lessons by their answers; their loss may rise up to 0.25 (a larger rise is still rejected)</label>
-      <label class="check"><input type="checkbox" id="optOverrideFirst"> Override checkpoint acceptance on the first epoch: accept its best candidate even if the safeguards reject it, and protect what that model knows from then on (for a model the safeguards keep refusing to move)</label>
-      <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses more held-out answers the model already gives than it gains (net safeguard; it beat the stricter "lose none" rule on two seeds, see docs/STATUS.md)</label>
-      <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
-      <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
-    </div>
+    
 <p class="note reward-status" data-reward-status>Rewards: —</p>
-<p class="note warn" id="readFirstTeach" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
+<p class="note warn" id="readFirstTeach" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (Train ▸ Reading).</p>
     <div class="actions">
       <label class="check" id="resumeBox" hidden><input type="checkbox" id="optContinue" checked> <span id="resumeText">Continue the interrupted run</span></label>
       <button type="button" id="teach" class="primary">Teach</button>
@@ -353,11 +372,47 @@
       <thead><tr><th>Lesson</th><th>Outcome</th><th class="num">Steps</th><th class="num">Exact before → after</th><th>Fingerprint</th></tr></thead>
       <tbody><tr><td colspan="5" class="empty">Nothing taught in this session yet.</td></tr></tbody>
     </table>
-  </section>
+  
+    <aside class="section-settings" id="settings-classroom" hidden aria-labelledby="settings-classroom-title">
+      <header><h3 id="settings-classroom-title">Classroom settings</h3><button type="button" class="drawer-close" data-close-settings aria-label="Close Classroom settings">✕</button></header>
+      <p class="note scope-note">How lessons are taught. <span class="scope studio">Studio</span> remembered on this computer; a run keeps its own copy.</p>
+      <div class="drawer-body">
+    <div class="settings">
+      <label>Epochs <input type="number" id="optEpochs" min="1" max="50" value="4"></label>
+      <label>Batch size <input type="number" id="optBatch" min="1" max="128" value="16"></label>
+      <label>Learning rate <input type="number" id="optRate" min="0.000001" max="0.01" step="0.0001" value="0.001"></label>
+      <label>Pass mark (% of held-out questions exactly right) <input type="number" id="optPass" min="0" max="100" step="5" value="50"></label>
+      <label title="Training continues through epochs that improve too little to be accepted; the best checkpoint is kept and restored if training goes wrong">Flat epochs before stopping <input type="number" id="optFlat" min="1" max="20" value="4"></label>
+      <label class="wide">Bicameral education (experimental)
+        <select id="optEducation">
+        <option value="off">Off: the whole brain learns together</option>
+        <option value="dense">Stage A: Dense knowledge (Dense + interconnect learn; transformer frozen)</option>
+        <option value="transformer">Stage B: Transformer language and reasoning (Dense + interconnect frozen)</option>
+        <option value="cooperative">Stage C: Cooperation (whole brain; Dense's contribution protected)</option>
+        </select></label>
+      <label class="check"><input type="checkbox" id="optFoundation" checked> Foundation: try Dense, Transformer, Interconnect and Joint each epoch and keep the best (in a bicameral education stage: each part the stage may train, on its own and together)</label>
+      <label class="check"><input type="checkbox" id="optRehearsal" checked> Rehearse earlier lessons while learning new ones</label>
+      <label class="check"><input type="checkbox" id="optTrainEarlier" checked> Train the saved earlier lessons together with the lessons taught together (they are still guarded: a checkpoint is accepted only when they are not worse)</label>
+      <label class="check"><input type="checkbox" id="optRecoverEarlier" checked> When an epoch is rejected only because earlier lessons slipped, keep training from it without saving it, so the next epochs can win them back</label>
+      <label class="check"><input type="checkbox" id="optBackoff" checked> If the first epochs only make the model worse (answers or earlier lessons lost), halve the learning rate and try again (up to 3 times)</label>
+      <label class="check" title="Experimental. When no candidate of an epoch is accepted, training continues from its most promising candidate (most held-out answers, then lowest loss) for up to this many epochs, so a change that first costs something can recover. It comes before the flat-epoch rule (continuing from a safe but flat candidate). The accepted checkpoint changes only when a later candidate passes every safeguard; when the limit is reached, training restarts from the accepted checkpoint. 0 = off (the flat-epoch rule works as before).">Probation (experimental): when an epoch is rejected, keep training from it for up to <input type="number" id="optProbation" min="0" max="10" value="0" class="inline-num"> epochs before going back to the accepted checkpoint (it is accepted only if a later epoch passes every safeguard; 0 = off)</label>
+      <label class="check"><input type="checkbox" id="optWordsNew" checked> Add new word units only from the lessons being taught, not from the saved earlier lessons trained with them (turning words Nova already reads letter by letter into new units costs answers she had)</label>
+      <label class="check"><input type="checkbox" id="optGuardGrowth"> Experimental: guard the earlier lessons' answers as Nova gave them before new words were added, so answers lost to the new words must be won back before a checkpoint is accepted</label>
+      <label class="check"><input type="checkbox" id="optEarlierEvery"> Experimental: check up to 4 answers of every earlier lesson (instead of 8 in all) and judge them by net change, so widespread forgetting is caught and a few changed answers do not block learning</label>
+      <label class="check" title="A checkpoint is rejected when the earlier lessons' held-out loss rises more than this above where the session started. 0.02 is the usual setting; 0.08 matches the allowance the new lessons' own loss gets. The answer checks still apply.">Earlier lessons' held-out loss may rise by <input type="number" id="optEarlierRise" min="0" max="1" step="0.01" value="0.02" class="inline-num"> (0.02 unless changed; the answer checks still apply)</label>
+      <label class="check" title="Experimental. Needs the check above of every earlier lesson. The earlier lessons are judged by their answers (net change); their loss may rise up to 0.25 before a checkpoint is rejected, so a small loss rise with the answers kept no longer blocks learning, and a large one still does."><input type="checkbox" id="optEarlierAnswers"> Experimental: with the check of every earlier lesson, judge the earlier lessons by their answers; their loss may rise up to 0.25 (a larger rise is still rejected)</label>
+      <label class="check"><input type="checkbox" id="optOverrideFirst"> Override checkpoint acceptance on the first epoch: accept its best candidate even if the safeguards reject it, and protect what that model knows from then on (for a model the safeguards keep refusing to move)</label>
+      <label class="check"><input type="checkbox" id="optProtect" checked> Never accept a step that loses more held-out answers the model already gives than it gains (net safeguard; it beat the stricter "lose none" rule on two seeds, see docs/STATUS.md)</label>
+      <label class="check"><input type="checkbox" id="optRetries" checked> If a lesson does not pass, find out why and retry up to 3 times with the remedy for that cause (unstable → gentler steps, forgetting → more rehearsal, overwriting known answers → balanced practice, not learned → practise the questions it gets wrong, memorised → broader study); a remedy that failed is never repeated unchanged</label>
+      <label class="check"><input type="checkbox" id="optRequeue" checked> If it still does not pass, move it to the end of the queue and try again after other lessons</label>
+    </div>
+      </div>
+    </aside>
+</section>
 
-  <!-- § 4 Conversation -->
+  <!-- Train ▸ Conversation -->
   <section class="page" id="page-conversation" hidden>
-    <h2><span class="sec">§ 4</span> Conversation</h2>
+    <h2>Conversation</h2>
     <p class="lede">After the Classroom, Nova practises real conversations between two people, so it can use what it learned to talk. It practises as a peer, not as an assistant: nothing tells it who to be, and what it thinks comes from what it has read, been taught and said itself.</p>
     <ul class="conv-points">
       <li><b>Peers, not assistants.</b> Nothing tells Nova who to be: no persona, system prompt or instruction is put in front of a conversation. Assistant-style datasets (UltraChat, OpenAssistant, LMSYS) are kept as a conversation between two named people, and their conversations in an assistant's style are left out when downloaded. Conversations where someone says they are an AI ("as an AI", "how can I assist you") are left out unless you turn that off below.</li>
@@ -369,26 +424,35 @@
       <li><b>Checked like reading.</b> A conversation has no single right reply, so progress is the loss of Nova's lines in held-out conversations it never practises. A checkpoint must also keep the Classroom answers it had.</li>
     </ul>
 
-    <h3>Conversations</h3>
-    <p class="note">Every conversation is kept as two named people (speakers without names get names), which lets Nova's speaker take Nova's name. Conversation corpora downloaded on § 2 Reading can be practised too (without names).</p>
-    <div id="convSources"></div>
-    <div class="settings" id="hfTokenBox">
-      <label>Hugging Face account: an access token, for gated datasets such as LMSYS-Chat-1M (a <b>read</b> token is enough: Hugging Face → Settings → Access Tokens → New token → Read). It is kept in your system's credential store and sent only to huggingface.co. <input type="password" id="hfToken" autocomplete="off" placeholder="hf_…"></label>
-      <div class="actions wide"><button type="button" id="hfTokenSave">Save token</button> <button type="button" id="hfTokenCheck" class="quiet">Check</button> <button type="button" id="hfTokenClear">Disconnect</button></div>
-      <p class="note" id="hfTokenNote"></p>
+    <p class="note page-link">Datasets are added and ticked in <a href="#" data-route="cdata">Datasets ▸ Conversation Datasets</a>; the filters, curriculum and checks are under <a href="#" data-open-settings>Conversation settings</a>.</p>
+    <p class="note" id="convNote">—</p>
+    <div class="actions">
+      <button type="button" id="converse" class="primary">Practise conversations</button>
+      <button type="button" id="stopConverse" disabled>Stop</button>
     </div>
-    <div class="entry" id="convDownload" hidden>
-      <h4 id="convDownloadTitle">Downloading</h4>
-      <div class="meter"><div id="convDownloadBar"></div></div>
-      <p class="mono" id="convDownloadLine">—</p>
-      <div class="actions"><button type="button" id="convFinishDownload" title="Stop downloading and keep what has been downloaded and filtered so far">Finish now (keep what's downloaded)</button> <button type="button" id="convCancelDownload" title="Stop and keep nothing">Cancel download</button></div>
-      <div class="download-queue" id="convDownloadQueue"></div>
+
+    <div class="entry" id="convEntry" hidden>
+      <h3 id="convTitle">Practising</h3>
+      <div class="meter"><div id="convBar"></div></div>
+      <p class="mono" id="convLine">—</p>
+      <table class="ledger compact" id="convChecks">
+        <thead><tr><th class="num">Tokens</th><th>Stage</th><th class="num" title="Loss of Nova's lines in held-out conversations: the mean, then short exchanges · a few turns · whole conversations">Held-out loss</th><th class="num" title="How much the earlier turns lower the loss of replies that use them (higher: she listens more)">Listening</th><th class="num" title="Context-test pairs passed (both versions right)">Context</th><th class="num" title="Understanding-test pairs passed: teacher-forced (her earlier turns as written) · free-running (her own earlier turns)">Understanding</th><th class="num" title="Held-out Classroom questions right; lost (right before practice, wrong now) and gained">Classroom</th><th class="num" title="Held-out loss on text the model read">Reading</th><th>Decision</th><th>Nova's replies</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
-    <table class="ledger" id="convTable">
-      <thead><tr><th>Practise</th><th>Dataset</th><th class="num">Size</th><th class="num">Conversations</th><th class="num" title="Use at most this many megabytes of the dataset (after the filters); empty: all of it">Use up to</th><th>Licence</th></tr></thead>
-      <tbody><tr><td colspan="6" class="empty">No conversation dataset yet. Download one above.</td></tr></tbody>
-    </table>
-    <fieldset class="entry" id="convFilters">
+
+    <h3>Making up your mind</h3>
+    <p class="note">A built-in Classroom course for deciding with reasons: choosing what fits, saying no when there is a reason to, keeping to what it said before, changing its mind for a reason, and keeping its view when someone else has none. Every choice follows from what the question says, never from a preference written into the lessons, so it teaches how to decide, not what to like. Teach it in the Classroom before or between conversation practice.</p>
+    <div class="actions"><button type="button" id="convAddCourse">Add “Making up your mind” to the Classroom lessons</button></div>
+
+    <h3>Earlier practice</h3>
+    <div id="convHistory"><p class="empty">None yet.</p></div>
+  
+    <aside class="section-settings" id="settings-conversation" hidden aria-labelledby="settings-conversation-title">
+      <header><h3 id="settings-conversation-title">Conversation settings</h3><button type="button" class="drawer-close" data-close-settings aria-label="Close Conversation settings">✕</button></header>
+      <p class="note scope-note">How conversation practice works. <span class="scope studio">Studio</span> remembered on this computer; a run keeps its own copy. Which datasets are practised is chosen in Datasets ▸ Conversation Datasets.</p>
+      <div class="drawer-body">
+<fieldset class="entry" id="convFilters">
       <legend>Quality filter for downloaded datasets</legend>
       <p class="note">Downloads keep every usable conversation; these switches decide what practice uses (your own datasets are never filtered). Conversations that hold one of Yendory's tests, and ones that cannot be read as two people taking turns, are always left out.</p>
       <label class="check"><input type="checkbox" id="convFAssistant" checked> Assistant style (an assistant's phrases, lists, one side answering at length)</label>
@@ -400,19 +464,12 @@
       <label class="check"><input type="checkbox" id="convFDuplicates" checked> Duplicates</label>
       <div class="line-form"><button type="button" id="convFilterCount">Count what practice would use</button> <span class="note" id="convFilterNote"></span></div>
     </fieldset>
-    <details class="entry" id="convOwn">
-      <summary><b>Your own conversations</b>: add a file, or write or paste conversations here. They are kept as a dataset you can tick above.</summary>
-      <p class="note">Write each conversation as lines of <code>Name: what they say</code> (two people; <code>U:</code> / <code>N:</code> also works), with a blank line between conversations. An optional first line <code>Situation: …</code> sets the scene. Files can be plain text in that form, or JSON / JSON lines with <code>messages</code> (<code>role</code> / <code>content</code>), <code>dialog</code> lists, or <code>&lt;|im_start|&gt;</code> text. A handful is fine: progress is then checked on the other datasets practised with it.</p>
-      <div class="actions"><button type="button" id="convImport">Add a file of conversations…</button></div>
-      <label>Name <input id="convOwnName" maxlength="80" value="My conversations" autocomplete="off"></label>
-      <textarea id="convOwnText" rows="8" placeholder="Situation: Two friends meet after school.&#10;Mia: Hi! How was the test?&#10;Leo: Hard. I didn't finish the last page.&#10;Mia: Oh no. Do you want to study together for the next one?&#10;&#10;Ann: Did you see the rain this morning?&#10;Ben: Yes, my shoes are still wet."></textarea>
-      <div class="actions"><button type="button" id="convOwnSave">Save as a dataset</button> <span class="note" id="convOwnNote"></span></div>
-    </details>
-    <label class="check conv-chats"><input type="checkbox" id="convSkipAi" checked> While practising, also leave out conversations where someone says they are an AI or an assistant ("as an AI", "a language model", "how can I assist you"), so Nova never practises saying that about herself (even with the filter above off). Assistant-style conversations without such lines are decided by the filter above.</label>
+<h4>Practice</h4>
+<label class="check conv-chats"><input type="checkbox" id="convSkipAi" checked> While practising, also leave out conversations where someone says they are an AI or an assistant ("as an AI", "a language model", "how can I assist you"), so Nova never practises saying that about herself (even with the filter above off). Assistant-style conversations without such lines are decided by the filter above.</label>
     <label class="check conv-chats"><input type="checkbox" id="convBalanced"> Experimental: also keep the best <b>balanced</b> checkpoint, besides the best language one: among checkpoints that learned and kept the Classroom answers and reading, the one passing the most context tests, then listening best. It is saved as a model of its own, so the two can be compared; context and listening never reject a checkpoint.</label>
-    <label class="check conv-chats"><input type="checkbox" id="convChats" checked> Also practise Nova's replies you marked <b>consistent</b> in § 13 Chat <span class="note" id="convChatCount"></span></label>
+    <label class="check conv-chats"><input type="checkbox" id="convChats" checked> Also practise Nova's replies you marked <b>consistent</b> in Chat <span class="note" id="convChatCount"></span></label>
 
-    <h3>Settings</h3>
+    <h4>Run</h4>
     <div class="settings">
       <label>Tokens to practise <input type="number" id="convTokens" min="10000" step="100000" value="2000000"></label>
       <label>Batch size <input type="number" id="convBatch" min="1" max="128" value="16"></label>
@@ -448,33 +505,14 @@
     <p class="note">The <b>context tests</b> are pairs of conversations that differ in one earlier fact: a name, where someone went, a fact that changed, a correction, who "she" is, a follow-up, or something never said ("I do not know" is right). A pair passes only when Nova's answer follows the fact in both. They use names, places and things the listening practice never uses, and are never trained on, so they measure whether listening generalises.</p>
     <p class="note">The <b>understanding tests</b> check that Nova follows the conversation itself: greeted again (greet back, not "I do not know"), the same question in words she never practised, who said what, the latest of two questions, what was said before and after a change of topic, a misunderstanding put right, and a question asked again. Each is asked two ways: <b>teacher-forced</b> (her earlier turns as the test writes them) and <b>free-running</b> (her earlier turns are the ones she wrote herself, so an early mistake stays in the conversation).</p>
     <p class="note">The <b>example conversations</b> are written by hand: thirteen kinds (greetings, how are you, names, remembering, who said what, follow-ups, the same question in other words, the latest message, topic changes, misunderstandings, not knowing, plans, goodbyes), three different conversations of each kind at each level: short exchanges, a few turns and whole conversations. A level is practised once the curriculum reaches it.</p>
-    <p class="note" id="convNote">—</p>
-    <div class="actions">
-      <button type="button" id="converse" class="primary">Practise conversations</button>
-      <button type="button" id="stopConverse" disabled>Stop</button>
-    </div>
+    
+      </div>
+    </aside>
+</section>
 
-    <div class="entry" id="convEntry" hidden>
-      <h3 id="convTitle">Practising</h3>
-      <div class="meter"><div id="convBar"></div></div>
-      <p class="mono" id="convLine">—</p>
-      <table class="ledger compact" id="convChecks">
-        <thead><tr><th class="num">Tokens</th><th>Stage</th><th class="num" title="Loss of Nova's lines in held-out conversations: the mean, then short exchanges · a few turns · whole conversations">Held-out loss</th><th class="num" title="How much the earlier turns lower the loss of replies that use them (higher: she listens more)">Listening</th><th class="num" title="Context-test pairs passed (both versions right)">Context</th><th class="num" title="Understanding-test pairs passed: teacher-forced (her earlier turns as written) · free-running (her own earlier turns)">Understanding</th><th class="num" title="Held-out Classroom questions right; lost (right before practice, wrong now) and gained">Classroom</th><th class="num" title="Held-out loss on text the model read">Reading</th><th>Decision</th><th>Nova's replies</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <h3>Making up your mind</h3>
-    <p class="note">A built-in Classroom course for deciding with reasons: choosing what fits, saying no when there is a reason to, keeping to what it said before, changing its mind for a reason, and keeping its view when someone else has none. Every choice follows from what the question says, never from a preference written into the lessons, so it teaches how to decide, not what to like. Teach it in the Classroom before or between conversation practice.</p>
-    <div class="actions"><button type="button" id="convAddCourse">Add “Making up your mind” to the Classroom lessons</button></div>
-
-    <h3>Earlier practice</h3>
-    <div id="convHistory"><p class="empty">None yet.</p></div>
-  </section>
-
-  <!-- § 5 Lesson Designer -->
+  <!-- Datasets ▸ Classroom Lessons Lesson Designer -->
   <section class="page" id="page-designer" hidden>
-    <h2><span class="sec">§ 5</span> Lesson Designer</h2>
+    <h2>Lesson Designer</h2>
     <p class="lede">Turn a text dataset into a lesson. Yendory proposes blocks from the file's layout (headings, questions and answers, worked examples); the proposal is only a draft, and you decide what the lesson finally contains. Finished lessons go to the Classroom or into a course.</p>
     <div class="actions">
       <button type="button" id="importDesign" class="primary">Import a .txt dataset…</button>
@@ -538,9 +576,9 @@
     </div>
   </section>
 
-  <!-- § 6 Courses -->
+  <!-- Datasets ▸ Classroom Lessons -->
   <section class="page" id="page-courses" hidden>
-    <h2><span class="sec">§ 6</span> Courses</h2>
+    <h2>Courses</h2>
     <p class="lede">A course is a set of lesson files with pass marks, extra practice material held in reserve, and a final exam. Its grade is 70% lessons (re-graded at the end of the course) and 30% final exam; it passes when the grade reaches the average of its lesson pass marks.</p>
     <p class="note">File names decide everything: the first number orders the lessons; the words <b>Dense</b>, <b>Transformer</b> or <b>Co-op</b> choose Stage A, B or C; a file named <b>Practice</b> is extra practice for the lesson with the same number and stage (an <code>[Extra Practice]</code> block inside a lesson works too); a file named <b>Exam</b> is the final exam, with <code>[Dense]</code>, <code>[Transformer]</code>, <code>[Co-op]</code> or <code>[Whole Brain]</code> sections. Answers may list accepted forms and rules, separated by <code>|</code>: <code>animal | creature | !plant</code> (Dense: keywords, a <code>!</code> word must not appear) or <code>A robin is an animal. | must: robin animal | never: not</code> (sentences). Training uses the first form.</p>
     <div class="actions"><button type="button" id="newCourse" class="primary">New course…</button></div>
@@ -605,10 +643,10 @@
     </div>
   </section>
 
-  <!-- § 7 Planner -->
+  <!-- Train ▸ Planner -->
   <section class="page" id="page-planner" hidden>
-    <h2><span class="sec">§ 7</span> Planner</h2>
-    <p class="lede">A plan trains one model unattended, in order: reading (§ 2), saved courses (§ 3, § 6) and conversation practice (§ 4). Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
+    <h2>Planner</h2>
+    <p class="lede">A plan trains one model unattended, in order: reading (Train ▸ Reading), saved courses (Train ▸ Classroom, Datasets ▸ Classroom Lessons) and conversation practice (Train ▸ Conversation). Each lesson is taught in its own stage. A failed course gets up to three remediation attempts with different strategies; if it still fails, the plan stops there and the model keeps its best checkpoint. Progress is saved after every lesson, so a stopped plan resumes where it left off.</p>
     <div class="actions"><button type="button" id="newPlan" class="primary">New plan for the open model…</button></div>
     <table class="ledger" id="planList">
       <thead><tr><th>Plan</th><th>Model</th><th class="num">Courses passed</th><th>Status</th><th></th></tr></thead>
@@ -624,12 +662,12 @@
       </table>
       <div class="line-form"><select id="planAddCourse"></select><button type="button" id="planAdd">Add course</button></div>
       <div class="line-form">
-        <button type="button" id="planAddReading">Add Reading (the § 2 settings)</button>
-        <button type="button" id="planAddConversation">Add Conversation practice (the § 4 settings)</button>
+        <button type="button" id="planAddReading">Add Reading (the Train ▸ Reading settings)</button>
+        <button type="button" id="planAddConversation">Add Conversation practice (the Train ▸ Conversation settings)</button>
         <span class="note">A plan can read, then teach courses, then practise conversation: each step is taken in order, with the settings it was added with.</span>
       </div>
       <p class="note reward-status" data-reward-status>Rewards: —</p>
-      <p class="note warn" id="readFirstPlan" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (§ 2 Reading).</p>
+      <p class="note warn" id="readFirstPlan" hidden>This model has not read anything yet. A model without reading has no general English, so lessons whose held-out questions need it rarely pass; it can still be taught (for experiments). Reading first is recommended (Train ▸ Reading).</p>
       <div class="actions">
         <button type="button" id="planStart" class="primary">Start</button>
         <button type="button" id="planStop" disabled>Stop</button>
@@ -649,9 +687,9 @@
     </div>
   </section>
 
-  <!-- § 8 Study -->
+  <!-- Analyze ▸ Memory -->
   <section class="page" id="page-study" hidden>
-    <h2><span class="sec">§ 8</span> Study</h2>
+    <h2>Study</h2>
     <p class="lede">Study Mode gives Nova a memory of statements she chose to keep from her reading. It is not part of her network and never answers for her: retrieved memories are put in front of a question, and she has to learn through training how to use them. What she answers without memory (neurally learned) is always measured apart from what she answers with it (remembered).</p>
 
     <div class="entry" id="studyModeEntry">
@@ -695,7 +733,7 @@
     </table>
 
     <h3>Practice</h3>
-    <p class="note">Nova answers a lesson's practice questions herself. Yendory suggests an automatic grade where the lesson has an answer (or says it is uncertain). You mark each answer right or wrong, may give a grade from 0 to 100% for partial credit, and may write a correction and a note; grades and notes go into the reward ledger (§ 9 Rewards). A partly right answer is never trained as written. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
+    <p class="note">Nova answers a lesson's practice questions herself. Yendory suggests an automatic grade where the lesson has an answer (or says it is uncertain). You mark each answer right or wrong, may give a grade from 0 to 100% for partial credit, and may write a correction and a note; grades and notes go into the reward ledger (Analyze ▸ Progress). A partly right answer is never trained as written. Nothing is trained until you start the training pass: answers you marked right are trained as Nova wrote them, wrong ones on your correction (or the lesson's answer), and the lesson's held-out questions are scored before and after.</p>
     <div class="actions">
       <select id="practiceSource" aria-label="Lesson to practise"><option value="">Choose a lesson…</option></select>
       <button type="button" id="practiceStart" class="primary">Nova answers</button>
@@ -795,9 +833,9 @@
     <div id="studyBody"></div>
   </section>
 
-  <!-- § 9 Rewards -->
+  <!-- Analyze ▸ Progress -->
   <section class="page" id="page-rewards" hidden>
-    <h2><span class="sec">§ 9</span> Rewards</h2>
+    <h2>Rewards</h2>
     <p class="lede">Yendory grades Nova's answers 0–100% and keeps a reward ledger: one-time credit for new progress on a question, smaller bonuses for answers she keeps across checkpoints, and the most for questions she was never trained on. Reward-guided training uses that history to decide how often each unit is practised; what she is taught never changes. Course final exams never enter the ledger.</p>
 
     <div class="entry" id="rewardSettings">
@@ -864,13 +902,13 @@
     </table>
   </section>
 
-  <!-- § 10 Exams -->
+  <!-- Analyze ▸ Exams -->
   <section class="page" id="page-exams" hidden>
-    <h2><span class="sec">§ 10</span> Exams</h2>
+    <h2>Exams</h2>
     <p class="lede">Every reply here is generated by the model, token by token. Nothing is scripted. With Study Mode on, memories related to your message are put in front of it (shown as memory lines); the reply is still the model's own.</p>
 
     <h3>Conversation</h3>
-    <p class="note">A quick check of the open model. Saved chats, with their own context, settings and attached files, are on § 13 Chat.</p>
+    <p class="note">A quick check of the open model. Saved chats, with their own context, settings and attached files, are on Chat.</p>
     <div class="transcript" id="transcript"><p class="empty">Ask the open model something.</p></div>
     <div class="line-form">
       <input id="message" maxlength="300" placeholder="Write a question…" autocomplete="off">
@@ -884,11 +922,11 @@
     <div id="examResult"></div>
   </section>
 
-  <!-- § 11 Brain -->
+  <!-- Analyze ▸ Brain -->
   <section class="page" id="page-brain" hidden>
-    <h2><span class="sec">§ 11</span> Brain</h2>
+    <h2>Brain</h2>
     <p class="lede">Schematic hemispheres, real measurements: every dot and fibre is driven by numbers from the model's forward pass.</p>
-    <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on § 8 Study. Everything below is the network itself.</p>
+    <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on Analyze ▸ Memory. Everything below is the network itself.</p>
     <div class="plate-wrap">
       <figure class="plate">
         <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
@@ -977,10 +1015,10 @@
           <button type="button" id="traceRun" class="primary">Trace</button>
           <button type="button" id="traceOpen" hidden>Open the recorded trace</button>
           <button type="button" id="traceInfluenceRun" hidden>Measure each network's influence</button>
-          <label class="check-inline"><input type="checkbox" id="traceInfluence"> Also measure each network's influence (one extra pass per network)</label>
+          
         </div>
-        <p class="note" id="traceHint">Chats record a trace of every reply while it is written when "Record a brain trace of each reply" is on (§ 13 Chat, settings). Any earlier reply can also be replayed through the model.</p>
-        <p class="note" id="traceStorage"></p>
+        <p class="note" id="traceHint">Chats record a trace of every reply while it is written when "Record a brain trace of each reply" is on (Chat, settings). Any earlier reply can also be replayed through the model.</p>
+        
       </div>
       <div id="traceView" hidden>
         <div id="traceHeader" class="trace-header"></div>
@@ -1002,22 +1040,122 @@
     <p class="note">Nova-2 does not write out reasoning steps. For every token, its lower stage runs once and its upper stage runs several thinking rounds, exchanging signals with the dense hemisphere before each round. This tree records that computation while the model answers the question above: the token chosen at each step and the alternatives it weighed, what it would have said after the lower stage and after each round, how much the dense hemisphere changed the decision, and, at the closest calls, where the runner-up would have led. Every value is measured from the model.</p>
     <div class="actions">
       <button type="button" id="thinkButton" class="primary">Trace the reply</button>
-      <label class="check-inline"><input type="checkbox" id="thinkBranches" checked> Show paths not taken</label>
+      
     </div>
     <div id="thinkTree" class="think-tree"><p class="empty">Trace a reply to see how it was produced.</p></div>
-  </section>
+  
+    <aside class="section-settings" id="settings-brain" hidden aria-labelledby="settings-brain-title">
+      <header><h3 id="settings-brain-title">Brain settings</h3><button type="button" class="drawer-close" data-close-settings aria-label="Close Brain settings">✕</button></header>
+      <p class="note scope-note">How the Brain page traces and shows Nova's networks. <span class="scope studio">Studio</span> this computer; saved traces belong to <span class="scope model">this model</span>.</p>
+      <div class="drawer-body">
+<h4>Per-network trace</h4>
+<label class="check-inline"><input type="checkbox" id="traceInfluence"> Also measure each network's influence (one extra pass per network)</label>
+<p class="note" id="traceStorage"></p>
+<h4>Thinking tree</h4>
+<label class="check-inline"><input type="checkbox" id="thinkBranches" checked> Show paths not taken</label>
+      </div>
+    </aside>
+</section>
 
-  <!-- § 12 Library -->
+  <!-- Analyze ▸ History -->
   <section class="page" id="page-library" hidden>
-    <h2><span class="sec">§ 12</span> Library</h2>
+    <h2>Library</h2>
     <p class="lede">The teaching record of the open model: every lesson file (with its fingerprint) and every candidate of every epoch, including rejected ones and why.</p>
+    <div class="entry" id="unfinishedBox" hidden>
+      <h3>Unfinished training</h3>
+      <p class="note">Reading and Conversation save a recovery point on an interval and when stopped: the working model with its optimizer state and the run's position (step, random draws, best loss, curriculum stage). Continuing picks the run up where that point was, with the settings it was started with; the accepted model is never replaced by a recovery point. Nothing here continues or is deleted unless you choose it.</p>
+      <div id="unfinishedList"></div>
+    </div>
     <div class="actions"><button type="button" id="refreshHistory">Refresh</button></div>
     <div id="historyList"><p class="empty">Open a model to see its record.</p></div>
   </section>
 
-  <!-- § 13 Chat -->
-  <section class="page" id="page-chat" hidden>
-    <h2><span class="sec">§ 13</span> Chat</h2>
+  <!-- Chat -->
+  
+  <!-- Datasets -->
+  <section class="page" id="page-datasets" hidden>
+    <h2>Import a dataset</h2>
+    <p class="lede">Import a dataset of your choosing: from Hugging Face, from a file's link, or from files on this device (also inside a ZIP). Parquet, JSON, JSON lines, CSV, TSV and plain text (each also as .gz). You choose what becomes a document and see it before anything is saved. Downloaded code (Python loading scripts) is never run.</p>
+    <div class="entry">
+      <h3>1. Where from</h3>
+      <div class="line-form">
+        <label for="impSource">Hugging Face dataset or a file's link</label>
+        <input type="text" id="impSource" placeholder="owner/name, https://huggingface.co/datasets/…, or https://…/file.jsonl" style="min-width: 28em">
+        <label for="impRevision">Revision</label>
+        <input type="text" id="impRevision" placeholder="main" class="inline-num" style="width: 7em">
+        <button type="button" id="impInspect" class="primary">Inspect</button>
+        <button type="button" id="impLocal">Files on this device…</button>
+      </div>
+      <p class="note" id="impWait"></p>
+    </div>
+    <div class="entry" id="impFilesBox" hidden>
+      <h3>2. Files</h3>
+      <p id="impInfo"></p>
+      <ul class="note" id="impNotes"></ul>
+      <table class="ledger" id="impFiles"><thead><tr><th>Use</th><th>File</th><th>Split</th><th>Format</th><th class="num">Size</th></tr></thead><tbody></tbody></table>
+      <p class="note">Tick files of one split (train, validation or test are imported as separate datasets, never mixed).</p>
+      <div class="actions"><button type="button" id="impSample" class="primary">Read the chosen files</button></div>
+    </div>
+    <div class="entry" id="impMapBox" hidden>
+      <h3>3. Columns and what becomes a document</h3>
+      <table class="ledger compact" id="impColumns"><thead><tr><th>Column</th><th>Kind</th><th>Example</th></tr></thead><tbody></tbody></table>
+      <div class="line-form">
+        <label for="impCategory">The dataset is</label>
+        <select id="impCategory">
+          <option value="conversation">conversations (Train ▸ Conversation)</option>
+          <option value="general">text to read: stories, prose (Train ▸ Reading)</option>
+          <option value="knowledge">text to read: facts, explanations (Train ▸ Reading)</option>
+          <option value="reasoning">text to read: problems with worked answers (Train ▸ Reading)</option>
+        </select>
+        <label for="impLayout">Each record holds</label>
+        <select id="impLayout">
+          <option value="messages">a list of messages (role and text)</option>
+          <option value="pair">a prompt and a response</option>
+          <option value="turns">a list of turns</option>
+          <option value="rows">one turn (records of a conversation together)</option>
+          <option value="text">text columns</option>
+        </select>
+      </div>
+      <div class="line-form" id="impFields"></div>
+      <div class="line-form" id="impConvOptions">
+        <label>Speakers' names (prompt / response, turn lists) <input type="text" id="impNameA" placeholder="chosen" style="width: 7em"> <input type="text" id="impNameB" placeholder="chosen" style="width: 7em"></label>
+        <label for="impSituation">Scene column</label> <select id="impSituation"></select>
+      </div>
+      <div id="impRoles"></div>
+      <div class="actions"><button type="button" id="impPreview" class="primary">Preview</button></div>
+      <div id="impPreviewBox"></div>
+    </div>
+    <div class="entry" id="impRunBox" hidden>
+      <h3>4. Import</h3>
+      <div class="line-form">
+        <label>Name <input type="text" id="impName" style="min-width: 18em"></label>
+        <label>Licence <input type="text" id="impLicense" style="min-width: 12em"></label>
+        <label>At most <input type="number" id="impMaxMb" min="1" max="400" value="100" class="inline-num"> MB</label>
+      </div>
+      <label class="check" id="impFilterBox"><input type="checkbox" id="impFilter" checked> Apply the quality filter's switches (Train ▸ Conversation) to it at practice (every usable conversation is kept; off: practice uses all of it, as with your own conversations)</label>
+      <div class="actions"><button type="button" id="impRun" class="primary">Import</button> <button type="button" id="impCancel" hidden>Cancel</button></div>
+      <p class="mono" id="impProgress"></p>
+      <p id="impResult"></p>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <span id="statusLine">Ready.</span>
+  
+</footer>
+</div><!-- workspace -->
+</div><!-- shell -->
+
+<div class="chat-dock" id="chatDock" hidden role="dialog" aria-label="Chat">
+  <div class="chat-dock-bar">
+    <span class="chat-dock-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Chat</span>
+    <button type="button" class="icon-button" id="chatDockExpand" aria-pressed="false" title="Make the chat larger"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button>
+    <button type="button" class="icon-button" id="chatDockClose" title="Close the chat" aria-label="Close the chat">✕</button>
+  </div>
+  <div class="chat-dock-body" id="chatDockBody">
+  <section class="chat-page" id="page-chat">
+    <h2>Chat</h2>
     <p class="lede">Talk with the open model. Every reply is generated by the model token by token and appears as it is written; nothing is scripted. Chats are saved with the model.</p>
     <div class="chat-shell" id="chatShell">
       <aside class="chat-list" id="chatList" aria-label="Chats">
@@ -1093,7 +1231,7 @@
         <label class="cs-check"><input type="checkbox" id="chatMemories"> Study Mode memories in front of each message</label>
         <label class="cs-check"><input type="checkbox" id="chatRememberSelf"> Nova remembers what it says about itself</label>
         <label class="cs-check"><input type="checkbox" id="chatTrace"> Record a brain trace of each reply</label>
-        <p class="note">Each reply is written with a per-network trace recorded (§ 11 Brain shows it, live while Nova writes). The reply is the one it would be without recording; writing takes about a fifth longer and each trace takes roughly 0.5–5 MB on disk.</p>
+        <p class="note">Each reply is written with a per-network trace recorded (Analyze ▸ Brain shows it, live while Nova writes). The reply is the one it would be without recording; writing takes about a fifth longer and each trace takes roughly 0.5–5 MB on disk.</p>
         <p class="note">Its own statements ("I like the sea.") go into Study Mode memory and come back as "I said: …" when they are related, so it can stay consistent from one chat to the next. A statement that may contradict an earlier one is pointed out. A reply you regenerate, or one after a message you edit, is forgotten.</p>
         <p class="note" id="chatMemoryNote"></p>
         <h4>Context window</h4>
@@ -1102,78 +1240,68 @@
       </aside>
     </div>
   </section>
-  <!-- § 14 Datasets -->
-  <section class="page" id="page-datasets" hidden>
-    <h2><span class="sec">§ 14</span> Datasets</h2>
-    <p class="lede">Import a dataset of your choosing: from Hugging Face, from a file's link, or from files on this device (also inside a ZIP). Parquet, JSON, JSON lines, CSV, TSV and plain text (each also as .gz). You choose what becomes a document and see it before anything is saved. Downloaded code (Python loading scripts) is never run.</p>
-    <div class="entry">
-      <h3>1. Where from</h3>
-      <div class="line-form">
-        <label for="impSource">Hugging Face dataset or a file's link</label>
-        <input type="text" id="impSource" placeholder="owner/name, https://huggingface.co/datasets/…, or https://…/file.jsonl" style="min-width: 28em">
-        <label for="impRevision">Revision</label>
-        <input type="text" id="impRevision" placeholder="main" class="inline-num" style="width: 7em">
-        <button type="button" id="impInspect" class="primary">Inspect</button>
-        <button type="button" id="impLocal">Files on this device…</button>
-      </div>
-      <p class="note" id="impWait"></p>
-    </div>
-    <div class="entry" id="impFilesBox" hidden>
-      <h3>2. Files</h3>
-      <p id="impInfo"></p>
-      <ul class="note" id="impNotes"></ul>
-      <table class="ledger" id="impFiles"><thead><tr><th>Use</th><th>File</th><th>Split</th><th>Format</th><th class="num">Size</th></tr></thead><tbody></tbody></table>
-      <p class="note">Tick files of one split (train, validation or test are imported as separate datasets, never mixed).</p>
-      <div class="actions"><button type="button" id="impSample" class="primary">Read the chosen files</button></div>
-    </div>
-    <div class="entry" id="impMapBox" hidden>
-      <h3>3. Columns and what becomes a document</h3>
-      <table class="ledger compact" id="impColumns"><thead><tr><th>Column</th><th>Kind</th><th>Example</th></tr></thead><tbody></tbody></table>
-      <div class="line-form">
-        <label for="impCategory">The dataset is</label>
-        <select id="impCategory">
-          <option value="conversation">conversations (§ 4)</option>
-          <option value="general">text to read: stories, prose (§ 2)</option>
-          <option value="knowledge">text to read: facts, explanations (§ 2)</option>
-          <option value="reasoning">text to read: problems with worked answers (§ 2)</option>
-        </select>
-        <label for="impLayout">Each record holds</label>
-        <select id="impLayout">
-          <option value="messages">a list of messages (role and text)</option>
-          <option value="pair">a prompt and a response</option>
-          <option value="turns">a list of turns</option>
-          <option value="rows">one turn (records of a conversation together)</option>
-          <option value="text">text columns</option>
-        </select>
-      </div>
-      <div class="line-form" id="impFields"></div>
-      <div class="line-form" id="impConvOptions">
-        <label>Speakers' names (prompt / response, turn lists) <input type="text" id="impNameA" placeholder="chosen" style="width: 7em"> <input type="text" id="impNameB" placeholder="chosen" style="width: 7em"></label>
-        <label for="impSituation">Scene column</label> <select id="impSituation"></select>
-      </div>
-      <div id="impRoles"></div>
-      <div class="actions"><button type="button" id="impPreview" class="primary">Preview</button></div>
-      <div id="impPreviewBox"></div>
-    </div>
-    <div class="entry" id="impRunBox" hidden>
-      <h3>4. Import</h3>
-      <div class="line-form">
-        <label>Name <input type="text" id="impName" style="min-width: 18em"></label>
-        <label>Licence <input type="text" id="impLicense" style="min-width: 12em"></label>
-        <label>At most <input type="number" id="impMaxMb" min="1" max="400" value="100" class="inline-num"> MB</label>
-      </div>
-      <label class="check" id="impFilterBox"><input type="checkbox" id="impFilter" checked> Apply the quality filter's switches (§ 4) to it at practice (every usable conversation is kept; off: practice uses all of it, as with your own conversations)</label>
-      <div class="actions"><button type="button" id="impRun" class="primary">Import</button> <button type="button" id="impCancel" hidden>Cancel</button></div>
-      <p class="mono" id="impProgress"></p>
-      <p id="impResult"></p>
-    </div>
-  </section>
-</main>
+</div>
+</div>
+<button type="button" class="chat-fab" id="chatFab" aria-controls="chatDock" aria-expanded="false" title="Chat with the open model"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span class="sr-only">Chat</span></button>
 
-<footer class="colophon">
-  <span id="statusLine">Ready.</span>
-  <details id="diagnostics"><summary>Diagnostics <span id="diagCount">0</span></summary><pre id="diagLog">No messages.</pre></details>
-</footer>
+<div class="global-scrim" id="globalScrim" hidden></div>
+<div class="global-settings" id="globalSettings" role="dialog" aria-modal="true" aria-labelledby="globalSettingsTitle" hidden>
+  <header><h2 id="globalSettingsTitle">Global Settings</h2><span class="note">How Yendory Studio works as an application. <span class="scope studio">Studio</span> these apply everywhere, on this computer.</span><button type="button" class="icon-button" id="globalSettingsClose" aria-label="Close Global Settings">✕</button></header>
+  <div class="global-split">
+    <nav class="global-nav" aria-label="Global Settings"><button type="button" data-global="appearance" aria-current="true">Appearance</button><button type="button" data-global="hardware" aria-current="false">Hardware and performance</button><button type="button" data-global="safety" aria-current="false">Training safety</button><button type="button" data-global="accounts" aria-current="false">Accounts</button><button type="button" data-global="updates" aria-current="false">Updates</button><button type="button" data-global="logs" aria-current="false">Notifications and logs</button></nav>
+    <div class="global-body">
+    <section class="global-group" id="global-appearance" aria-labelledby="global-appearance-h"><h3 id="global-appearance-h">Appearance</h3>
+      <div class="line-form"><label for="uiTheme">Theme</label><select id="uiTheme"><option value="system">Follow the system</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+      <div class="line-form"><label for="uiScale">Interface scale</label><select id="uiScale"><option value="0.9">90%</option><option value="1" selected>100%</option><option value="1.1">110%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></div>
+      <div class="line-form"><label class="check"><input type="checkbox" id="uiReduceMotion"> Reduce motion</label><span class="note">Turns off animations and smooth scrolling.</span></div>
+    </section>
+    <section class="global-group" id="global-hardware" hidden aria-labelledby="global-hardware-h"><h3 id="global-hardware-h">Hardware and performance</h3>
+      <div class="line-form">
+      <label for="deviceChoice">Training device</label>
+      <select id="deviceChoice">
+        <option value="auto">Auto</option>
+      </select>
+      <label for="threadChoice">CPU threads</label>
+      <select id="threadChoice"><option value="0">All</option></select>
+      <label class="check" title="In GPU training: the Classroom's losses are computed on the GPU, the GPU confirms the answers Nova certainly writes exactly (Classroom, courses, the Planner and Conversation's Classroom guard) so the CPU writes out only the rest, and Reading keeps reading while the CPU writes a check's samples. The results are the same. Off: the CPU does the checks as before."><input type="checkbox" id="gpuChecks" checked> Check answers on the GPU</label>
+      <label class="check" title="Each reply gets room to spell its expected answer one letter at a time (its characters plus the line break; half as much again for answers graded by a key), never less than 24 tokens. A right answer never needs more, so long answers can be answered right. Off: every reply stops at 24 tokens, as before."><input type="checkbox" id="fittedReplies" checked> Fit the reply limit to each answer</label>
+      <span class="note" id="deviceNote">Looking for a GPU…</span>
+    </div>
+      <div class="line-form">
+      <button type="button" id="benchTraining">Benchmark training on this computer</button>
+      <span class="note" id="benchNote">Trains the open model's copy on every device with identical batches (the Reading settings' batch size and window) and measures speed, GPU memory and that every device computes the same loss. Auto then uses the fastest.</span>
+    </div>
+      <div id="benchResult" hidden></div>
+      <div id="memoryPanel"></div>
+    </section>
+    <section class="global-group" id="global-safety" hidden aria-labelledby="global-safety-h"><h3 id="global-safety-h">Training safety</h3>
+      <div class="line-form">
+      <label for="recoveryMinutes">Recovery point every</label>
+      <input type="number" id="recoveryMinutes" min="0" max="240" step="1" value="10" class="inline-num">
+      <span class="note">minutes while reading or practising conversations (0: only when stopped). A recovery point is about the size of the model file (which holds the optimizer state too); a run keeps two.</span>
+    </div>
+    </section>
+    <section class="global-group" id="global-accounts" hidden aria-labelledby="global-accounts-h"><h3 id="global-accounts-h">Accounts</h3>
+      <div class="settings" id="hfTokenBox">
+      <label>Hugging Face account: an access token, for gated datasets such as LMSYS-Chat-1M (a <b>read</b> token is enough: Hugging Face → Settings → Access Tokens → New token → Read). It is kept in your system's credential store and sent only to huggingface.co. <input type="password" id="hfToken" autocomplete="off" placeholder="hf_…"></label>
+      <div class="actions wide"><button type="button" id="hfTokenSave">Save token</button> <button type="button" id="hfTokenCheck" class="quiet">Check</button> <button type="button" id="hfTokenClear">Disconnect</button></div>
+      <p class="note" id="hfTokenNote"></p>
+    </div>
+    </section>
+    <section class="global-group" id="global-updates" hidden aria-labelledby="global-updates-h"><h3 id="global-updates-h">Updates</h3>
+      <div class="line-form" id="updateBox">
+      <button type="button" id="checkUpdate">Check for updates</button>
+      <button type="button" id="installUpdate" class="primary" hidden>Update and restart</button>
+      <span class="note" id="updateNote">Studio looks for a newer build when it starts. Updating installs over this version and keeps your models, datasets, chats and settings.</span>
+    </div>
+    </section>
+    <section class="global-group" id="global-logs" hidden aria-labelledby="global-logs-h"><h3 id="global-logs-h">Notifications and logs</h3>
+      <p class="note">Messages from Studio and the Engine while it runs. Errors also show in the status line at the foot of the window.</p>
+      <details id="diagnostics"><summary>Diagnostics <span id="diagCount">0</span></summary><pre id="diagLog">No messages.</pre></details>
+    </section>
+    </div>
+  </div>
+</div>
 <script src="js/dropdown.js"></script>
 <script src="js/brain.js"></script>
 <script src="js/app.js"></script>

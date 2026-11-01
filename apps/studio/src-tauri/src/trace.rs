@@ -1,4 +1,4 @@
-//! Per-network traces of Nova's replies for § 11 Brain (`yendory_engine::model::inspect`).
+//! Per-network traces of Nova's replies for Analyze ▸ Brain (`yendory_engine::model::inspect`).
 //!
 //! Three ways to get one:
 //! * **Recorded**: a chat with "Record brain traces" on traces each reply while it is written

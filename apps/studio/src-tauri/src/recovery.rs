@@ -495,7 +495,7 @@ pub(crate) fn no_unfinished_runs(app: &AppHandle, model_id: &str, plan: Option<&
         .find(|r| r.unfinished() && (plan.is_none() || r.plan.as_ref().map(|p| p.plan_id.as_str()) != plan))
     {
         return Err(format!(
-            "This model has an unfinished {} ({}, started {}). Continue it or discard it first (§ 1 Models, Unfinished training).",
+            "This model has an unfinished {} ({}, started {}). Continue it or discard it first (Analyze ▸ History, Unfinished training).",
             r.kind,
             r.label,
             r.started
@@ -527,7 +527,7 @@ pub fn unfinished_runs(
 }
 
 /// A Classroom session that did not finish: accepted epochs wait in the model's `checkpoints/`
-/// to be restored (and the run continued) or discarded on § 1 Models.
+/// to be restored (and the run continued) or discarded on Models.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClassroomSession {

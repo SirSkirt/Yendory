@@ -162,7 +162,7 @@ struct Studio {
     /// A chat reply is being written (one at a time), and the request to stop it.
     chatting: AtomicBool,
     chat_stop: Arc<AtomicBool>,
-    /// A per-network trace is being made for § 11 Brain (one at a time).
+    /// A per-network trace is being made for Analyze ▸ Brain (one at a time).
     tracing: AtomicBool,
 }
 
@@ -192,7 +192,7 @@ fn no_waiting_checkpoints(app: &AppHandle, id: &str) -> Res<()> {
     if yendory_engine::learn::session::checkpoint_files(&dir).is_empty() {
         Ok(())
     } else {
-        Err("This model has checkpoints from a training session that did not finish. Restore the newest or discard them first (§ 1 Models).".into())
+        Err("This model has checkpoints from a training session that did not finish. Restore the newest or discard them first (Models).".into())
     }
 }
 
@@ -585,8 +585,10 @@ fn write_setting(app: &AppHandle, key: &str, value: serde_json::Value) -> Res<()
 }
 
 /// Form settings the pages remember between runs (only these keys; other settings have their
-/// own commands). `conversationDatasets`: the conversation datasets ticked.
-const PAGE_SETTINGS: &[&str] = &["reading", "classroom", "conversation", "conversationDatasets"];
+/// own commands). `conversationDatasets`: the conversation datasets ticked. `appearance`: Global
+/// Settings ▸ Appearance (theme, interface scale, reduced motion).
+const PAGE_SETTINGS: &[&str] =
+    &["reading", "classroom", "conversation", "conversationDatasets", "appearance"];
 
 #[tauri::command]
 fn page_settings(app: AppHandle, page: String) -> Option<serde_json::Value> {

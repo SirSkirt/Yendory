@@ -511,7 +511,7 @@ pub struct Plan {
     step_results: Vec<StepResult>,
 }
 
-/// A plan step that is not a course: a reading (§ 2) or conversation practice (§ 4) with the
+/// A plan step that is not a course: a reading (Train ▸ Reading) or conversation practice (Train ▸ Conversation) with the
 /// settings it was added with.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -769,8 +769,8 @@ pub fn create_plan(app: AppHandle, studio: State<Studio>, name: String) -> Res<P
     Ok(plan_view(&app, &plan))
 }
 
-/// Adds a reading (`kind` "reading", the § 2 Reading settings) or conversation practice
-/// ("conversation", the § 4 settings) to the end of a plan.
+/// Adds a reading (`kind` "reading", the Train ▸ Reading settings) or conversation practice
+/// ("conversation", the Train ▸ Conversation settings) to the end of a plan.
 #[tauri::command]
 pub fn add_plan_step(
     app: AppHandle,

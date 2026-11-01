@@ -1,5 +1,5 @@
 "use strict";
-// § 13 Chat: saved conversations with the open model. Replies are written by the model in the
+// Chat: saved conversations with the open model. Replies are written by the model in the
 // Engine token by token and arrive here as "chat-token" events; this page only displays them.
 (() => {
   const DEFAULTS = {
@@ -114,7 +114,7 @@
     return details;
   }
   // The teacher's mark on a reply: by consistency with what Nova said before and whether it is
-  // its own voice, never by agreement. Replies marked consistent can be practised in § 4.
+  // its own voice, never by agreement. Replies marked consistent can be practised in Train ▸ Conversation.
   function markButtons(m, i) {
     const set = mark => safe(async () => {
       chat = await invoke("chat_mark", { id: chat.id, index: i, mark: m.mark === mark ? null : mark });
@@ -132,7 +132,7 @@
       el("button", { type: "button", class: "chat-act", onclick: () => copy(m.text) }, "Copy"),
       mine ? el("button", { type: "button", class: "chat-act", onclick: () => startEdit(i) }, "Edit") : "",
       !mine && last ? el("button", { type: "button", class: "chat-act", onclick: safe(regenerate, "Regenerate") }, "Regenerate") : "",
-      !mine && i > 0 ? el("button", { type: "button", class: "chat-act", title: m.info?.trace ? "Open the trace recorded while Nova wrote this reply (§ 11 Brain)" : "Replay this reply through the model on § 11 Brain", onclick: () => window.openTrace?.(chat.id, i) }, m.info?.trace ? "Brain trace" : "Trace on Brain page") : "",
+      !mine && i > 0 ? el("button", { type: "button", class: "chat-act", title: m.info?.trace ? "Open the trace recorded while Nova wrote this reply (Analyze ▸ Brain)" : "Replay this reply through the model on Analyze ▸ Brain", onclick: () => window.openTrace?.(chat.id, i) }, m.info?.trace ? "Brain trace" : "Trace on Brain page") : "",
       mine ? "" : markButtons(m, i));
     const body = el("div", { class: "chat-body" },
       el("div", { class: "chat-who" }, mine ? "You" : modelName(), el("time", {}, m.time ? new Date(m.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "")),
@@ -141,14 +141,14 @@
       m.dropped ? el("p", { class: "chat-flag" }, `${fmt(m.dropped)} character(s) the model cannot read (emoji, other alphabets) were left out.`) : "",
       m.info?.memories?.length ? el("p", { class: "chat-flag memory" }, `${m.info.memories.length} Study Mode memor${m.info.memories.length === 1 ? "y" : "ies"} were in front of the message.`) : "",
       m.info?.remembered?.length ? el("p", { class: "chat-flag said" }, "Remembered what it said about itself: ", m.info.remembered.map(r => `“${r[1]}”`).join(" ")) : "",
-      m.info?.mayContradict?.length ? el("p", { class: "chat-flag" }, "This may contradict what it said before: ", m.info.mayContradict.map(t => `“${t}”`).join(" "), " You can mark the reply below, or change the older memory on § 8 Study.") : "",
+      m.info?.mayContradict?.length ? el("p", { class: "chat-flag" }, "This may contradict what it said before: ", m.info.mayContradict.map(t => `“${t}”`).join(" "), " You can mark the reply below, or change the older memory on Analyze ▸ Memory.") : "",
       mine ? "" : infoView(m, i), actions);
     return el("article", { class: "chat-msg " + (mine ? "user" : "model") }, mine ? "" : avatar("model"), body);
   }
   function renderEmpty() {
     const box = el("div", { class: "chat-welcome" });
     if (!active) {
-      box.append(el("p", { class: "chat-welcome-title" }, "No model is open"), el("p", { class: "note" }, "Open or create a model on § 1 Models to chat with it."));
+      box.append(el("p", { class: "chat-welcome-title" }, "No model is open"), el("p", { class: "note" }, "Open a model (from Yendory Hub, or Open a model… at the top) to chat with it."));
     } else {
       box.append(el("div", { class: "chat-welcome-mark", "aria-hidden": "true" }, (active.name[0] || "N").toUpperCase()),
         el("p", { class: "chat-welcome-title" }, `Chat with ${active.name}`),
@@ -233,7 +233,7 @@
     $("chatReplyNote").textContent = `tokens (0: Studio's default, ${fmt(def)} for this model)`;
     $("chatWindowNote").textContent = `${active.name} reads ${fmt(active.context)} tokens at once: the context text, memories, earlier turns, attached text and your message, plus the reply. ` +
       "What does not fit is left out, oldest turns first; the meter under the message box shows how it is spent.";
-    $("chatMemoryNote").textContent = studyModeOn ? "Study Mode is on." : "Study Mode is off (§ 8 Study), so no memories are added.";
+    $("chatMemoryNote").textContent = studyModeOn ? "Study Mode is on." : "Study Mode is off (Analyze ▸ Memory), so no memories are added.";
   }
   let saveTimer = 0;
   function settingsChanged() {
@@ -492,9 +492,10 @@
 
   // ---- events ------------------------------------------------------------------------------
   const prevPage = window.onPage;
-  window.onPage = page => {
-    prevPage?.(page);
-    visible = page === "chat";
+  window.onPage = page => prevPage?.(page);
+  // The chat opens over any page from the round button (the dock), not as a page of its own.
+  window.chatDocked = open => {
+    visible = open;
     if (!visible) return;
     if (shownModel !== (active?.id ?? null)) window.showChat(active);
     else { render(); refreshList().catch(e => log("ERROR", e)); }

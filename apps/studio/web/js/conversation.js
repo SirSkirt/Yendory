@@ -1,5 +1,5 @@
 "use strict";
-// § 4 Conversation: Nova practises real conversations between two people after the Classroom.
+// Train ▸ Conversation: Nova practises real conversations between two people after the Classroom.
 // The training runs in the Engine (learn::conversation); this page chooses the material and
 // shows the checks.
 (() => {
@@ -78,7 +78,7 @@
   }
 
   function note() {
-    if (!active) { $("convNote").textContent = "Open a model on § 1 Models first."; return; }
+    if (!active) { $("convNote").textContent = "Open a model first."; return; }
     const sets = material.corpora.filter(c => chosen.has(c.id));
     const parts = [];
     parts.push(sets.length ? `${sets.length} dataset(s), ${fmt(sets.reduce((a, c) => a + c.documents, 0))} conversations` : "Choose at least one conversation dataset");
@@ -92,7 +92,7 @@
     $("convNote").textContent = parts.join(" · ") + ".";
     $("convReadingNote").textContent = material.reading?.length
       ? `Read text rehearsed and guarded: ${material.reading.join(", ")} (a sample of up to 3,000 documents).`
-      : "None of the text this model read is on this device, so no reading is rehearsed or guarded (download or import it again on § 2 to include it).";
+      : "None of the text this model read is on this device, so no reading is rehearsed or guarded (download or import it again on Train ▸ Reading to include it).";
   }
 
   // The ticked datasets are kept between runs of Studio: the ticked ones and the ones known
@@ -306,7 +306,7 @@
   // The page's settings, as the backend (and a plan's conversation step) takes them.
   function options() {
     const corpusIds = material.corpora.filter(c => chosen.has(c.id)).map(c => c.id);
-    if (!corpusIds.length) throw new Error("Choose at least one conversation dataset on § 4 Conversation");
+    if (!corpusIds.length) throw new Error("Choose at least one conversation dataset on Train ▸ Conversation");
     const n = id => Number($(id).value);
     return {
       corpusIds,
@@ -361,7 +361,7 @@
     $("convChecks").tBodies[0].replaceChildren();
     say("Practising conversations…");
   }, "Conversation"));
-  // Continuing a run from its recovery point (§ 1 Models, Unfinished training).
+  // Continuing a run from its recovery point (Analyze ▸ History, Unfinished training).
   window.resumeConversation = info => {
     go("conversation");
     started = Date.now();

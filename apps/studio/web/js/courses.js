@@ -283,7 +283,7 @@ function stepReport(r) {
       ` · held-out loss ${r.baselineLoss.toFixed(3)} → ${r.bestLoss.toFixed(3)} · ${fmt(r.tokens)} tokens`,
       r.finished ? el("span", { class: "note" }, ` · ${when(r.finished)}`) : ""),
     r.note ? el("p", { class: "warn note" }, r.note) : "",
-    el("p", { class: "note" }, `Model step ${fmt(r.startedStep)} → ${fmt(r.endStep)}. The full record is in § 12 Library${r.kind === "conversation" ? " and on § 4 Conversation" : ""}.`));
+    el("p", { class: "note" }, `Model step ${fmt(r.startedStep)} → ${fmt(r.endStep)}. The full record is in Analyze ▸ History${r.kind === "conversation" ? " and on Train ▸ Conversation" : ""}.`));
 }
 
 function renderResults(p) {
@@ -361,11 +361,11 @@ $("planAdd").addEventListener("click", safe(async () => {
 }, "Add course"));
 $("planAddReading").addEventListener("click", safe(async () => {
   showPlan(await invoke("add_plan_step", { id: plan.id, kind: "reading", options: window.readingOptions() }));
-  say("Reading added to the plan with the § 2 settings.");
+  say("Reading added to the plan with the Train ▸ Reading settings.");
 }, "Add reading"));
 $("planAddConversation").addEventListener("click", safe(async () => {
   showPlan(await invoke("add_plan_step", { id: plan.id, kind: "conversation", options: await window.conversationOptions() }));
-  say("Conversation practice added to the plan with the § 4 settings.");
+  say("Conversation practice added to the plan with the Train ▸ Conversation settings.");
 }, "Add conversation"));
 // Progress of a plan's reading or conversation step.
 function onPlanStep({ planId, kind, label, event: e }) {

@@ -1,5 +1,5 @@
 "use strict";
-// § 11 Brain, per-network trace: what each of Nova's networks did at every step of a reply.
+// Analyze ▸ Brain, per-network trace: what each of Nova's networks did at every step of a reply.
 // Everything shown comes from the Engine's trace (yendory_engine::model::inspect); this page
 // only draws it. Nothing here names a concept or writes a sentence about what Nova thought.
 (() => {
@@ -580,7 +580,7 @@
       ? "Nova answers the question in the box above (the most likely token each time) while every network is traced."
       : t?.trace
         ? "● A trace was recorded while Nova wrote this reply: open it to see exactly what happened. Replaying reads the saved reply through the current model."
-        : "No trace was recorded for this reply. Replaying reads the saved reply through the current model: the page says where that can differ from what happened. To record replies as they are written, turn on \"Record a brain trace of each reply\" in the chat's settings (§ 13 Chat).";
+        : "No trace was recorded for this reply. Replaying reads the saved reply through the current model: the page says where that can differ from what happened. To record replies as they are written, turn on \"Record a brain trace of each reply\" in the chat's settings (Chat).";
   }
   async function storage() {
     if (!active) { $("traceStorage").textContent = ""; return; }
@@ -645,8 +645,9 @@
     if (e.key === "ArrowRight") { pick(stepIdx + 1); e.preventDefault(); }
   });
 
-  // From § 13 Chat: a reply's "Brain trace" button.
+  // From Chat: a reply's "Brain trace" button.
   window.openTrace = safe(async (chat, index) => {
+    window.openChat?.(false);
     go("brain");
     await refreshChats();
     $("traceChat").value = chat;

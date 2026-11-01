@@ -38,13 +38,165 @@ window.addEventListener("unhandledrejection", e => log("ERROR", e.reason));
 const say = text => { $("statusLine").textContent = text; };
 
 // ---- navigation ----------------------------------------------------------------------------
+// The sidebar's pages (routes) show one or more of the page sections below; each section keeps
+// its own code, which still hears its old page name through window.onPage.
+const ROUTES = {
+  reading: { group: "Train", title: "Reading", sections: ["page-reading"], pages: ["reading"], settings: "settings-reading" },
+  classroom: { group: "Train", title: "Classroom", sections: ["page-classroom"], pages: ["classroom"], settings: "settings-classroom" },
+  conversation: { group: "Train", title: "Conversation", sections: ["page-conversation"], pages: ["conversation"], settings: "settings-conversation" },
+  planner: { group: "Train", title: "Planner", sections: ["page-planner"], pages: ["planner"] },
+  rdata: { group: "Datasets", title: "Reading Datasets", sections: ["page-rdata", "page-datasets"], pages: ["rdata", "datasets"], settings: "settings-datasets" },
+  lessons: { group: "Datasets", title: "Classroom Lessons", sections: ["page-courses", "page-designer"], pages: ["courses", "designer"] },
+  cdata: { group: "Datasets", title: "Conversation Datasets", sections: ["page-cdata", "page-datasets"], pages: ["cdata", "datasets"], settings: "settings-datasets" },
+  brain: { group: "Analyze", title: "Brain", sections: ["page-brain"], pages: ["brain"], settings: "settings-brain" },
+  exams: { group: "Analyze", title: "Exams", sections: ["page-exams"], pages: ["exams"] },
+  history: { group: "Analyze", title: "History", sections: ["page-library"], pages: ["library"] },
+  progress: { group: "Analyze", title: "Progress", sections: ["page-rewards"], pages: ["rewards"] },
+  memory: { group: "Analyze", title: "Memory", sections: ["page-study"], pages: ["study"] },
+  // Not in the sidebar: models are opened by Yendory Hub. Kept for "Open a model…".
+  models: { group: "Studio", title: "Models", sections: ["page-models"], pages: ["models"] },
+};
+// Page names used before the sidebar.
+const OLD_PAGES = { designer: "lessons", courses: "lessons", study: "memory", rewards: "progress", library: "history", datasets: "cdata" };
+let route = "reading";
+const storeGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const storeSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not kept */ } };
 function go(page) {
-  document.querySelectorAll(".contents button").forEach(b => b.classList.toggle("active", b.dataset.page === page));
-  document.querySelectorAll(".page").forEach(p => { p.hidden = p.id !== "page-" + page; });
-  if (page === "library") loadHistory();
-  window.onPage?.(page);
+  if (page === "chat") { openChat(true); return; }
+  const id = ROUTES[page] ? page : OLD_PAGES[page] || "reading";
+  const r = ROUTES[id];
+  route = id;
+  if (id !== "models") storeSet("studio.route", id);
+  closeSectionSettings();
+  const main = document.querySelector("main");
+  let after = null;
+  for (const [i, sid] of r.sections.entries()) {
+    const sec = $(sid);
+    // A section shared by two pages (the importer) follows the page it is shown on.
+    if (after && sec.previousElementSibling !== after) after.after(sec);
+    after = sec;
+    sec.classList.toggle("lead-section", i === 0);
+  }
+  main.querySelectorAll(":scope > .page").forEach(p => { p.hidden = !r.sections.includes(p.id); });
+  document.querySelectorAll(".side-nav [data-route]").forEach(b => {
+    const on = b.dataset.route === id;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  $("pageCrumb").textContent = r.group;
+  $("pageTitle").textContent = r.title;
+  document.title = `${r.title} · Yendory Studio`;
+  $("sectionSettingsOpen").hidden = !r.settings;
+  $("sectionSettingsLabel").textContent = r.settings ? `${r.group === "Datasets" ? "Datasets" : r.title} settings` : "Settings";
+  main.scrollTop = 0;
+  window.scrollTo(0, 0);
+  if (id === "history") loadHistory();
+  for (const name of r.pages) window.onPage?.(name);
 }
-document.querySelectorAll(".contents button").forEach(b => b.addEventListener("click", () => go(b.dataset.page)));
+// Section settings: a drawer on the right, inside the page it belongs to.
+function sectionDrawer() { const r = ROUTES[route]; return r?.settings ? $(r.settings) : null; }
+function openSectionSettings(open) {
+  const d = sectionDrawer();
+  if (!d) return;
+  d.hidden = !open;
+  $("sectionSettingsOpen").setAttribute("aria-expanded", String(open));
+  $("sectionSettingsOpen").classList.toggle("on", open);
+  if (open) d.querySelector("input, select, button:not(.drawer-close)")?.focus({ preventScroll: true });
+}
+function closeSectionSettings() {
+  document.querySelectorAll(".section-settings").forEach(d => { d.hidden = true; });
+  $("sectionSettingsOpen").setAttribute("aria-expanded", "false");
+  $("sectionSettingsOpen").classList.remove("on");
+}
+$("sectionSettingsOpen").addEventListener("click", () => openSectionSettings(!!sectionDrawer()?.hidden));
+document.addEventListener("click", e => {
+  const link = e.target.closest("[data-route]");
+  if (link) { e.preventDefault(); go(link.dataset.route); return; }
+  if (e.target.closest("[data-open-settings]")) { e.preventDefault(); openSectionSettings(true); return; }
+  if (e.target.closest("[data-close-settings]")) closeSectionSettings();
+});
+// The sidebar collapses to its icons; it remembers how it was left.
+function setSidebar(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  $("sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
+  $("sidebarToggle").title = collapsed ? "Open the sidebar" : "Collapse the sidebar";
+  storeSet("studio.sidebar", collapsed ? "collapsed" : "open");
+}
+$("sidebarToggle").addEventListener("click", () => setSidebar(!document.body.classList.contains("sidebar-collapsed")));
+setSidebar(storeGet("studio.sidebar") === "collapsed" || (storeGet("studio.sidebar") == null && window.matchMedia("(max-width: 760px)").matches));
+// On a narrow window the open sidebar covers the page: choosing a page closes it.
+document.querySelector(".side-nav").addEventListener("click", e => {
+  if (e.target.closest("[data-route]") && window.matchMedia("(max-width: 760px)").matches) setSidebar(true);
+});
+
+// Global Settings: how Studio works as an application.
+function openGlobal(open) {
+  $("globalSettings").hidden = $("globalScrim").hidden = !open;
+  if (open) { closeSectionSettings(); $("globalSettings").querySelector(".global-nav [aria-current='true']")?.focus(); }
+  else $("globalSettingsOpen").focus({ preventScroll: true });
+}
+function showGlobal(group) {
+  document.querySelectorAll(".global-nav [data-global]").forEach(b => b.setAttribute("aria-current", String(b.dataset.global === group)));
+  document.querySelectorAll(".global-group").forEach(g => { g.hidden = g.id !== "global-" + group; });
+}
+$("globalSettingsOpen").addEventListener("click", () => openGlobal(true));
+$("globalSettingsClose").addEventListener("click", () => openGlobal(false));
+$("globalScrim").addEventListener("click", () => openGlobal(false));
+document.querySelectorAll(".global-nav [data-global]").forEach(b => b.addEventListener("click", () => showGlobal(b.dataset.global)));
+$("statusLine").addEventListener("click", () => { openGlobal(true); showGlobal("logs"); $("diagnostics").open = true; });
+
+// Appearance (Global Settings): theme, interface scale, reduced motion; kept in the settings file.
+const APPEARANCE = { theme: "system", scale: "1", reduceMotion: false };
+function applyAppearance(a) {
+  const root = document.documentElement;
+  if (a.theme === "light" || a.theme === "dark") root.dataset.theme = a.theme; else delete root.dataset.theme;
+  root.style.zoom = a.scale === "1" ? "" : a.scale;
+  root.classList.toggle("reduce-motion", !!a.reduceMotion);
+  $("uiTheme").value = a.theme;
+  $("uiScale").value = a.scale;
+  $("uiReduceMotion").checked = !!a.reduceMotion;
+  for (const id of ["uiTheme", "uiScale"]) $(id)._ydd?.refresh();
+}
+async function loadAppearance() {
+  const saved = await invoke("page_settings", { page: "appearance" }).catch(() => null) || {};
+  const a = { ...APPEARANCE };
+  if (["system", "light", "dark"].includes(saved.theme)) a.theme = saved.theme;
+  if ([...$("uiScale").options].some(o => o.value === saved.scale)) a.scale = saved.scale;
+  if (typeof saved.reduceMotion === "boolean") a.reduceMotion = saved.reduceMotion;
+  applyAppearance(a);
+}
+for (const id of ["uiTheme", "uiScale", "uiReduceMotion"]) $(id).addEventListener("change", () => {
+  const a = { theme: $("uiTheme").value, scale: $("uiScale").value, reduceMotion: $("uiReduceMotion").checked };
+  applyAppearance(a);
+  invoke("save_page_settings", { page: "appearance", settings: a }).catch(e => log("ERROR", e));
+});
+
+// Chat: the round button opens it over any page; it can be made larger.
+function openChat(open) {
+  $("chatDock").hidden = !open;
+  $("chatFab").setAttribute("aria-expanded", String(open));
+  $("chatFab").classList.toggle("open", open);
+  window.chatDocked?.(open);
+}
+$("chatFab").addEventListener("click", () => openChat($("chatDock").hidden));
+$("chatDockClose").addEventListener("click", () => openChat(false));
+$("chatDockExpand").addEventListener("click", () => {
+  const big = !$("chatDock").classList.contains("large");
+  $("chatDock").classList.toggle("large", big);
+  $("chatDockExpand").setAttribute("aria-pressed", String(big));
+  $("chatDockExpand").title = big ? "Make the chat smaller" : "Make the chat larger";
+});
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (!$("globalSettings").hidden) openGlobal(false);
+  else if (sectionDrawer() && !sectionDrawer().hidden) closeSectionSettings();
+});
+$("openModelHere").addEventListener("click", () => go("models"));
+document.addEventListener("DOMContentLoaded", () => {
+  const saved = storeGet("studio.route");
+  go(ROUTES[saved] ? saved : "reading");
+  loadAppearance().catch(e => log("ERROR", e));
+});
 
 // ---- models --------------------------------------------------------------------------------
 let active = null;
@@ -56,6 +208,7 @@ function showActive(meta) {
     ? el("span", {}, "Open: ", el("b", {}, meta.name), ` · step ${fmt(meta.step)}`)
     : "No model open");
   $("activeEntry").hidden = !meta;
+  $("openModelHere").hidden = !!meta;
   window.showChat?.(meta);
   window.showConversation?.(meta);
   if (!meta) return;
@@ -777,10 +930,10 @@ function onTeachFinished(f) {
 // ---- settings kept on this device and updates ------------------------------------------------
 // The Classroom and Conversation pages' settings are kept in Studio's settings file (in the app's
 // data folder), so they survive restarts and updates. Passwords and files are never kept.
-const KEPT_PAGES = { classroom: "page-classroom", conversation: "page-conversation" };
-function formState(root) {
+const KEPT_PAGES = { classroom: ["page-classroom"], conversation: ["page-conversation", "page-cdata"] };
+function formState(roots) {
   const out = {};
-  for (const e of root.querySelectorAll("input[id], select[id]")) {
+  for (const e of roots.flatMap(r => [...r.querySelectorAll("input[id], select[id]")])) {
     if (e.type === "password" || e.type === "file" || e.type === "button") continue;
     out[e.id] = e.type === "checkbox" ? e.checked : e.value;
   }
@@ -799,12 +952,12 @@ function keptValueFits(e, v) {
   return typeof v === "string";
 }
 async function restorePageSettings() {
-  for (const [page, id] of Object.entries(KEPT_PAGES)) {
-    const root = $(id);
-    if (!root) continue;
+  for (const [page, ids] of Object.entries(KEPT_PAGES)) {
+    const roots = ids.map(id => $(id)).filter(Boolean);
+    if (!roots.length) continue;
     const saved = await invoke("page_settings", { page }).catch(() => null);
     for (const [key, v] of Object.entries(saved || {})) {
-      const e = root.querySelector("#" + CSS.escape(key));
+      const e = roots.map(r => r.querySelector("#" + CSS.escape(key))).find(Boolean);
       if (!e || e.type === "password" || e.type === "file") continue;
       // Only values the control can hold: a choice that still exists, a number in range. Anything
       // else keeps the control's default (and is reported), never a blank or broken value.
@@ -813,10 +966,10 @@ async function restorePageSettings() {
       e.dispatchEvent(new Event("change", { bubbles: true }));
     }
     let timer = null;
-    root.addEventListener("change", ev => {
+    for (const root of roots) root.addEventListener("change", ev => {
       if (!ev.target.id || ev.target.type === "password") return;
       clearTimeout(timer);
-      timer = setTimeout(() => invoke("save_page_settings", { page, settings: formState(root) }).catch(e => log("ERROR", e)), 400);
+      timer = setTimeout(() => invoke("save_page_settings", { page, settings: formState(roots) }).catch(e => log("ERROR", e)), 400);
     });
   }
 }
@@ -1045,7 +1198,7 @@ $("generate").addEventListener("click", safe(async () => {
 $("cancelDownload").addEventListener("click", safe(() => invoke("cancel_download"), "Cancel download"));
 $("finishDownload").addEventListener("click", safe(async () => { await invoke("finish_download"); say("Finishing the download: what it has so far is kept."); }, "Finish download"));
 // Downloads run one at a time; the ones asked for meanwhile wait their turn. Both download
-// panels (§ 2 Reading, § 4 Conversation) list the queue.
+// panels (Train ▸ Reading, Train ▸ Conversation) list the queue.
 function renderDownloadQueue(q) {
   const build = () => {
   const button = (label, cmd, args, title) => el("button", { type: "button", class: "small", title: title || "", onclick: safe(async () => renderDownloadQueue(await invoke(cmd, args)), label) }, label);
@@ -1117,7 +1270,7 @@ function onDownload(e) {
   $("downloadBar").style.width = "100%";
   const c = e.corpus;
   $("downloadLine").textContent = `Saved ${c.name}: ${mb(c.bytes)}, ${fmt(c.documents)} documents (${fmt(c.heldOut)} held out).`;
-  // Chosen for reading only when downloaded for reading (not a § 4 Conversation dataset).
+  // Chosen for reading only when downloaded for reading (not a Train ▸ Conversation dataset).
   if (sourcesList.some(s => s.id === e.source)) pick(c.id);
   refreshCorpora();
   say(`Downloaded ${c.name}.`);
@@ -1128,7 +1281,7 @@ let readParts = [];
 // The Reading page's settings, as the backend (and a plan's reading step) takes them.
 function readingOptions() {
   const parts = chosen();
-  if (!parts.length) throw new Error("Tick the corpora to read on § 2 Reading (download one, generate practice or use a text file first)");
+  if (!parts.length) throw new Error("Tick the corpora to read on Train ▸ Reading (download one, generate practice or use a text file first)");
   const stages = {};
   for (const sel of document.querySelectorAll("#stageMap select")) stages[sel.dataset.cat] = sel.value;
   return {

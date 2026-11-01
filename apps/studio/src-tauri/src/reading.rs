@@ -1291,7 +1291,7 @@ pub(crate) fn run_download(app: &AppHandle, source: &str, max_mb: u64, cancel: &
     };
     let note = match corpus.as_ref().and_then(|c| c.filter.as_ref()) {
         Some(r) => Some(format!(
-            "Every usable conversation was kept; {}. The filters apply when practice starts (§ 4).",
+            "Every usable conversation was kept; {}. The filters apply when practice starts (Train ▸ Conversation).",
             r.estimate()
         )),
         None => last_note.into_inner(),

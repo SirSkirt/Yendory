@@ -1,4 +1,4 @@
-// § 14 Datasets: importing a dataset of your choosing (imports.rs). Inspect a source, tick files
+// Datasets: importing a dataset of your choosing (imports.rs). Inspect a source, tick files
 // of one split, read their columns, choose what becomes a document, preview, import.
 (() => {
   let inspection = null;
@@ -146,7 +146,7 @@
       } });
       const r = info.import?.report;
       $("impResult").replaceChildren(el("b", { class: "ok" }, `Imported ${info.name}: `), `${mb(info.bytes)}, ${fmt(info.documents)} documents. `,
-        r ? `${r.accepted} of ${r.examined} records imported` : "", info.category === "conversation" ? " It is on § 4 Conversation." : " It is on § 2 Reading.");
+        r ? `${r.accepted} of ${r.examined} records imported` : "", info.category === "conversation" ? " It is on Train ▸ Conversation." : " It is on Train ▸ Reading.");
       say(`Imported ${info.name}.`);
       refreshCorpora?.();
       window.refreshConversation?.();

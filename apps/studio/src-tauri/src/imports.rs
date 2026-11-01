@@ -142,7 +142,7 @@ fn hf_get(agent: &ureq::Agent, url: &str) -> Res<ureq::Response> {
     }
     r.call().map_err(|e| match e {
         ureq::Error::Status(401, _) => format!(
-            "Hugging Face answered 401 for {url}: the dataset is private or gated (accept its conditions on its page while signed in, and connect your account on § 4)"
+            "Hugging Face answered 401 for {url}: the dataset is private or gated (accept its conditions on its page while signed in, and connect your account on Train ▸ Conversation)"
         ),
         ureq::Error::Status(403, _) => format!("Hugging Face refused access (403) for {url}: accept the dataset's conditions on its page while signed in"),
         ureq::Error::Status(404, _) => format!("Not found (404): {url}"),
@@ -199,7 +199,7 @@ fn inspect_hub(agent: &ureq::Agent, repo: &str, rev: &str) -> Res<Inspection> {
         })
         .filter(|l| !l.is_empty());
     if info.get("gated").is_some_and(|g| g.as_bool() != Some(false)) {
-        notes.push("This dataset is gated: accept its conditions on its Hugging Face page while signed in, and connect your account (§ 4).".into());
+        notes.push("This dataset is gated: accept its conditions on its Hugging Face page while signed in, and connect your account (Train ▸ Conversation).".into());
     }
     // Every file of the revision (the listing comes in pages).
     let mut files = Vec::new();
@@ -1311,7 +1311,7 @@ pub struct ImportProvenance {
     pub imported: u64,
     pub mapping: Mapping,
     pub report: ImportReport,
-    /// Conversation datasets: the quality filter's switches (§ 4) apply to it at practice.
+    /// Conversation datasets: the quality filter's switches (Train ▸ Conversation) apply to it at practice.
     pub filtered_at_practice: bool,
 }
 
