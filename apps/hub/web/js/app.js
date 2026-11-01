@@ -23,13 +23,14 @@ const store = {
 };
 
 // Studio opens the model the Hub hands it (`--model <id>`, docs/HANDOFF.md) from this version
-// on. null: no released Studio does yet, so the card says Studio opens on its Models page.
-const STUDIO_OPENS_MODELS_FROM = null;
+// on, and a running Studio takes it from a second start.
+const STUDIO_OPENS_MODELS_FROM = "0.9.3";
 
 const S = {
   models: [],
   shelves: { shelves: [], places: {} },
-  programs: [],
+  // The suite's components: hub, network, studio, tools (Downloads & updates).
+  components: [],
   about: null,
   options: null,
   shelf: store.get("shelf", ""),
@@ -38,7 +39,7 @@ const S = {
   search: "",
   view: "shelf",
   job: null,
-  hubUpdate: null,
+  networkError: null,
 };
 
 // ---- Formatting --------------------------------------------------------------------------------
@@ -94,14 +95,14 @@ async function act(cmd, args) {
 
 // In-page dialogs that wait for the answer (the webview's confirm() and prompt() do not reliably
 // wait on every platform). `field`: an element whose value is the answer (null: yes/no).
-function dialog(message, field, okLabel = "OK") {
+function dialog(message, field, okLabel = "OK", content = null) {
   return new Promise(resolve => {
     const before = document.activeElement;
     const ok = el("button", { type: "button", class: "primary" }, okLabel);
     const cancel = el("button", { type: "button" }, "Cancel");
     const overlay = el("div", { class: "modal" },
       el("div", { class: "modal-box", role: "dialog", "aria-modal": "true", "aria-label": message },
-        el("p", {}, message), field || "", el("div", { class: "actions" }, cancel, ok)));
+        el("p", {}, message), content || "", field || "", el("div", { class: "actions" }, cancel, ok)));
     const done = yes => {
       overlay.remove();
       document.removeEventListener("keydown", key, true);
@@ -125,17 +126,29 @@ const askYes = (message, okLabel) => dialog(message, null, okLabel);
 const askText = (message, initial = "") => dialog(message, el("input", { type: "text", value: initial, maxlength: 60, "aria-label": message }));
 
 // ---- Loading -------------------------------------------------------------------------------------
-async function loadLibrary() {
-  const [models, shelves] = await Promise.all([act("list_models"), act("shelves")]);
-  if (models) S.models = models;
-  if (shelves) S.shelves = shelves;
+const networkReady = () => !!S.about?.network;
+
+async function loadAbout() {
+  // Connects to the Yendory Network (starting it when it is installed).
+  const a = await act("about");
+  if (a) { S.about = a; S.networkError = a.networkError; }
 }
-async function loadPrograms(check = false) {
-  const p = await act("programs", { check });
-  if (p) S.programs = p;
+async function loadLibrary() {
+  const shelves = await act("shelves");
+  if (shelves) S.shelves = shelves;
+  if (!networkReady()) return;
+  try {
+    S.models = await invoke("list_models");
+  } catch (e) {
+    S.networkError = String(e);
+  }
+}
+async function loadComponents(check = false) {
+  const c = await act("components", { check });
+  if (c) S.components = c;
 }
 async function refresh() {
-  await Promise.all([loadLibrary(), loadPrograms()]);
+  await Promise.all([loadLibrary(), loadComponents()]);
   render();
 }
 
@@ -146,7 +159,8 @@ function shelfOf(m) {
   const placed = S.shelves.places[m.id];
   return shelfIds().includes(placed) ? placed : S.shelves.shelves[0]?.id;
 }
-const program = id => S.programs.find(p => p.id === id);
+const component = id => S.components.find(c => c.id === id);
+const programs = () => S.components.filter(c => c.kind === "program");
 const selected = () => S.models.find(m => m.id === S.sel);
 
 function visibleModels() {
@@ -167,21 +181,43 @@ function spineHeight(p) {
   return Math.round(Math.min(220, Math.max(112, h)));
 }
 
+const atLeast = (have, need) => {
+  const parts = v => v.split(/[-+]/)[0].split(".").map(Number);
+  const [a, b] = [parts(have), parts(need)];
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  return true;
+};
+const opensModels = studio => !!(STUDIO_OPENS_MODELS_FROM && studio?.version && atLeast(studio.version, STUDIO_OPENS_MODELS_FROM));
+/** Installed on its own (not by the Hub): it can be switched to the Hub. */
+const onItsOwn = c => c && c.installed && !c.managed && c.legacy.length > 0;
+
 // ---- Rendering -----------------------------------------------------------------------------------
 function render() {
   const visible = visibleModels();
   if (!visible.some(m => m.id === S.sel)) S.sel = visible[0]?.id || "";
   store.set("sel", S.sel);
-  for (const v of ["shelf", "new", "programs", "settings"]) $("view-" + v).hidden = S.view !== v;
+  const setup = S.view === "shelf" && !networkReady();
+  for (const v of ["shelf", "new", "programs", "settings"]) $("view-" + v).hidden = S.view !== v || setup;
+  $("view-setup").hidden = !setup;
   renderSidebar();
-  if (S.view === "shelf") { renderShelf(visible); renderCard(); }
-  if (S.view === "programs") renderPrograms();
+  if (setup) renderSetup();
+  else if (S.view === "shelf") { renderSwitchOffer(); renderShelf(visible); renderCard(); }
+  if (S.view === "programs") renderComponents();
   if (S.view === "settings") renderSettings();
 }
 
+/** Stage text for an install in progress. */
+function jobText(job) {
+  const name = component(job.id)?.name || job.id;
+  if (job.stage === "downloading") return `Downloading ${name} · ${bytes(job.received)}${job.total ? " of " + bytes(job.total) : ""}`;
+  if (job.stage === "checking") return `Checking ${name}'s signature`;
+  if (job.stage === "switching") return job.note || `Switching ${name} to the Hub`;
+  return `Installing ${name}`;
+}
+const jobPercent = job => (job.stage === "downloading" ? (job.total ? Math.min(100, (100 * job.received) / job.total) : 0) : 100);
+
 function renderSidebar() {
-  const list = $("shelfList");
-  list.replaceChildren(...S.shelves.shelves.map(s => {
+  $("shelfList").replaceChildren(...S.shelves.shelves.map(s => {
     const n = S.models.filter(m => shelfOf(m) === s.id).length;
     const on = S.view === "shelf" && !S.search && s.id === currentShelf()?.id;
     return el("button", { type: "button", class: "sb-item" + (on ? " on" : ""), title: `${s.name}: ${plural(n, "model", "models")}`, "aria-current": on ? "true" : null,
@@ -190,31 +226,102 @@ function renderSidebar() {
       el("span", { class: "lbl" }, s.name), el("span", { class: "cnt" }, n));
   }));
   const m = selected();
-  $("programList").replaceChildren(...S.programs.map(p => {
-    const status = !p.released ? "not released" : p.running ? "open" : p.installed ? (p.update ? "update" : "installed") : "install";
-    const opens = p.installed && !p.running;
+  $("programList").replaceChildren(...programs().map(p => {
+    const status = p.released === false && !p.installed ? "not released" : p.running ? "open"
+      : onItsOwn(p) ? "on its own" : p.update ? "update" : p.installed ? "installed" : "install";
+    const opens = p.installed && (!p.running || (p.id === "studio" && opensModels(p)));
     const title = opens ? (m ? `Open ${m.name} in ${shortName(p)}` : `Start ${shortName(p)}`) : `${p.name}: ${status}`;
     return el("button", { type: "button", class: "sb-item", title,
       onclick: () => (opens ? launch(p.id, m?.id) : show("programs")) },
       programMark(p),
       p.running ? el("i", { class: "live", title: "Running" }) : "",
       el("span", { class: "lbl" }, shortName(p)),
-      el("span", { class: "st" + (p.update ? " warn" : p.running ? " ok" : "") }, status));
+      el("span", { class: "st" + (p.update || onItsOwn(p) ? " warn" : p.running ? " ok" : "") }, status));
   }));
-  const updates = S.programs.filter(p => p.update).length + (S.hubUpdate ? 1 : 0);
-  $("updateCount").textContent = updates || "";
+  const pending = S.components.filter(c => c.update || c.restartReady || (c.kind === "service" && !c.managed && c.released)).length;
+  $("updateCount").textContent = pending || "";
   for (const b of document.querySelectorAll(".sb-foot [data-view]")) b.classList.toggle("on", S.view === b.dataset.view);
-  if (S.about) $("versions").textContent = `Hub ${S.about.hub} · Engine ${S.about.engine}`;
+  const a = S.about;
+  if (a) {
+    $("versions").textContent = `Hub ${a.hub} · ` + (a.network ? `Network ${a.network}` : "no Network");
+    $("versions").title = a.network ? `Yendory Network ${a.network}, Engine ${a.engine}` : a.networkError || "";
+  }
   const job = S.job;
   $("job").hidden = !job;
   if (job) {
-    const name = program(job.id)?.name || job.id;
-    const pct = job.total ? Math.min(100, (100 * job.received) / job.total) : 0;
-    $("jobText").textContent = job.stage === "downloading"
-      ? `Downloading ${name} · ${bytes(job.received)}${job.total ? " of " + bytes(job.total) : ""}`
-      : job.stage === "checking" ? `Checking ${name}'s signature` : `Installing ${name}`;
-    $("jobBar").style.width = (job.stage === "downloading" ? pct : 100) + "%";
+    $("jobText").textContent = jobText(job);
+    $("jobBar").style.width = jobPercent(job) + "%";
   }
+}
+
+// ---- The Yendory Network, first ------------------------------------------------------------------
+function renderSetup() {
+  const net = component("network");
+  const box = $("setupBody");
+  const installing = S.job?.id === "network" || net?.installing;
+  const parts = [];
+  if (installing) {
+    parts.push(el("div", { class: "meter" }, el("i", { style: `width:${S.job ? jobPercent(S.job) : 0}%` })),
+      el("p", { class: "note" }, S.job ? jobText(S.job) : "Starting…"));
+  } else if (net?.managed) {
+    parts.push(el("p", {}, "The Yendory Network is installed but isn't answering."),
+      el("p", { class: "note mono" }, S.networkError || ""),
+      el("div", { class: "actions" },
+        el("button", { type: "button", class: "primary", onclick: retryNetwork }, "Try again"),
+        net.canInstall ? el("button", { type: "button", onclick: () => install(net) }, "Install it again") : ""));
+  } else if (net?.released === false) {
+    parts.push(el("p", { class: "note" }, "The Yendory Network hasn't been published on the release page yet, so the Hub can't install it. Models appear here once it is."));
+  } else if (net?.released === undefined || net?.released === null) {
+    parts.push(el("p", { class: "note" }, "Looking for the newest Yendory Network on the release page…"),
+      el("div", { class: "actions" }, el("button", { type: "button", onclick: () => checkUpdates() }, "Look again")));
+  } else {
+    parts.push(el("div", { class: "actions" },
+      el("button", { type: "button", class: "primary", disabled: !net.canInstall, onclick: () => install(net, true) }, `Install the Yendory Network ${net.latest || ""}`),
+      net.installNote ? el("span", { class: "note warn" }, net.installNote) : ""));
+  }
+  box.replaceChildren(...parts);
+}
+async function retryNetwork() {
+  await loadAbout();
+  await refresh();
+}
+
+// ---- Switching Studio to the Hub -----------------------------------------------------------------
+const LEGACY = { installer: "its own installer", system: "a system package (.deb)", "hub-0.1": "Hub 0.1", located: "a file you chose" };
+function legacyText(c) {
+  return c.legacy.map(l => LEGACY[l.kind] || l.kind).join(" and ");
+}
+function renderSwitchOffer() {
+  const studio = component("studio");
+  const box = $("switchOffer");
+  if (!onItsOwn(studio) || store.get("switchLater", "") === (studio.version || "?")) { box.hidden = true; return; }
+  box.hidden = false;
+  const ready = studio.released === true && !studio.running;
+  box.replaceChildren(
+    el("p", {}, el("b", {}, `Yendory Studio${studio.version ? " " + studio.version : ""} is installed on its own`), ` (from ${legacyText(studio)}).`),
+    el("p", { class: "note" }, "Switch it to the Hub to have the Hub keep it updated. The old copy is removed and the Hub's is installed; your models, datasets, chats and settings stay where they are."),
+    el("div", { class: "actions" },
+      el("button", { type: "button", class: "primary", disabled: !ready, onclick: switchStudio }, "Switch to the Hub…"),
+      el("button", { type: "button", class: "quiet", onclick: () => { store.set("switchLater", studio.version || "?"); render(); } }, "Not now"),
+      !ready ? el("span", { class: "note" }, studio.running ? "Close Studio first." : studio.released === false
+        ? "Available once Studio publishes its Hub package." : "Looking for Studio's Hub package…") : ""));
+}
+async function switchStudio() {
+  const studio = component("studio");
+  const steps = [
+    `The Hub downloads Studio ${studio.latest || ""} and checks its signature.`,
+    "Your Studio data folder is set aside, so nothing can touch it.",
+    studio.legacy.some(l => l.kind === "system") ? "The old Studio package is removed (the system asks for your password)." : "The old Studio is removed.",
+    "Your data folder goes back, and the Hub's Studio is installed with its menu shortcut.",
+  ];
+  const list = el("ol", { class: "steps" }, ...steps.map(s => el("li", {}, s)));
+  if (!(await dialog("Switch Yendory Studio to the Hub?", null, "Switch", list))) return;
+  S.job = { id: "studio", stage: "downloading", received: 0, total: null };
+  render();
+  const c = await act("switch_studio");
+  S.job = null;
+  if (c) { S.components = c; toast("Yendory Studio is now installed and updated by the Hub"); }
+  render();
 }
 
 function renderShelf(visible) {
@@ -273,27 +380,30 @@ function renderCard() {
   }
   const row = (label, value, opts = {}) => el("div", { class: "row" + (opts.cls ? " " + opts.cls : "") }, el("span", {}, label), el("span", { class: opts.mono ? "m" : "" }, value));
   const words = m.wordLimit != null ? `${fmt(m.words)} of up to ${fmt(m.wordLimit)}` : `${fmt(m.words)} of ${fmt(m.slots)} slots`;
-  const studio = program("studio"), tools = program("tools");
+  const studio = component("studio"), tools = component("tools");
   const studioRunning = !!studio?.running;
   let studioButton, why = "";
   if (!studio) {
     studioButton = el("button", { type: "button", class: "primary", disabled: true }, "Open in Studio");
   } else if (!studio.installed) {
     studioButton = el("button", { type: "button", class: "primary", onclick: () => show("programs") }, "Install Studio…");
-  } else if (studioRunning) {
+  } else if (studioRunning && !opensModels(studio)) {
     studioButton = el("button", { type: "button", class: "primary", disabled: true }, "Open in Studio");
-    why = `Studio is open. Switch to it and open ${m.name} from § 1 Models: a program that is already running can't be handed a model yet.`;
+    why = `Studio ${studio.version || ""} is open. Switch to it and open ${m.name} from its Models page: this Studio can't be handed a model while it runs (Studio ${STUDIO_OPENS_MODELS_FROM} and later can).`;
   } else {
     studioButton = el("button", { type: "button", class: "primary", onclick: () => launch("studio", m.id) }, "Open in Studio");
-    if (!opensModels(studio)) why = `Studio${studio.version ? " " + studio.version : ""} starts on its Models page: choose ${m.name} there. It will open the model directly once Studio supports the Hub's hand-off.`;
+    if (studioRunning) why = `Studio is open: ${m.name} opens there.`;
+    else if (!opensModels(studio)) why = `Studio${studio.version ? " " + studio.version : ""} starts on its Models page: choose ${m.name} there. Studio ${STUDIO_OPENS_MODELS_FROM} and later open it directly.`;
   }
   const toolsButton = tools?.installed && !tools.running
     ? el("button", { type: "button", onclick: () => launch("tools", m.id) }, "Open in Tools")
-    : el("button", { type: "button", disabled: true }, tools && !tools.released ? "Tools · not released yet" : "Tools");
-  const lockedTitle = studioRunning ? "Close Studio first: it may have this model open" : null;
+    : el("button", { type: "button", disabled: true }, tools && tools.released === false ? "Tools · not released yet" : "Tools");
+  const locked = studioRunning || m.openBy.length > 0;
+  const lockedTitle = locked ? `Close ${m.openBy.length ? m.openBy.join(" and ") : "Studio"} first: it may have this model open` : null;
   card.replaceChildren(
     el("h2", {}, m.name, el("span", { class: `tag ${m.architecture}` }, `${archName(m.architecture)} ${short(m.parameters)}`)),
     m.plan ? row("Training plan", `${m.plan.name}: ${planText(m.plan)}`, { cls: m.plan.inProgress ? "plan" : "" }) : "",
+    m.openBy.length ? row("Open in", m.openBy.join(", ")) : "",
     row("Training steps", fmt(m.step), { mono: true }),
     row("Parameters", fmt(m.parameters), { mono: true }),
     row("Words learned", words),
@@ -309,24 +419,16 @@ function renderCard() {
       why ? el("p", { class: "why" }, why) : "",
       el("div", { class: "more" },
         el("button", { type: "button", class: "quiet", onclick: () => moveModel(m) }, "Move to shelf…"),
-        el("button", { type: "button", class: "quiet", onclick: () => renameModel(m), disabled: studioRunning, title: lockedTitle }, "Rename…"),
+        el("button", { type: "button", class: "quiet", onclick: () => renameModel(m), disabled: locked, title: lockedTitle }, "Rename…"),
         el("button", { type: "button", class: "quiet", onclick: () => exportModel(m) }, "Export…"),
-        el("button", { type: "button", class: "quiet", onclick: () => deleteModel(m), disabled: studioRunning, title: lockedTitle }, "Delete…"))));
+        el("button", { type: "button", class: "quiet", onclick: () => deleteModel(m), disabled: locked, title: lockedTitle }, "Delete…"))));
   recent.replaceChildren(el("h3", {}, "Recently"),
     ...(m.recent.length
       ? m.recent.map(r => el("div", { class: "rec" }, el("span", { class: "when" }, when(r.time)), el("span", { class: "who" }, r.program), r.text))
       : [el("p", { class: "empty note" }, "Nothing yet. Lessons, reading and what the Hub does with this model appear here.")]));
 }
 
-function opensModels(studio) {
-  if (!STUDIO_OPENS_MODELS_FROM || !studio.version) return false;
-  const parts = v => v.split(/[-+]/)[0].split(".").map(Number);
-  const [a, b] = [parts(studio.version), parts(STUDIO_OPENS_MODELS_FROM)];
-  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
-  return true;
-}
-
-/** A program's logo (Studio's own icon), or its initial while it has none. */
+/** A component's mark: the program's own logo, or its initial while it has none. */
 function programMark(p) {
   const off = p.installed ? "" : " off";
   return LOGOS[p.id]
@@ -337,10 +439,10 @@ const LOGOS = { studio: "img/studio.png" };
 
 // ---- Model actions -------------------------------------------------------------------------------
 async function launch(id, model) {
-  const p = program(id);
+  const p = component(id);
   const ok = await act("launch", { id, model: model || null });
   if (ok === undefined) return;
-  toast(model ? `Starting ${p?.name || id} with ${S.models.find(m => m.id === model)?.name || "the model"}…` : `Starting ${p?.name || id}…`);
+  toast(model ? `Opening ${S.models.find(m => m.id === model)?.name || "the model"} in ${p?.name || id}…` : `Starting ${p?.name || id}…`);
   setTimeout(refresh, 2500);
 }
 async function importModel() {
@@ -448,6 +550,7 @@ function contextChoice() {
 function renderSizes() {
   const arch = $("archChoice").value;
   const sizes = S.options[arch];
+  const perParam = S.options.bytesPerParameter || 12;
   const body = $("sizeTable").tBodies[0];
   const chosen = body.querySelector("input:checked")?.value;
   const keep = sizes.some(s => s.id === chosen) ? chosen : sizes[0].id;
@@ -457,13 +560,13 @@ function renderSizes() {
     const start = limit == null ? s.parameters : s.parameters - 256 * s.perWord;
     const radio = el("input", { type: "radio", name: "newSize", value: s.id, checked: s.id === keep, "aria-label": s.name });
     const tr = el("tr", { class: "pick" + (s.id === keep ? " current-row" : "") },
-      el("td", {}, radio), el("td", {}, s.name), el("td", { class: "num" }, fmt(start)), el("td", { class: "num" }, bytes(start * 12)));
+      el("td", {}, radio), el("td", {}, s.name), el("td", { class: "num" }, fmt(start)), el("td", { class: "num" }, bytes(start * perParam)));
     tr.addEventListener("click", () => { radio.checked = true; renderSizes(); });
     return tr;
   }));
   const s = sizes.find(x => x.id === keep);
   $("sizeNote").textContent = limit == null
-    ? "Nova-2's layout: 256 word slots, all reserved from the start. The file holds the weights and the optimizer's state (12 bytes per parameter)."
+    ? `Nova-2's layout: 256 word slots, all reserved from the start. The file holds the weights and the optimizer's state (${perParam} bytes per parameter).`
     : `With a vocabulary limit the model starts with no word slots and adds ${fmt(s.perWord)} parameters for each word it learns` +
       (Number.isFinite(limit) && limit > 0 ? `: ${fmt(s.parameters - 256 * s.perWord + limit * s.perWord)} once it knows ${fmt(limit)} words.` : ".");
 }
@@ -478,7 +581,7 @@ async function createModel() {
   const shelf = $("newShelfChoice").value;
   const button = $("createModel");
   button.disabled = true; button.textContent = "Creating…";
-  const id = await act("create_model", { choice: { name, architecture: $("archChoice").value, preset, wordLimit, context, shelf } });
+  const id = await act("create_model", { choice: { name, architecture: $("archChoice").value, preset, wordLimit, context }, shelf });
   button.disabled = false; button.textContent = "Create untrained model";
   if (!id) return;
   S.sel = id; S.shelf = shelf; store.set("shelf", shelf);
@@ -489,101 +592,104 @@ async function createModel() {
 }
 
 // ---- Downloads & updates -------------------------------------------------------------------------
-function renderPrograms() {
-  const body = $("programTable").tBodies[0];
-  body.replaceChildren(...S.programs.map(p => {
-    const installedCell = !p.released ? el("td", { class: "note" }, "Not released yet")
-      : p.installed
-        ? el("td", {}, el("span", { class: "mono" }, p.version || "version unknown"), p.running ? el("span", { class: "ok" }, " · open now") : "",
-          el("div", { class: "note mono" }, p.path))
-        : el("td", {}, "Not installed");
-    let action;
-    if (p.installing || (S.job && S.job.id === p.id)) {
-      const j = S.job;
-      const pct = j && j.total ? (100 * j.received) / j.total : 0;
-      action = el("td", { class: "act" },
-        el("div", { class: "meter" }, el("i", { style: `width:${j?.stage === "downloading" ? pct : 100}%` })),
-        el("div", { class: "note" }, !j ? "Starting…" : j.stage === "downloading" ? `${bytes(j.received)}${j.total ? " of " + bytes(j.total) : ""}` : j.stage === "checking" ? "Checking the signature…" : "Installing…"),
-        el("button", { type: "button", class: "quiet", onclick: () => invoke("cancel_install") }, "Cancel"));
-    } else {
-      const buttons = [];
-      if (p.released && p.canInstall && (!p.installed || p.update)) {
-        buttons.push(el("button", { type: "button", class: "primary", disabled: p.running, title: p.running ? `Close ${p.name} first` : null, onclick: () => install(p) },
-          p.installed ? `Update to ${p.latest}` : "Install"));
-      }
-      if (p.installed) buttons.push(el("button", { type: "button", disabled: p.running, onclick: () => launch(p.id) }, p.running ? "Open now" : "Start"));
-      if (p.released && !p.canInstall && p.installNote) buttons.push(el("button", { type: "button", class: "quiet", onclick: () => act("open_releases") }, "Release page"));
-      action = el("td", { class: "act" }, el("div", { class: "act-btns" }, ...buttons));
-    }
-    return el("tr", {},
-      el("td", {}, el("div", { class: "prog-name" }, programMark(p), el("b", {}, p.name)), el("div", { class: "note" }, p.does), p.released && p.installNote ? el("div", { class: "note warn" }, p.installNote) : ""),
-      installedCell,
-      el("td", { class: "mono" }, p.latest || "—"),
-      action);
-  }));
-  if (S.about) $("hubVersion").textContent = `Hub ${S.about.hub}`;
+function statusCell(c) {
+  if (!c.installed) return el("td", {}, c.released === false ? el("span", { class: "note" }, "Not released yet") : "Not installed");
+  const how = c.kind === "hub" ? "running now" : c.managed ? "installed by the Hub" : `on its own, from ${legacyText(c)}`;
+  return el("td", {},
+    el("span", { class: "mono" }, c.version || "version unknown"),
+    c.running && c.kind !== "hub" ? el("span", { class: "ok" }, c.kind === "service" ? " · running" : " · open now") : "",
+    el("div", { class: "note" + (c.managed || c.kind === "hub" ? "" : " warn") }, how));
 }
-async function install(p) {
-  const verb = p.installed ? "Update" : "Install";
-  const where = navigator.userAgent.includes("Windows")
-    ? "its installer opens with a progress bar and installs over any earlier version, keeping your models and settings"
-    : "the Hub keeps it in its own folder and starts it from there";
-  if (!(await askYes(`${verb} ${p.name} ${p.latest || ""}? The Hub downloads it from the release page and checks its signature; then ${where}.`, verb))) return;
-  S.job = { id: p.id, stage: "downloading", received: 0, total: null };
+function actionCell(c) {
+  const job = S.job && S.job.id === c.id ? S.job : null;
+  if (job || c.installing) {
+    return el("td", { class: "act" },
+      el("div", { class: "meter" }, el("i", { style: `width:${job ? jobPercent(job) : 0}%` })),
+      el("div", { class: "note" }, job ? jobText(job) : "Starting…"),
+      job?.stage === "downloading" ? el("button", { type: "button", class: "quiet", onclick: () => invoke("cancel_install") }, "Cancel") : "");
+  }
+  const b = [];
+  const busy = !!S.job;
+  if (c.kind === "hub") {
+    if (c.restartReady) b.push(el("button", { type: "button", class: "primary", onclick: () => act("restart_hub") }, `Restart to finish (${c.restartReady})`));
+    else if (c.update) b.push(el("button", { type: "button", class: "primary", disabled: busy || !c.canInstall, onclick: () => install(c) }, `Update to ${c.latest}`));
+  } else if (onItsOwn(c)) {
+    b.push(el("button", { type: "button", class: "primary", disabled: busy || c.running || c.released !== true, onclick: switchStudio,
+      title: c.running ? `Close ${c.name} first` : c.released !== true ? "Studio hasn't published its Hub package yet" : null }, "Switch to the Hub…"));
+    b.push(el("button", { type: "button", disabled: c.running && !opensModels(c), onclick: () => launch(c.id) }, "Start"));
+  } else if (!c.installed) {
+    if (c.released === true) b.push(el("button", { type: "button", class: "primary", disabled: busy || !c.canInstall, onclick: () => install(c) }, "Install"));
+  } else {
+    if (c.update) b.push(el("button", { type: "button", class: "primary", disabled: busy || !c.canInstall || (c.running && c.kind === "program"), title: c.running && c.kind === "program" ? `Close ${c.name} first` : null, onclick: () => install(c) }, `Update to ${c.latest}`));
+    if (c.kind === "program") {
+      b.push(el("button", { type: "button", disabled: c.running && !opensModels(c), onclick: () => launch(c.id) }, c.running ? "Open now" : "Start"));
+      b.push(el("button", { type: "button", class: "quiet", disabled: busy || c.running, onclick: () => removeComponent(c) }, "Remove…"));
+    }
+  }
+  return el("td", { class: "act" }, el("div", { class: "act-btns" }, ...b));
+}
+function renderComponents() {
+  $("componentTable").tBodies[0].replaceChildren(...S.components.map(c => el("tr", {},
+    el("td", {}, el("div", { class: "prog-name" }, programMark(c), el("b", {}, c.name)), el("div", { class: "note" }, c.does),
+      c.installNote && !onItsOwn(c) && c.released !== false ? el("div", { class: "note warn" }, c.installNote) : ""),
+    statusCell(c),
+    el("td", { class: "mono" }, c.latest || "—"),
+    actionCell(c))));
+}
+async function install(c, quiet = false) {
+  if (!quiet) {
+    const text = c.kind === "hub"
+      ? `Update the Hub to ${c.latest}? The Hub downloads its new version and checks its signature; restart it to finish. Your shelves and settings are kept.`
+      : `${c.installed ? "Update" : "Install"} ${c.name} ${c.latest || ""}? The Hub downloads it from the release page, checks its signature, and keeps it in its own folder.` +
+        (c.kind === "service" ? " Programs using the Network must be closed first." : "");
+    if (!(await askYes(text, c.installed ? "Update" : "Install"))) return;
+  }
+  S.job = { id: c.id, stage: "downloading", received: 0, total: null };
   render();
-  const programs = await act("install_program", { id: p.id });
+  const done = await act("install_component", { id: c.id });
   S.job = null;
-  if (programs) {
-    S.programs = programs;
-    toast(navigator.userAgent.includes("Windows") ? `${p.name}'s installer is running` : `${p.name} is installed`);
+  if (done) {
+    S.components = done;
+    const now = component(c.id);
+    toast(c.kind === "hub" ? `Hub ${now?.restartReady} is ready: restart to finish` : `${c.name} ${now?.version || ""} is installed`);
+    if (c.kind === "service") { await loadAbout(); await loadLibrary(); }
   }
   render();
-  if (programs && navigator.userAgent.includes("Windows")) setTimeout(() => loadPrograms().then(render), 15000);
+}
+async function removeComponent(c) {
+  if (!(await askYes(`Remove ${c.name} from this computer? Your models and its data stay; you can install it again here.`, "Remove"))) return;
+  const done = await act("remove_component", { id: c.id });
+  if (done) { S.components = done; toast(`${c.name} was removed`); }
+  render();
 }
 async function checkUpdates() {
   $("checkNote").textContent = "Checking…";
-  await loadPrograms(true);
-  const reached = S.programs.some(p => p.released && p.latest);
+  await loadComponents(true);
+  const reached = S.components.some(c => c.released !== null && c.released !== undefined);
   $("checkNote").textContent = reached ? `Checked ${when(Date.now() / 1000)}` : "The release page could not be reached. Check the internet connection.";
   render();
 }
-async function checkHub() {
-  $("hubNote").textContent = "Checking…";
-  try {
-    S.hubUpdate = await invoke("check_hub_update");
-    $("installHub").hidden = !S.hubUpdate;
-    $("hubNote").textContent = S.hubUpdate
-      ? `Hub ${S.hubUpdate.version} is available. Updating installs over this version and keeps your shelves and settings.`
-      : "This is the newest Hub.";
-  } catch (e) {
-    $("hubNote").textContent = String(e);
-  }
-  renderSidebar();
-}
-async function installHub() {
-  $("installHub").disabled = true;
-  $("hubNote").textContent = "Downloading…";
-  try {
-    await invoke("install_hub_update");
-  } catch (e) {
-    $("hubNote").textContent = String(e);
-    $("installHub").disabled = false;
-  }
-}
 
 // ---- Settings ------------------------------------------------------------------------------------
-const SOURCES = { located: "the file you chose", hub: "installed by the Hub", installer: "its installer", system: "a system package" };
 function renderSettings() {
-  if (S.about) {
-    $("modelsFolder").textContent = S.about.modelsFolder;
-    $("hubFolder").textContent = S.about.hubFolder;
+  const a = S.about;
+  if (a) {
+    $("modelsFolder").textContent = a.modelsFolder;
+    $("programsFolder").textContent = a.programsFolder;
+    $("hubFolder").textContent = a.hubFolder;
+    $("networkInfo").textContent = a.network ? `Network ${a.network}, Engine ${a.engine}` : a.networkError || "Not installed";
   }
-  $("locationTable").tBodies[0].replaceChildren(...S.programs.filter(p => p.released).map(p => el("tr", {},
-    el("td", {}, el("b", {}, p.name)),
-    el("td", {}, p.installed ? [el("div", { class: "mono" }, p.path), el("div", { class: "note" }, `Found from ${SOURCES[p.source] || p.source}`)] : el("span", { class: "note" }, "Not found")),
-    el("td", { class: "act" },
-      el("button", { type: "button", onclick: async () => { if (await act("locate_program", { id: p.id })) { await loadPrograms(); render(); } } }, "Choose its file…"),
-      p.source === "located" ? el("button", { type: "button", class: "quiet", onclick: async () => { await act("forget_location", { id: p.id }); await loadPrograms(); render(); } }, "Forget") : ""))));
+  $("locationTable").tBodies[0].replaceChildren(...programs().filter(p => p.released !== false || p.installed).map(p => {
+    const located = p.legacy.some(l => l.kind === "located");
+    return el("tr", {},
+      el("td", {}, el("b", {}, p.name)),
+      el("td", {}, p.installed
+        ? [el("div", { class: "mono" }, p.path), el("div", { class: "note" }, p.managed ? "Installed by the Hub" : `On its own, from ${legacyText(p)}`)]
+        : el("span", { class: "note" }, "Not found")),
+      el("td", { class: "act" }, p.managed ? "" : el("div", { class: "act-btns" },
+        el("button", { type: "button", onclick: async () => { if (await act("locate_program", { id: p.id })) { await loadComponents(); render(); } } }, "Choose its file…"),
+        located ? el("button", { type: "button", class: "quiet", onclick: async () => { await act("forget_location", { id: p.id }); await loadComponents(); render(); } }, "Forget") : "")));
+  }));
 }
 
 // ---- Wiring --------------------------------------------------------------------------------------
@@ -623,30 +729,39 @@ function wire() {
   $("cancelNew").addEventListener("click", () => show("shelf"));
   $("newName").addEventListener("keydown", e => { if (e.key === "Enter") createModel(); });
   $("checkUpdates").addEventListener("click", checkUpdates);
-  $("checkHub").addEventListener("click", checkHub);
-  $("installHub").addEventListener("click", installHub);
-  listen("install-progress", e => { S.job = e.payload; renderSidebar(); if (S.view === "programs") renderPrograms(); });
-  listen("hub-update-progress", e => {
-    const { received, total } = e.payload;
-    $("hubNote").textContent = `Downloading the new Hub · ${bytes(received)}${total ? " of " + bytes(total) : ""}`;
+  listen("install-progress", e => {
+    S.job = { ...(S.job || {}), ...e.payload };
+    renderSidebar();
+    if (S.view === "programs") renderComponents();
+    if (!$("view-setup").hidden) renderSetup();
+  });
+  listen("network-event", e => {
+    const { name } = e.payload;
+    if (name === "models.changed") loadLibrary().then(render);
+    else if (name === "network.disconnected" && !S.job) {
+      // The Network stopped (or was replaced): connect again in a moment.
+      setTimeout(async () => { await loadAbout(); await refresh(); }, 1500);
+    }
   });
   // Studio may have changed the library or started or stopped while the Hub was in the background.
   window.addEventListener("focus", () => { if (!S.job) refresh(); });
   setInterval(async () => {
     if (!document.hasFocus() || S.job) return;
-    const before = JSON.stringify(S.programs);
-    await loadPrograms();
-    if (JSON.stringify(S.programs) !== before) render();
+    const before = JSON.stringify(S.components);
+    await loadComponents();
+    if (JSON.stringify(S.components) !== before) render();
   }, 10000);
 }
 
 async function start() {
   setFolded(store.get("folded", "0") === "1");
   wire();
-  S.about = await act("about");
+  await loadComponents();
+  render();
+  await loadAbout();
   await refresh();
-  // The newest releases, in the background (needs the internet; quiet when offline).
-  loadPrograms(true).then(render);
-  invoke("check_hub_update").then(u => { S.hubUpdate = u; if (u) { $("installHub").hidden = false; $("hubNote").textContent = `Hub ${u.version} is available.`; } renderSidebar(); }).catch(() => {});
+  if (S.about?.updatedFrom) toast(`The Hub was updated from ${S.about.updatedFrom} to ${S.about.hub}`);
+  // The newest packages, in the background (needs the internet; quiet when offline).
+  loadComponents(true).then(render);
 }
 start();

@@ -1,7 +1,7 @@
 Yendory Engine — origin of the code
 
-crates/yendory-engine/src/model/{mod.rs,tape.rs,cache.rs,golden.rs} and
-crates/yendory-engine/src/tokenizer.rs are carried over from Neural Nova:
+dependency/engine/src/model/{mod.rs,tape.rs,cache.rs,golden.rs} and
+dependency/engine/src/tokenizer.rs are carried over from Neural Nova:
 
   repository: https://github.com/SirSkirt/novaai
   branch:     experimental/neural-nova

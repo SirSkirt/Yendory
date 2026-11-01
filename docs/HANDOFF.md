@@ -18,9 +18,9 @@ Each model is a folder named by its id (`m` followed by hex digits, e.g. `m18e3e
 
 | File | What it is | Written by |
 |---|---|---|
-| `model.nnova2` | The checkpoint (Bicameral `.nnova2` or Nova Neuro layout; the header says which) | Studio, Hub |
-| `meta.json` | Name, size, steps, what it read and was taught (Studio's `Meta`, camelCase) | Studio, Hub |
-| `archive.json` | The lessons taught, kept for rehearsal | Studio, Hub (`[]` for a new model) |
+| `model.nnova2` | The checkpoint (Bicameral `.nnova2` or Nova Neuro layout; the header says which) | Studio, the Network |
+| `meta.json` | Name, size, steps, what it read and was taught (Studio's `Meta`, camelCase) | Studio, the Network |
+| `archive.json` | The lessons taught, kept for rehearsal | Studio, the Network (`[]` for a new model) |
 | `history.jsonl` | Studio's training log | Studio only |
 | `checkpoints/`, recovery points | Unfinished training | Studio only |
 
@@ -30,8 +30,9 @@ Rules for every program:
   only your field, and writing all the rest back as it was. The Hub's rename does exactly this.
 - **Write atomically**: a temporary file, flushed, then renamed over the old one.
 - **Don't change a model Studio has open.** Studio keeps the open model in memory and writes it
-  back when it saves, so a change made underneath it is undone. The Hub refuses rename and
-  delete while Studio is running.
+  back when it saves, so a change made underneath it is undone. The Network refuses a change to
+  a model another program opened through it, and the Hub refuses renames and deletes while a
+  Studio that doesn't use the Network yet is running.
 - Each program keeps its own settings and logs in its own data folder (the Hub: `org.yendory.hub`,
   with `shelves.json`, `settings.json`, `programs.json` and `log.jsonl`). Shelves belong to the
   Hub and never change the models folder.
@@ -53,15 +54,18 @@ The receiving program, when it starts:
 
 A program started without `--model` starts as it always has.
 
-**Already running.** The Hub does not start a second copy of a program that is running (two
-copies would write the same files). It tells the owner to switch to the open program instead.
-A later version can forward the id to the running program (for example with Tauri's
-single-instance plugin), and then the Hub can hand over a model at any time.
+**Already running.** A second start of Studio (0.9.3 and later) hands its `--model` to the
+running copy and closes, so two copies never write the same files. The Hub starts a program
+that is already running only when it does this; otherwise it asks the owner to switch to it.
+
+**Through the Yendory Network.** Programs make and change models through the Yendory Network
+(docs/NETWORK.md), which also refuses a change to a model another program has open. Until Studio
+works through the Network, the Hub refuses renames and deletes while Studio runs.
 
 ## Who supports what
 
-| Program | Reads `--model` | Notes |
-|---|---|---|
-| Hub 0.1.0 | — | Starts Studio with `--model`; creates, imports, renames, deletes and exports models |
-| Studio 0.9.1 | not yet | Starts on § 1 Models; the owner opens the model there. When Studio supports the hand-off, set `STUDIO_OPENS_MODELS_FROM` in `apps/hub/web/js/app.js` to that version so the Hub stops saying so. |
-| Tools | not released | |
+| Program | Reads `--model` | Hands it to a running copy | Through the Network |
+|---|---|---|---|
+| Hub 0.1.1 | — (starts programs with it) | — | yes |
+| Studio 0.9.3 | yes | yes | not yet (docs/NETWORK.md, "Studio on the Network") |
+| Tools | not released | | |

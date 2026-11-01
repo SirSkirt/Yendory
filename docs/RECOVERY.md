@@ -69,7 +69,7 @@ a checkpoint it accepted afterwards. Anything else is refused with a reason.
 
 Tested: on the CPU a reading or a conversation run stopped or killed after any recovery point and
 continued ends with **the same weights, optimizer state and checks, bit for bit**, as a run that
-was never interrupted (`crates/yendory-engine/tests/recovery.rs`; Conversation through a
+was never interrupted (`dependency/engine/tests/recovery.rs`; Conversation through a
 curriculum stage change with a new practice pool pending; Studio's own files read back from disk
 after a simulated crash in `apps/studio/src-tauri/src/recovery.rs`). On a GPU the arithmetic is
 not bit-exact from one run to the next anyway; a continued run agrees with an uninterrupted one to

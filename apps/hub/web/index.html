@@ -40,7 +40,15 @@
 
   <main id="main">
     <!-- The shelf: the models on one shelf, the pulled-out model's card and its recent events -->
+    <!-- First run: the Yendory Network runs the Engine; without it there are no models to show -->
+    <section class="view page" id="view-setup" hidden>
+      <h2><span class="sec">§</span>The Yendory Network</h2>
+      <p class="lede">Every Yendory program works on models through the Yendory Network, a small program that runs the Yendory Engine in the background. The Hub installs it and keeps it updated; it starts when a program needs it and stops when none does.</p>
+      <div class="entry" id="setupBody"></div>
+    </section>
+
     <section class="view" id="view-shelf">
+      <div class="entry offer" id="switchOffer" hidden></div>
       <div class="shelfzone">
         <div class="shelf-label">
           <h1 id="shelfTitle">Models</h1>
@@ -124,19 +132,13 @@
     <!-- Downloads and updates -->
     <section class="view page" id="view-programs" hidden>
       <h2><span class="sec">§</span>Downloads &amp; updates</h2>
-      <p class="lede">The programs of the Yendory suite. The Hub installs them from the project's release page, and checks every installer's signature before it runs.</p>
+      <p class="lede">Everything the Hub installs and keeps up to date. It downloads each part from the project's release page, checks its signature, and installs it itself: no installer windows.</p>
       <div class="actions"><button type="button" id="checkUpdates">Check for updates</button><span class="note" id="checkNote"></span></div>
-      <table class="ledger" id="programTable">
-        <thead><tr><th>Program</th><th>Installed</th><th>Newest</th><th></th></tr></thead>
+      <table class="ledger" id="componentTable">
+        <thead><tr><th>Part</th><th>Installed</th><th>Newest</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
-      <h3>Yendory Hub</h3>
-      <div class="actions">
-        <span id="hubVersion" class="mono">—</span>
-        <button type="button" id="checkHub">Check for a newer Hub</button>
-        <button type="button" class="primary" id="installHub" hidden>Update and restart</button>
-        <span class="note" id="hubNote">Updating installs over this version and keeps your shelves and settings. Models are never touched.</span>
-      </div>
+      <p class="note">Updating the Network asks the programs using it to be closed first. Updating Studio keeps your models, datasets, chats and settings: they live in Studio's data folder, not with the program.</p>
     </section>
 
     <!-- Settings -->
@@ -145,11 +147,13 @@
       <h3>Folders</h3>
       <table class="figures">
         <tr><th>Models</th><td id="modelsFolder" class="mono">—</td></tr>
+        <tr><th>Programs</th><td id="programsFolder" class="mono">—</td></tr>
         <tr><th>Hub</th><td id="hubFolder" class="mono">—</td></tr>
+        <tr><th>Network</th><td id="networkInfo">—</td></tr>
       </table>
-      <p class="note">Models live in Studio's models folder, and every program of the suite reads them from there. The Hub's folder holds your shelves and its settings; removing it forgets the shelves, never the models. Uninstalling Studio can delete its folder, models included: export the models you want to keep.</p>
+      <p class="note">Models live in Studio's models folder, and every program reads them from there through the Yendory Network. The programs folder holds what the Hub installed. The Hub's folder holds your shelves and its settings; removing it forgets the shelves, never the models.</p>
       <h3>Where the programs are</h3>
-      <p class="note">The Hub finds programs it installed and the usual install locations. If yours is somewhere else, choose its file.</p>
+      <p class="note">The Hub knows the programs it installed. It also finds ones installed on their own in the usual places; if yours is somewhere else, choose its file (then it can be switched to the Hub too).</p>
       <table class="ledger" id="locationTable">
         <thead><tr><th>Program</th><th>Found</th><th></th></tr></thead>
         <tbody></tbody>

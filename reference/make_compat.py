@@ -4,7 +4,7 @@
 
 The checkpoint is loaded exactly as stored (float32 weights) and then evaluated in float64, so
 the JSON holds the reference's best answer for those weights. The Rust test
-(crates/yendory-engine/tests/compat.rs) must reproduce, for every case:
+(dependency/engine/tests/compat.rs) must reproduce, for every case:
   - last-position logits for the prompt (uncached and KV-cached), all four ablation modes
   - greedy generation token ids (uncached and KV-cached), identical
   - loss and sampled gradients for one training sequence (backward pass on real weights)

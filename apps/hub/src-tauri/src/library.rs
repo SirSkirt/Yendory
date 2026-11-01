@@ -1,47 +1,13 @@
-//! The models library: the folder Studio keeps its models in, read and written in Studio's own
-//! format (`meta.json` field names and meanings as Studio's `Meta`). The Hub creates, imports,
-//! renames, deletes and exports models; it never trains them.
+//! The models library as the Hub shows it. Models are made, imported, renamed, deleted and
+//! exported by the Yendory Network; the Hub adds what it shows beside them: Studio's training
+//! plans and records, and its own log of what it did with each model.
 use super::*;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri_plugin_dialog::DialogExt;
-use yendory_engine::model::neuro as engine_neuro;
-use yendory_engine::model::{MAX_CONTEXT, MAX_PARAMETERS};
-use yendory_engine::tokenizer::BASE;
-use yendory_engine::{size_presets, Bicameral, Config, Focus};
 
-/// Large enough for the largest model the Engine accepts (as in Studio).
-const MAX_CHECKPOINT_BYTES: u64 = 12_200_000_000;
-
-pub(crate) fn models_dir(app: &AppHandle) -> Res<PathBuf> {
-    let dir = studio_data_dir(app)?.join("models");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
-}
-
-pub(crate) fn model_dir(app: &AppHandle, id: &str) -> Res<PathBuf> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("Invalid model id".into());
-    }
-    Ok(models_dir(app)?.join(id))
-}
-
-fn check_name(name: &str) -> Res<String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
-        return Err("Give the model a name of 1 to 60 characters".into());
-    }
-    Ok(name.to_string())
-}
-
-/// A new model's folder name, made the way Studio makes them.
-fn new_id() -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    format!("m{nanos:x}")
-}
-
-/// Studio keeps the open model in memory and writes it back when it saves, so a change the Hub
-/// makes to that model's files while Studio runs would be undone.
+/// Studio keeps the open model in memory and writes it back when it saves, so a change made to
+/// that model's files while Studio runs would be undone. (Once Studio works through the Network,
+/// the Network refuses such changes itself.)
 fn studio_closed(change: &str) -> Res<()> {
     if programs::running("studio") {
         return Err(format!(
@@ -69,7 +35,6 @@ pub struct PlanView {
     name: String,
     /// Studio's plan status: idle, running, stopped, finished, failed, needs_attention.
     status: String,
-    /// Courses finished or being taught, and how many the plan has.
     position: u64,
     courses: u64,
     /// Teaching has begun and the plan has not finished: the spine wears a ribbon.
@@ -92,12 +57,12 @@ pub struct ModelView {
     updated: u64,
     origin: String,
     file_bytes: u64,
-    /// Lesson files taught (Classroom, courses).
     lessons: usize,
-    /// Corpora read, oldest first, each named once.
     read: Vec<String>,
     recent: Vec<Recent>,
     plan: Option<PlanView>,
+    /// Programs that have the model open through the Network.
+    open_by: Vec<String>,
 }
 
 fn num(v: &Value, key: &str) -> u64 {
@@ -113,7 +78,6 @@ fn loss(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite())
 }
 
-/// What a lesson file's outcome means, in the words Studio's Library uses.
 fn outcome_text(outcome: &str) -> &'static str {
     match outcome {
         "passed" => "passed",
@@ -166,8 +130,12 @@ fn recent(meta: &Value, log: &[Value]) -> Vec<Recent> {
 }
 
 /// Studio's training plans (`plans/<id>/plan.json`), read once per listing.
-fn plans(app: &AppHandle) -> Vec<Value> {
-    let Ok(dir) = studio_data_dir(app).map(|d| d.join("plans")) else { return Vec::new() };
+fn plans() -> Vec<Value> {
+    let Some(dir) =
+        yendory_client::paths::data_dir().map(|d| d.join(yendory_client::paths::STUDIO_ID).join("plans"))
+    else {
+        return Vec::new();
+    };
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     entries.flatten().map(|e| read_json(&e.path().join("plan.json"))).filter(Value::is_object).collect()
 }
@@ -194,7 +162,9 @@ fn plan_of(id: &str, plans: &[Value]) -> Option<PlanView> {
     views.into_iter().nth(i)
 }
 
-fn view_of(dir: &Path, meta: &Value, plans: &[Value], log: &[Value]) -> ModelView {
+/// A listing entry from the Network (`{meta, fileBytes, openBy}`) as the Hub shows it.
+fn view_of(entry: &Value, plans: &[Value], log: &[Value]) -> ModelView {
+    let meta = &entry["meta"];
     let id = text(meta, "id");
     let mut read: Vec<String> = Vec::new();
     for r in list(meta, "read") {
@@ -216,31 +186,23 @@ fn view_of(dir: &Path, meta: &Value, plans: &[Value], log: &[Value]) -> ModelVie
         created: num(meta, "created"),
         updated: num(meta, "updated"),
         origin: text(meta, "origin"),
-        file_bytes: std::fs::metadata(dir.join("model.nnova2")).map(|m| m.len()).unwrap_or(0),
+        file_bytes: num(entry, "fileBytes"),
         lessons: list(meta, "taught").len(),
         read,
         recent: recent(meta, &mine),
         plan: plan_of(&id, plans),
+        open_by: list(entry, "openBy").iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
         id,
     }
 }
 
 /// Every model in the folder, most recently changed first.
 #[tauri::command]
-pub fn list_models(app: AppHandle) -> Res<Vec<ModelView>> {
-    let plans = plans(&app);
+pub async fn list_models(app: AppHandle, hub: tauri::State<'_, Hub>) -> Res<Vec<ModelView>> {
+    let entries = hub.call(&app, "models.list", json!({}))?;
+    let plans = plans();
     let log = read_log(&app);
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(models_dir(&app)?).map_err(|e| e.to_string())?.flatten() {
-        let dir = entry.path();
-        let meta = read_json(&dir.join("meta.json"));
-        // A folder whose meta.json names another id is not a model of this library.
-        if meta.is_object() && entry.file_name().to_string_lossy() == text(&meta, "id") {
-            out.push(view_of(&dir, &meta, &plans, &log));
-        }
-    }
-    out.sort_by_key(|m| std::cmp::Reverse(m.updated));
-    Ok(out)
+    Ok(entries.as_array().map(|a| a.iter().map(|e| view_of(e, &plans, &log)).collect()).unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -269,187 +231,36 @@ pub(crate) fn log(app: &AppHandle, model: &str, program: &str, text: &str) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// New models
+// Making and changing models (through the Network)
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SizeOption {
-    id: &'static str,
-    name: &'static str,
-    /// Parameters with Nova-2's fixed 256 word slots.
-    parameters: usize,
-    /// Parameters each learned word adds when the vocabulary has a limit.
-    per_word: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelOptions {
-    bicameral: Vec<SizeOption>,
-    neuro: Vec<SizeOption>,
-    max_context: usize,
-}
-
-fn parameters(config: &Config, design: Option<&engine_neuro::NeuroSpec>) -> usize {
-    Bicameral::tensors_for(config, design).iter().map(|(_, r, c)| r * c).sum()
-}
-
-/// The sizes and designs a new model can have (the same presets Studio offers).
+/// The sizes and designs a new model can have.
 #[tauri::command]
-pub fn model_options() -> ModelOptions {
-    ModelOptions {
-        bicameral: size_presets()
-            .into_iter()
-            .map(|p| SizeOption {
-                id: p.id,
-                name: p.name,
-                parameters: parameters(&p.config, None),
-                per_word: p.config.d + 1,
-            })
-            .collect(),
-        neuro: engine_neuro::presets()
-            .into_iter()
-            .map(|p| {
-                let config = Config { vocab: BASE + 256, ..p.config.clone() };
-                SizeOption {
-                    id: p.id,
-                    name: p.name,
-                    parameters: parameters(&config, Some(&p.design)),
-                    per_word: p.config.d + 1,
-                }
-            })
-            .collect(),
-        max_context: MAX_CONTEXT,
-    }
+pub async fn model_options(app: AppHandle, hub: tauri::State<'_, Hub>) -> Res<Value> {
+    hub.call(&app, "models.options", json!({}))
 }
 
-/// A vocabulary limit must leave the model within the Engine's limits when every slot is used
-/// (Studio's check).
-fn check_word_limit(config: &Config, limit: usize) -> Res<()> {
-    if limit == 0 {
-        return Err("Choose a vocabulary limit of at least 1 word".into());
-    }
-    let full = Config { vocab: BASE + limit, ..config.clone() };
-    Bicameral::check_config(&full).map_err(|_| {
-        let base = Bicameral::parameters_for(&Config { vocab: BASE, ..config.clone() });
-        let most = MAX_PARAMETERS.saturating_sub(base) / (config.d + 1);
-        format!("At this size the vocabulary can hold up to {most} words (1 billion parameters)")
-    })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NewModel {
-    name: String,
-    /// "bicameral" or "neuro".
-    architecture: String,
-    /// A size preset (Bicameral) or a design preset (Neuro).
-    preset: String,
-    /// `None`: Nova-2's fixed 256 word slots.
-    word_limit: Option<usize>,
-    context: usize,
+#[tauri::command]
+pub async fn create_model(
+    app: AppHandle,
+    hub: tauri::State<'_, Hub>,
+    choice: Value,
     shelf: Option<String>,
-}
-
-/// The untrained model a choice describes, built as Studio builds it.
-fn build(choice: &NewModel) -> Res<Bicameral> {
-    let (mut config, design) = match choice.architecture.as_str() {
-        "bicameral" => {
-            let p = size_presets().into_iter().find(|p| p.id == choice.preset).ok_or("Unknown model size")?;
-            (p.config, None)
-        }
-        "neuro" => {
-            let p = engine_neuro::presets()
-                .into_iter()
-                .find(|p| p.id == choice.preset)
-                .ok_or("Unknown design")?;
-            (Config { vocab: BASE + 256, ..p.config }, Some(p.design))
-        }
-        _ => return Err("Unknown architecture".into()),
-    };
-    config.max_tokens = choice.context;
-    Bicameral::check_config(&config).map_err(|_| format!("Choose a context of 1 to {MAX_CONTEXT} tokens"))?;
-    if let Some(limit) = choice.word_limit {
-        check_word_limit(&config, limit)?;
-        // No slots yet: one is added for each word the model learns, up to the limit.
-        config.vocab = BASE;
-    }
-    let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    Ok(Bicameral::with_design(config, design, seed))
-}
-
-/// meta.json for a model just made or imported, with the fields Studio writes (`Meta`, camelCase).
-fn new_meta(id: &str, name: &str, model: &Bicameral, word_limit: Option<usize>, origin: &str) -> Value {
-    let t = now();
-    let mut meta = json!({
-        "id": id,
-        "name": name,
-        "created": t,
-        "updated": t,
-        "step": model.step,
-        "parameters": model.parameter_count(),
-        "groups": [
-            model.group_parameters(Focus::Left),
-            model.group_parameters(Focus::Right),
-            model.group_parameters(Focus::Interconnect),
-        ],
-        "words": model.tokenizer.words().len(),
-        "slots": model.word_capacity(),
-        "wordLimit": word_limit,
-        "context": model.config.max_tokens,
-        "taught": [],
-        "origin": origin,
-        "read": [],
-        "conversation": [],
-        "architecture": model.architecture(),
-        "blocks": model.config.blocks,
-    });
-    if let Some(design) = &model.neuro {
-        meta["design"] = serde_json::to_value(design).unwrap_or(Value::Null);
-    }
-    meta
-}
-
-/// Writes a new model's folder (each file atomically) and puts it on a shelf.
-fn install(
-    app: &AppHandle,
-    name: &str,
-    model: &Bicameral,
-    word_limit: Option<usize>,
-    origin: &str,
-    shelf: Option<&str>,
 ) -> Res<String> {
-    let name = check_name(name)?;
-    let id = new_id();
-    let dir = model_dir(app, &id)?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let meta = new_meta(&id, &name, model, word_limit, origin);
-    let written = (|| {
-        write_atomic(&dir.join("model.nnova2"), &model.to_bytes()?)?;
-        write_atomic(&dir.join("archive.json"), b"[]")?;
-        write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)
-    })();
-    if let Err(e) = written {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(e);
-    }
-    shelves::place(app, &id, shelf);
-    Ok(id)
-}
-
-#[tauri::command]
-pub async fn create_model(app: AppHandle, choice: NewModel) -> Res<String> {
-    let name = check_name(&choice.name)?;
-    let model = build(&choice)?;
-    let id = install(&app, &name, &model, choice.word_limit, "new", choice.shelf.as_deref())?;
+    let made = hub.call(&app, "models.create", choice)?;
+    let id = text(&made["meta"], "id");
+    shelves::place(&app, &id, shelf.as_deref());
     log(&app, &id, "Hub", "Created, untrained");
     Ok(id)
 }
 
 /// Imports a checkpoint (Bicameral `.nnova2` or Nova Neuro `.nneuro`) as a new model.
 #[tauri::command]
-pub async fn import_model(app: AppHandle, shelf: Option<String>) -> Res<Option<String>> {
+pub async fn import_model(
+    app: AppHandle,
+    hub: tauri::State<'_, Hub>,
+    shelf: Option<String>,
+) -> Res<Option<String>> {
     let Some(picked) = app
         .dialog()
         .file()
@@ -459,60 +270,45 @@ pub async fn import_model(app: AppHandle, shelf: Option<String>) -> Res<Option<S
         return Ok(None);
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
-    if size > MAX_CHECKPOINT_BYTES {
-        return Err("The file is larger than the largest model the Engine accepts".into());
-    }
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let model = Bicameral::from_bytes(&bytes)?;
-    let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-    let stem = file.trim_end_matches(".nnova2").trim_end_matches(".nneuro").trim();
-    let name: String =
-        if stem.is_empty() { "Imported model".into() } else { stem.chars().take(60).collect() };
-    let id = install(&app, &name, &model, None, &file, shelf.as_deref())?;
-    log(&app, &id, "Hub", &format!("Imported {file}"));
+    let made = hub.call(&app, "models.import", json!({"path": path.display().to_string()}))?;
+    let id = text(&made["meta"], "id");
+    shelves::place(&app, &id, shelf.as_deref());
+    log(&app, &id, "Hub", &format!("Imported {}", text(&made["meta"], "origin")));
     Ok(Some(id))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Changing models
-// ---------------------------------------------------------------------------------------------
-
-/// Renames a model. Only `name` changes in meta.json; every other field is kept as written.
 #[tauri::command]
-pub fn rename_model(app: AppHandle, id: String, name: String) -> Res<()> {
-    let name = check_name(&name)?;
+pub async fn rename_model(app: AppHandle, hub: tauri::State<'_, Hub>, id: String, name: String) -> Res<()> {
     studio_closed("new name")?;
-    let path = model_dir(&app, &id)?.join("meta.json");
-    let mut meta = read_json(&path);
-    if !meta.is_object() {
-        return Err("This model's meta.json could not be read".into());
+    let before = hub.call(&app, "models.list", json!({}))?;
+    let old = before
+        .as_array()
+        .and_then(|a| a.iter().find(|e| e["meta"]["id"] == id.as_str()))
+        .map(|e| text(&e["meta"], "name"));
+    hub.call(&app, "models.rename", json!({"id": id, "name": name}))?;
+    if let Some(old) = old {
+        log(&app, &id, "Hub", &format!("Renamed from {old}"));
     }
-    let old = text(&meta, "name");
-    meta["name"] = Value::String(name.clone());
-    write_atomic(&path, &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)?;
-    log(&app, &id, "Hub", &format!("Renamed from {old}"));
     Ok(())
 }
 
-/// Deletes a model's folder (its checkpoint, lessons archive, history and recovery points).
 #[tauri::command]
-pub fn delete_model(app: AppHandle, id: String) -> Res<()> {
+pub async fn delete_model(app: AppHandle, hub: tauri::State<'_, Hub>, id: String) -> Res<()> {
     studio_closed("deletion")?;
-    let dir = model_dir(&app, &id)?;
-    if !dir.join("meta.json").exists() {
-        return Err("This model is no longer in the models folder".into());
-    }
-    std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    hub.call(&app, "models.delete", json!({"id": id}))?;
     shelves::forget(&app, &id);
     Ok(())
 }
 
-/// Saves a copy of the model's checkpoint where the user chooses, and checks the copy.
+/// Saves a copy of the model's checkpoint where the user chooses (the Network checks the copy).
 #[tauri::command]
-pub async fn export_model(app: AppHandle, id: String) -> Res<Option<String>> {
-    let dir = model_dir(&app, &id)?;
-    let meta = read_json(&dir.join("meta.json"));
+pub async fn export_model(app: AppHandle, hub: tauri::State<'_, Hub>, id: String) -> Res<Option<String>> {
+    let entries = hub.call(&app, "models.list", json!({}))?;
+    let meta = entries
+        .as_array()
+        .and_then(|a| a.iter().find(|e| e["meta"]["id"] == id.as_str()))
+        .map(|e| e["meta"].clone())
+        .ok_or("This model is no longer in the models folder")?;
     let neuro = text(&meta, "architecture") == "neuro";
     let (kind, ext) =
         if neuro { ("Nova Neuro checkpoint", "nneuro") } else { ("Bicameral checkpoint", "nnova2") };
@@ -530,15 +326,7 @@ pub async fn export_model(app: AppHandle, id: String) -> Res<Option<String>> {
         return Ok(None);
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    let bytes = std::fs::read(dir.join("model.nnova2")).map_err(|e| e.to_string())?;
-    // A checkpoint the Engine cannot read is not exported.
-    Bicameral::from_bytes(&bytes)?;
-    let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    f.write_all(&bytes).map_err(|e| e.to_string())?;
-    f.sync_all().map_err(|e| e.to_string())?;
-    if std::fs::read(&path).map_err(|e| e.to_string())? != bytes {
-        return Err("The exported file does not match the model; try another location".into());
-    }
+    hub.call(&app, "models.export", json!({"id": id, "path": path.display().to_string()}))?;
     let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
     log(&app, &id, "Hub", &format!("Exported {file}"));
     Ok(Some(file))
@@ -547,60 +335,6 @@ pub async fn export_model(app: AppHandle, id: String) -> Res<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn choice(architecture: &str, preset: &str, word_limit: Option<usize>, context: usize) -> NewModel {
-        NewModel {
-            name: "Test".into(),
-            architecture: architecture.into(),
-            preset: preset.into(),
-            word_limit,
-            context,
-            shelf: None,
-        }
-    }
-
-    #[test]
-    fn listed_parameters_match_the_models_built() {
-        let o = model_options();
-        for s in &o.bicameral {
-            let m = build(&choice("bicameral", s.id, None, 256)).unwrap();
-            assert_eq!(m.parameter_count(), s.parameters, "{}", s.id);
-        }
-        for s in &o.neuro {
-            let m = build(&choice("neuro", s.id, None, 256)).unwrap();
-            assert_eq!(m.parameter_count(), s.parameters, "{}", s.id);
-            assert_eq!(m.architecture(), "neuro");
-        }
-    }
-
-    #[test]
-    fn new_models_match_studios_defaults() {
-        // Nova-2's size and layout: the Engine's default configuration.
-        let m = build(&choice("bicameral", "nova2", None, 256)).unwrap();
-        assert_eq!(m.config, Config::default());
-        // A vocabulary limit starts with no word slots; the context is kept.
-        let m = build(&choice("bicameral", "4m", Some(1000), 1024)).unwrap();
-        assert_eq!((m.word_capacity(), m.config.max_tokens), (0, 1024));
-        let meta = new_meta("m1", "Test", &m, Some(1000), "new");
-        assert_eq!((num(&meta, "slots"), num(&meta, "context"), num(&meta, "wordLimit")), (0, 1024, 1000));
-        assert_eq!(text(&meta, "architecture"), "bicameral");
-        // A Neuro model records its design.
-        let m = build(&choice("neuro", "neuro-core-1m", None, 256)).unwrap();
-        let meta = new_meta("m2", "Test", &m, None, "new");
-        assert!(meta["design"].is_object());
-        assert_eq!(m.word_capacity(), 256);
-    }
-
-    #[test]
-    fn bad_choices_are_refused_with_a_reason() {
-        assert!(build(&choice("bicameral", "nope", None, 256)).is_err());
-        assert!(build(&choice("bicameral", "nova2", None, 0)).is_err());
-        assert!(build(&choice("bicameral", "nova2", None, MAX_CONTEXT + 1)).is_err());
-        assert!(build(&choice("bicameral", "nova2", Some(0), 256)).is_err());
-        assert!(build(&choice("bicameral", "nova2", Some(usize::MAX / 4), 256)).is_err());
-        assert!(check_name("  ").is_err());
-        assert!(check_name(&"x".repeat(61)).is_err());
-    }
 
     #[test]
     fn events_read_from_studios_records() {
@@ -613,8 +347,7 @@ mod tests {
             ],
         });
         let log = [json!({"time": 40, "model": "m1", "program": "Hub", "text": "Exported a.nnova2"})];
-        let r = recent(&meta, &log);
-        let texts: Vec<&str> = r.iter().map(|r| r.text.as_str()).collect();
+        let texts: Vec<String> = recent(&meta, &log).into_iter().map(|r| r.text).collect();
         assert_eq!(
             texts,
             [
@@ -638,5 +371,18 @@ mod tests {
         assert_eq!((p.name.as_str(), p.position, p.courses), ("English", 1, 3));
         assert!(!plan_of("m2", &plans).unwrap().in_progress);
         assert!(plan_of("m3", &plans).is_none());
+    }
+
+    #[test]
+    fn a_listing_entry_becomes_the_card() {
+        let entry = json!({"meta": {"id": "m1", "name": "Nova", "parameters": 1182144, "step": 15000,
+            "read": [{"corpus": "A"}, {"corpus": "A"}, {"corpus": "B"}], "taught": [{}]}, "fileBytes": 99, "openBy": ["Yendory Studio"]});
+        let v = view_of(&entry, &[], &[]);
+        assert_eq!((v.id.as_str(), v.name.as_str(), v.architecture.as_str()), ("m1", "Nova", "bicameral"));
+        assert_eq!(
+            (v.file_bytes, v.lessons, v.read.clone()),
+            (99, 1, vec!["A".to_string(), "B".to_string()])
+        );
+        assert_eq!(v.open_by, ["Yendory Studio"]);
     }
 }

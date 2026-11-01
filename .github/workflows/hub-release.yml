@@ -1,14 +1,18 @@
 name: hub-release
 
-# Builds Yendory Hub installers on GitHub's machines and publishes them as a pre-release on the
-# repository's Releases page:
-#   Windows  : NSIS setup .exe
-#   Linux    : .deb and .AppImage
-# - A branch push that changes the Hub or the Engine publishes a development pre-release tagged
-#   `hub-v<version>-dev.<run number>` (the newest 5 are kept; older ones are removed). Studio's
-#   releases (`studio-v…`) are never touched.
-# - A pushed tag like `hub-v0.1.0` publishes a pre-release with that tag.
-# - A manual run from the Actions tab publishes with the tag you enter, or a development tag.
+# Builds Yendory Hub and the Yendory Network on GitHub's machines and publishes them
+# (docs/PACKAGES.md):
+#
+# - The Hub's installers, the one thing people download: Windows `-setup.exe`, Linux `.deb` and
+#   `.AppImage`, on a pre-release `hub-v<version>-dev.<run>` (the newest 5 are kept).
+# - The Hub's own packages (how it updates itself, without an installer window) and
+#   `package.json` on the fixed `hub-updates` release.
+# - The Yendory Network's packages on `network-v<version>` and `package.json` on the fixed
+#   `network-updates` release, when dependency/network's version is new.
+# - Every package is signed with the project's updater key (repository secret
+#   TAURI_SIGNING_PRIVATE_KEY); the Hub installs nothing unsigned.
+# - `latest.json` on `hub-updates` (Tauri's updater format) lets Hub 0.1.0, which updated through
+#   Tauri's updater, reach this Hub once.
 
 on:
   push:
@@ -16,12 +20,13 @@ on:
     branches: ["**"]
     paths:
       - "apps/hub/**"
-      - "crates/yendory-engine/src/**"
+      - "dependency/**"
       - ".github/workflows/hub-release.yml"
+      - ".github/scripts/package.py"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional: release tag (e.g. hub-v0.1.0). Leave empty for a development pre-release."
+        description: "Optional: release tag (e.g. hub-v0.1.1). Leave empty for a development pre-release."
         required: false
         default: ""
 
@@ -34,7 +39,7 @@ concurrency:
 
 jobs:
   check:
-    name: Hub checks
+    name: Hub and Network checks
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +55,9 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "apps/hub/src-tauri -> target"
+          workspaces: |
+            apps/hub/src-tauri -> target
+            . -> target
       - run: node --check apps/hub/web/js/app.js && node --check apps/hub/web/js/dropdown.js
       - run: cargo fmt --check
         working-directory: apps/hub/src-tauri
@@ -58,6 +65,8 @@ jobs:
         working-directory: apps/hub/src-tauri
       - run: cargo test --release
         working-directory: apps/hub/src-tauri
+      # The Network as programs see it (the real service, through yendory-client).
+      - run: cargo test --release -p yendory-network -p yendory-client
 
   desktop:
     name: ${{ matrix.name }}
@@ -66,21 +75,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows installer
+          - name: Windows
             os: windows-latest
             bundles: nsis
-            files: |
-              apps/hub/src-tauri/target/release/bundle/nsis/*.exe
-              apps/hub/src-tauri/target/release/bundle/nsis/*.exe.sig
-          - name: Linux packages
+            platform: windows-x86_64
+            network_features: dxc
+          - name: Linux
             os: ubuntu-22.04
             bundles: deb,appimage
-            files: |
-              apps/hub/src-tauri/target/release/bundle/deb/*.deb
-              apps/hub/src-tauri/target/release/bundle/appimage/*.AppImage
-              apps/hub/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            platform: linux-x86_64
+            network_features: gpu
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -94,42 +100,72 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "apps/hub/src-tauri -> target"
+          workspaces: |
+            apps/hub/src-tauri -> target
+            . -> target
       - name: Tauri CLI
         working-directory: apps/hub
         run: npm ci --no-audit --no-fund
-      - name: Build
+      - name: Signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is missing: packages can't be signed, and the Hub installs nothing unsigned"
+            exit 1
+          fi
+      - name: Build the Hub
         working-directory: apps/hub
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # Updater artifacts: the .sig files Hub 0.1.0's updater needs (latest.json).
+        run: npx tauri build --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+      - name: Build the Network
+        shell: bash
+        run: cargo build --release -p yendory-network --features ${{ matrix.network_features }}
+      - name: Make and sign the packages
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          # With the updater key (repository secret TAURI_SIGNING_PRIVATE_KEY, the same key as
-          # Studio's), the Windows installer and the AppImage are also signed for the Hub's own
-          # updates (apps/hub/src-tauri/src/update.rs); without it they are built unsigned.
-          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-            npx tauri build --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          HUB="$(node -p "require('./apps/hub/package.json').version")"
+          NET="$(grep -m1 '^version' dependency/network/Cargo.toml | cut -d'"' -f2)"
+          P=.github/scripts/package.py
+          mkdir -p out/installers out/packages
+          B=apps/hub/src-tauri/target/release
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp $B/bundle/nsis/*.exe $B/bundle/nsis/*.exe.sig out/installers/
+            python $P zip "out/packages/yendory-hub_${HUB}_windows-x86_64.zip" "$B/yendory-hub.exe"
+            python $P zip "out/packages/yendory-network_${NET}_windows-x86_64.zip" "target/release/yendory-network.exe"
           else
-            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY secret: built without update signatures"
-            npx tauri build --bundles ${{ matrix.bundles }}
+            cp $B/bundle/deb/*.deb $B/bundle/appimage/*.AppImage $B/bundle/appimage/*.AppImage.sig out/installers/
+            APPIMAGE="$(ls $B/bundle/appimage/*.AppImage | head -n 1)"
+            python3 $P zip "out/packages/yendory-hub_${HUB}_linux-x86_64-appimage.zip" "$APPIMAGE=Yendory-Hub.AppImage"
+            cp $B/bundle/deb/*.deb "out/packages/yendory-hub_${HUB}_amd64.deb"
+            python3 $P zip "out/packages/yendory-network_${NET}_linux-x86_64.zip" "target/release/yendory-network"
           fi
+          for f in out/packages/*; do
+            npx --prefix apps/hub tauri signer sign "$f" > /dev/null
+            test -s "$f.sig"
+          done
+          ls -la out/installers out/packages
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ runner.os }}
-          path: ${{ matrix.files }}
+          name: ${{ matrix.platform }}
+          path: out
           if-no-files-found: error
 
   release:
-    name: Publish pre-release
+    name: Publish
     needs: [desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: apps/hub/package.json
-          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -140,98 +176,120 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./apps/hub/package.json').version")"
+          HUB="$(node -p "require('./apps/hub/package.json').version")"
+          NET="$(grep -m1 '^version' dependency/network/Cargo.toml | cut -d'"' -f2)"
           if [[ "$GITHUB_REF" == refs/tags/hub-v* ]]; then
             TAG="$GITHUB_REF_NAME"; DEV=false
           elif [[ -n "${INPUT_TAG:-}" ]]; then
             TAG="$INPUT_TAG"; DEV=false
           else
-            TAG="hub-v$VERSION-dev.$GITHUB_RUN_NUMBER"; DEV=true
+            TAG="hub-v$HUB-dev.$GITHUB_RUN_NUMBER"; DEV=true
           fi
           [[ "$TAG" =~ ^hub-v[0-9A-Za-z.+-]+$ ]] || { echo "::error::Bad tag: $TAG"; exit 1; }
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "dev=$DEV" >> "$GITHUB_OUTPUT"
-      - name: Publish to Releases
+          { echo "tag=$TAG"; echo "dev=$DEV"; echo "hub=$HUB"; echo "network=$NET"; } >> "$GITHUB_OUTPUT"
+      - name: Publish the Hub
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
           DEV: ${{ steps.tag.outputs.dev }}
+          HUB: ${{ steps.tag.outputs.hub }}
         run: |
           set -euo pipefail
-          # Installer names contain spaces ("Yendory Hub_0.1.0_amd64.deb"): keep them intact.
+          mapfile -d '' FILES < <(find dist -path '*/installers/*' -type f -print0; find dist -path '*/packages/yendory-hub_*' -type f -print0)
           (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum > ../SHA256SUMS.txt)
-          mv SHA256SUMS.txt dist/
-          mapfile -d '' FILES < <(find dist -type f -print0 | sort -z)
-          printf '%s\n' "${FILES[@]}"
+          FILES+=(SHA256SUMS.txt)
           {
             if [[ "$DEV" == true ]]; then
               echo "Development build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA:0:7}. Only the newest 5 development builds of the Hub are kept."
             else
-              echo "Yendory Hub desktop builds, made by GitHub Actions from ${GITHUB_SHA:0:7}."
+              echo "Yendory Hub, built by GitHub Actions from ${GITHUB_SHA:0:7}."
             fi
             cat <<'NOTES'
 
-          - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". It installs over an earlier version and keeps your shelves and settings.
-          - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
-          - The Hub uses Studio's models folder, so the models you made in Studio are on its shelf, and it can install Studio for you (Downloads & updates).
+          **Install the Hub**, then let it install the rest (the Yendory Network, Studio):
 
-          Built by CI only: these installers have not been tested on a physical device for this release. `SHA256SUMS.txt` lists the checksum of every file.
+          - **Windows:** run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". From then on the Hub updates itself.
+          - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
+
+          The `yendory-hub_*` files are the Hub's own update packages; the Hub downloads them itself. Built by CI only: not tested on a physical device for this release. `SHA256SUMS.txt` lists every file's checksum.
           NOTES
           } > notes.md
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "Yendory Hub ${TAG#hub-v}" --notes-file notes.md --prerelease --latest=false \
-              "${FILES[@]}"
+              --title "Yendory Hub ${TAG#hub-v}" --notes-file notes.md --prerelease --latest=false "${FILES[@]}"
           fi
-      - name: Update manifest for the Hub's built-in updates
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          # latest.json says which build is newest, where its installers are and their update
-          # signatures. The Hub reads it from the fixed `hub-updates` release (tauri.conf.json,
-          # plugins.updater). Written only when the builds were signed.
-          if ! find dist -name '*.sig' | grep -q .; then
-            echo "::notice::No update signatures (no TAURI_SIGNING_PRIVATE_KEY secret): no update manifest"
-            exit 0
-          fi
-          VERSION="$(node -p "require('./apps/hub/package.json').version")"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          PK=dist/windows-x86_64/packages; PL=dist/linux-x86_64/packages
+          python3 .github/scripts/package.py manifest --id hub --name "Yendory Hub" --version "$HUB" --notes "Yendory Hub $TAG" \
+            --platform "windows-x86_64=$PK/yendory-hub_${HUB}_windows-x86_64.zip,yendory-hub.exe,$URL/yendory-hub_${HUB}_windows-x86_64.zip" \
+            --platform "linux-x86_64-appimage=$PL/yendory-hub_${HUB}_linux-x86_64-appimage.zip,Yendory-Hub.AppImage,$URL/yendory-hub_${HUB}_linux-x86_64-appimage.zip" \
+            --platform "linux-x86_64-deb=$PL/yendory-hub_${HUB}_amd64.deb,yendory-hub,$URL/yendory-hub_${HUB}_amd64.deb" \
+            > package.json
+          cat package.json
+          # Tauri's updater format, for Hub 0.1.0 (its installer and AppImage, signed at build).
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets > assets.json
-          python3 - "$VERSION" "$TAG" > latest.json <<'PY'
+          python3 - "$HUB" "$TAG" > latest.json <<'PY'
           import json, sys, glob, os, datetime
           version, tag = sys.argv[1], sys.argv[2]
           assets = {a["name"]: a["url"] for a in json.load(open("assets.json"))["assets"]}
           def url_of(local):
-              # GitHub renames spaces in asset names to dots.
               name = os.path.basename(local)
               for candidate in (name, name.replace(" ", ".")):
                   if candidate in assets:
                       return assets[candidate]
               raise SystemExit(f"{name} is not among the release's files")
           platforms = {}
-          for pattern, key in (("dist/**/*-setup.exe.sig", "windows-x86_64"), ("dist/**/*.AppImage.sig", "linux-x86_64")):
+          for pattern, key in (("dist/**/installers/*-setup.exe.sig", "windows-x86_64"), ("dist/**/installers/*.AppImage.sig", "linux-x86_64")):
               for sig in glob.glob(pattern, recursive=True):
                   platforms[key] = {"signature": open(sig).read().strip(), "url": url_of(sig[: -len(".sig")])}
-          json.dump({
-              "version": version,
-              "notes": f"Yendory Hub {tag}",
-              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "platforms": platforms,
-          }, sys.stdout, indent=2)
+          json.dump({"version": version, "notes": f"Yendory Hub {tag}",
+                     "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     "platforms": platforms}, sys.stdout, indent=2)
           PY
-          cat latest.json
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
           if ! gh release view hub-updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create hub-updates --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "Yendory Hub updates" --prerelease --latest=false \
-              --notes "Where Yendory Hub looks for updates (latest.json). Download installers from the build releases."
+              --notes "Where Yendory Hub looks for its updates (package.json). Download the Hub from its build releases."
           fi
-          gh release upload hub-updates --repo "$GITHUB_REPOSITORY" --clobber latest.json
+          gh release upload hub-updates --repo "$GITHUB_REPOSITORY" --clobber package.json latest.json
+      - name: Publish the Network (when its version is new)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET: ${{ steps.tag.outputs.network }}
+        run: |
+          set -euo pipefail
+          TAG="network-v$NET"
+          PUBLISHED="$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/network-updates/package.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"
+          if [[ "$PUBLISHED" == "$NET" ]]; then
+            echo "Yendory Network $NET is already published"
+            exit 0
+          fi
+          mapfile -d '' FILES < <(find dist -path '*/packages/yendory-network_*' -type f -print0)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Network $NET" --prerelease --latest=false \
+              --notes "The Yendory Network $NET (the background service that runs the Yendory Engine), built from ${GITHUB_SHA:0:7}. Installed and updated by Yendory Hub." \
+              "${FILES[@]}"
+          fi
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          PK=dist/windows-x86_64/packages; PL=dist/linux-x86_64/packages
+          python3 .github/scripts/package.py manifest --id network --name "Yendory Network" --version "$NET" --notes "Yendory Network $NET" \
+            --platform "windows-x86_64=$PK/yendory-network_${NET}_windows-x86_64.zip,yendory-network.exe,$URL/yendory-network_${NET}_windows-x86_64.zip" \
+            --platform "linux-x86_64=$PL/yendory-network_${NET}_linux-x86_64.zip,yendory-network,$URL/yendory-network_${NET}_linux-x86_64.zip" \
+            > package.json
+          cat package.json
+          if ! gh release view network-updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create network-updates --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Yendory Network updates" --prerelease --latest=false \
+              --notes "Where Yendory Hub looks for the Yendory Network (package.json)."
+          fi
+          gh release upload network-updates --repo "$GITHUB_REPOSITORY" --clobber package.json
       - name: Remove old development pre-releases
         if: steps.tag.outputs.dev == 'true'
         shell: bash

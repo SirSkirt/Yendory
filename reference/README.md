@@ -9,6 +9,6 @@ overflow-safe sigmoid); the maths is otherwise identical to the architecture pac
 |---|---|
 | `selftest.py` | finite-difference gradient check on every parameter (float64), causality, ablations, round trips. Run in CI. |
 | `make_golden.py` | writes `tests/compat/golden/*.txt` |
-| `make_compat.py <ckpt> <out.json>` | expected outputs of a real checkpoint for `crates/yendory-engine/tests/compat.rs` |
+| `make_compat.py <ckpt> <out.json>` | expected outputs of a real checkpoint for `dependency/engine/tests/compat.rs` |
 
 Requirements: Python 3.10+ and numpy. Run from this directory, e.g. `python3 selftest.py`.

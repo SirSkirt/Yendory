@@ -1,5 +1,5 @@
 """Writes tests/compat/golden/*.txt : deterministic weights/inputs -> loss, logits and gradients from the
-VERIFIED numpy reference (float64). The Rust port must reproduce these (crates/yendory-engine/tests/golden.rs)."""
+VERIFIED numpy reference (float64). The Rust port must reproduce these (dependency/engine/tests/golden.rs)."""
 import math, numpy as np
 from nova2_ref import *
 

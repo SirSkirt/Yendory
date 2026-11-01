@@ -1,69 +1,75 @@
-//! The suite's programs: where each one is installed, whether it is running, launching it with a
-//! model to open (`--model <id>`, docs/HANDOFF.md), and installing or updating it from the
-//! release page. Installers come from the program's `latest.json` (written by its release
-//! workflow) and are checked against the project's updater key before they run, so only builds
-//! made by the release workflow are installed.
+//! The suite's components as the Hub manages them: the Hub itself, the Yendory Network, Studio
+//! and Tools. For each: where it is, whether it runs, the newest package, and installing,
+//! updating, removing and launching it. A Studio installed the old way (its own installer, a
+//! system package, the Hub 0.1 AppImage, or a file the owner chose) is found too, launched as it
+//! is, and offered the switch to the Hub (switch.rs).
 use super::*;
 use serde_json::{json, Value};
-use std::io::Read;
 use std::sync::atomic::Ordering;
-use tauri::Emitter;
 use tauri_plugin_dialog::DialogExt;
 
-const RELEASES: &str = "https://github.com/SirSkirt/Yendory/releases";
+const RELEASE_PAGE: &str = "https://github.com/SirSkirt/Yendory/releases";
 
-/// The project's updater public key (the same as Studio's and the Hub's `tauri.conf.json`).
-const UPDATER_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdFODg4NzFBRTE1MTU5NzAKUldSd1dWSGhHb2VJZm9ZTklCb3A5L3lqd05wS3NnV0dpM0NkRFhGRVdTYjhNQ3lCaXU4MU1DazQK";
-
-struct Program {
-    id: &'static str,
-    name: &'static str,
-    does: &'static str,
-    /// Where its release workflow publishes `latest.json`; `None`: not released yet.
-    manifest: Option<&'static str>,
-    /// Its installer's product name (Windows: the uninstall entry's name and install folder).
-    product: &'static str,
-    /// Process and executable names, lowercase, without `.exe`.
-    binaries: &'static [&'static str],
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Kind {
+    Hub,
+    Service,
+    Program,
 }
 
-const CATALOGUE: &[Program] = &[
-    Program {
+pub(crate) struct Component {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub does: &'static str,
+    pub kind: Kind,
+    /// Process and executable names, lowercase, without `.exe`.
+    pub binaries: &'static [&'static str],
+}
+
+pub(crate) const CATALOGUE: &[Component] = &[
+    Component {
+        id: "hub",
+        name: "Yendory Hub",
+        does: "This program: your models on shelves, and the suite's installer",
+        kind: Kind::Hub,
+        binaries: &["yendory-hub", "yendory hub"],
+    },
+    Component {
+        id: "network",
+        name: "Yendory Network",
+        does: "Runs the Yendory Engine for every program, in the background",
+        kind: Kind::Service,
+        binaries: &["yendory-network"],
+    },
+    Component {
         id: "studio",
         name: "Yendory Studio",
         does: "Teaches models: reading, lessons, courses, exams",
-        manifest: Some("https://github.com/SirSkirt/Yendory/releases/download/studio-updates/latest.json"),
-        product: "Yendory Studio",
+        kind: Kind::Program,
         binaries: &["yendory-studio", "yendory studio"],
     },
-    Program {
+    Component {
         id: "tools",
         name: "Yendory Tools",
         does: "Puts trained models to work in apps and games, through Nexus",
-        manifest: None,
-        product: "Yendory Tools",
+        kind: Kind::Program,
         binaries: &["yendory-tools", "yendory tools"],
     },
 ];
 
-fn program(id: &str) -> Res<&'static Program> {
-    CATALOGUE.iter().find(|p| p.id == id).ok_or_else(|| "Unknown program".into())
+pub(crate) fn component(id: &str) -> Res<&'static Component> {
+    CATALOGUE.iter().find(|c| c.id == id).ok_or_else(|| "Unknown program".into())
 }
 
-/// This computer's key in a `latest.json` (`None`: no builds for it).
-fn platform() -> Option<&'static str> {
-    if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("windows-x86_64")
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("linux-x86_64")
-    } else {
-        None
-    }
-}
+/// Studio hands a model to its running copy from this version on (single-instance hand-off).
+const STUDIO_FORWARDS_FROM: &str = "0.9.3";
 
-/// Whether a program of the suite is running on this computer.
+/// Whether a component of the suite is running on this computer.
 pub(crate) fn running(id: &str) -> bool {
-    let Ok(p) = program(id) else { return false };
+    let Ok(c) = component(id) else { return false };
+    if c.kind == Kind::Service {
+        return yendory_client::service_info().is_some_and(|s| pid_alive(s.pid));
+    }
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
@@ -71,19 +77,42 @@ pub(crate) fn running(id: &str) -> bool {
         let name = proc.name().to_string_lossy().to_lowercase();
         // An AppImage's process is named after its file ("Yendory-Studio.AppImage").
         proc.status() != sysinfo::ProcessStatus::Zombie
-            && p.binaries.iter().any(|b| name.starts_with(b) || name.starts_with(&b.replace(' ', "-")))
+            && c.binaries.iter().any(|b| name.starts_with(b) || name.starts_with(&b.replace(' ', "-")))
     })
 }
 
+fn pid_alive(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    let pid = Pid::from_u32(pid);
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
+    sys.process(pid).is_some_and(|p| p.status() != sysinfo::ProcessStatus::Zombie)
+}
+
 // ---------------------------------------------------------------------------------------------
-// The Hub's records: chosen locations (settings.json) and what it installed (programs.json)
+// Copies installed the old way
 // ---------------------------------------------------------------------------------------------
+
+/// A copy of a program the Hub did not install.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Legacy {
+    /// installer (Windows, its own setup), system (.deb), hub-0.1 (the Hub 0.1 AppImage),
+    /// located (a file the owner chose).
+    pub kind: &'static str,
+    pub path: String,
+    pub version: Option<String>,
+    /// Windows: the uninstaller and the install folder.
+    #[serde(skip)]
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub uninstall: Option<String>,
+    #[serde(skip)]
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub folder: Option<String>,
+}
 
 fn settings_file(app: &AppHandle) -> Res<PathBuf> {
     Ok(hub_dir(app)?.join("settings.json"))
-}
-fn installed_file(app: &AppHandle) -> Res<PathBuf> {
-    Ok(hub_dir(app)?.join("programs.json"))
 }
 fn update_json(path: &Path, f: impl FnOnce(&mut serde_json::Map<String, Value>)) -> Res<()> {
     let mut v = read_json(path);
@@ -94,449 +123,494 @@ fn update_json(path: &Path, f: impl FnOnce(&mut serde_json::Map<String, Value>))
     write_atomic(path, &serde_json::to_vec_pretty(&v).map_err(|e| e.to_string())?)
 }
 
-/// Where the Hub keeps the programs it installs itself (Linux: AppImages).
-fn programs_dir(app: &AppHandle) -> Res<PathBuf> {
-    let dir = hub_dir(app)?.join("programs");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
-}
-fn appimage_path(app: &AppHandle, p: &Program) -> Res<PathBuf> {
-    Ok(programs_dir(app)?.join(format!("{}.AppImage", p.product.replace(' ', "-"))))
-}
-
-// ---------------------------------------------------------------------------------------------
-// Finding an installed program
-// ---------------------------------------------------------------------------------------------
-
-/// How a program was found.
-#[derive(Clone, Copy, PartialEq)]
-enum Source {
-    /// The owner chose the file (Settings → Locate).
-    Located,
-    /// The Hub installed it (Linux AppImage).
-    Hub,
-    /// Its own installer (Windows).
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Installer,
-    /// A system package (Linux .deb).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    System,
-}
-impl Source {
-    fn key(self) -> &'static str {
-        match self {
-            Source::Located => "located",
-            Source::Hub => "hub",
-            Source::Installer => "installer",
-            Source::System => "system",
-        }
+/// The Hub 0.1 AppImage of Studio (Linux), and its record.
+pub(crate) fn hub01_appimage(app: &AppHandle) -> Option<(PathBuf, Option<String>)> {
+    let dir = hub_dir(app).ok()?;
+    let path = dir.join("programs").join("Yendory-Studio.AppImage");
+    if !path.is_file() {
+        return None;
     }
-}
-
-struct Found {
-    path: PathBuf,
-    source: Source,
-    version: Option<String>,
+    let version = read_json(&dir.join("programs.json"))["studio"]["version"].as_str().map(str::to_string);
+    Some((path, version))
 }
 
 #[cfg(windows)]
-fn from_registry(p: &Program) -> Option<Found> {
+fn from_registry(product: &str, binaries: &[&str]) -> Option<Legacy> {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
     let clean = |s: String| s.trim().trim_matches('"').trim_end_matches(",0").trim_matches('"').to_string();
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let Ok(key) = RegKey::predef(root)
-            .open_subkey(format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", p.product))
+            .open_subkey(format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{product}"))
         else {
             continue;
         };
         let version: Option<String> = key.get_value("DisplayVersion").ok();
         let icon = key.get_value::<String, _>("DisplayIcon").map(clean).unwrap_or_default();
-        let mut candidates = vec![PathBuf::from(icon)];
-        if let Ok(loc) = key.get_value::<String, _>("InstallLocation").map(clean) {
-            for b in exe_names(p) {
-                candidates.push(Path::new(&loc).join(b));
-            }
+        let folder = key.get_value::<String, _>("InstallLocation").map(clean).ok();
+        let uninstall = key.get_value::<String, _>("UninstallString").ok();
+        let mut candidates = vec![PathBuf::from(&icon)];
+        if let Some(loc) = &folder {
+            candidates.push(Path::new(loc).join(format!("{}.exe", binaries[0])));
+            candidates.push(Path::new(loc).join(format!("{product}.exe")));
         }
-        if let Some(path) = candidates.into_iter().find(|c| c.is_file()) {
-            return Some(Found { path, source: Source::Installer, version });
-        }
-    }
-    None
-}
-
-#[cfg(windows)]
-fn exe_names(p: &Program) -> Vec<String> {
-    vec![format!("{}.exe", p.binaries[0]), format!("{}.exe", p.product)]
-}
-
-/// Default install folders, when the uninstall entry is missing.
-#[cfg(windows)]
-fn from_folders(p: &Program) -> Option<Found> {
-    let roots =
-        ["LOCALAPPDATA", "ProgramFiles"].iter().filter_map(|v| std::env::var_os(v)).map(PathBuf::from);
-    for root in roots {
-        for b in exe_names(p) {
-            let path = root.join(p.product).join(b);
-            if path.is_file() {
-                return Some(Found { path, source: Source::Installer, version: None });
-            }
+        let path = candidates.into_iter().find(|c| c.is_file());
+        let folder =
+            folder.or_else(|| path.as_ref().and_then(|p| p.parent()).map(|p| p.display().to_string()));
+        if path.is_some() || uninstall.is_some() {
+            return Some(Legacy {
+                kind: "installer",
+                path: path.map(|p| p.display().to_string()).unwrap_or_default(),
+                version,
+                uninstall,
+                folder,
+            });
         }
     }
     None
 }
 
-/// A system package (.deb): the binary in /usr/bin and the package's version.
 #[cfg(target_os = "linux")]
-fn from_system(p: &Program) -> Option<Found> {
-    let name = p.binaries[0];
-    let path = PathBuf::from("/usr/bin").join(name);
+fn from_system(binary: &str) -> Option<Legacy> {
+    let path = PathBuf::from("/usr/bin").join(binary);
     if !path.is_file() {
         return None;
     }
     let version = std::process::Command::new("dpkg-query")
-        .args(["-W", "-f=${Version}", name])
+        .args(["-W", "-f=${Version}", binary])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|v| !v.is_empty());
-    Some(Found { path, source: Source::System, version })
+    Some(Legacy { kind: "system", path: path.display().to_string(), version, uninstall: None, folder: None })
 }
 
-fn find(app: &AppHandle, p: &Program) -> Option<Found> {
-    let recorded = read_json(&installed_file(app).ok()?);
-    let recorded_version = |path: &Path| {
-        let r = &recorded[p.id];
-        (r["path"].as_str() == Some(&path.display().to_string()))
-            .then(|| r["version"].as_str().map(str::to_string))
-            .flatten()
-    };
-    let located = read_json(&settings_file(app).ok()?)["locations"][p.id].as_str().map(PathBuf::from);
-    if let Some(path) = located.filter(|l| l.is_file()) {
-        return Some(Found { version: recorded_version(&path), path, source: Source::Located });
+/// Every copy of a program the Hub did not install.
+pub(crate) fn legacy(app: &AppHandle, c: &Component) -> Vec<Legacy> {
+    let mut out = Vec::new();
+    if c.kind != Kind::Program {
+        return out;
     }
-    if let Ok(path) = appimage_path(app, p) {
-        if path.is_file() {
-            return Some(Found { version: recorded_version(&path), path, source: Source::Hub });
+    if let Some(p) = read_json(&settings_file(app).unwrap_or_default())["locations"][c.id]
+        .as_str()
+        .filter(|p| Path::new(p).is_file())
+    {
+        out.push(Legacy { kind: "located", path: p.into(), version: None, uninstall: None, folder: None });
+    }
+    if c.id == "studio" {
+        if let Some((path, version)) = hub01_appimage(app) {
+            out.push(Legacy {
+                kind: "hub-0.1",
+                path: path.display().to_string(),
+                version,
+                uninstall: None,
+                folder: None,
+            });
         }
     }
     #[cfg(windows)]
-    if let Some(f) = from_registry(p).or_else(|| from_folders(p)) {
-        return Some(f);
+    if let Some(l) = from_registry(c.name, c.binaries) {
+        out.push(l);
     }
     #[cfg(target_os = "linux")]
-    if let Some(f) = from_system(p) {
-        return Some(f);
+    if let Some(l) = from_system(c.binaries[0]) {
+        out.push(l);
     }
-    None
+    out
 }
 
 // ---------------------------------------------------------------------------------------------
-// The programs page
+// The Downloads & updates page
 // ---------------------------------------------------------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProgramView {
+pub struct ComponentView {
     id: &'static str,
     name: &'static str,
     does: &'static str,
-    released: bool,
+    /// hub, service or program.
+    kind: &'static str,
+    /// Installed by the Hub (or the Hub itself).
+    managed: bool,
+    /// Installed by the Hub, or found installed the old way.
     installed: bool,
-    path: Option<String>,
-    /// located, hub, installer or system.
-    source: Option<&'static str>,
     version: Option<String>,
-    /// The newest release's version, when it has been fetched.
+    path: Option<String>,
+    /// Copies installed the old way (they can be switched to the Hub).
+    legacy: Vec<Legacy>,
+    /// The newest package's version, when it has been fetched; `released`: whether there is one.
     latest: Option<String>,
-    /// A newer release than the installed version (known versions only).
+    released: Option<bool>,
     update: bool,
     running: bool,
-    /// The Hub can install (or update) it on this computer, with the reason when it can't.
+    /// The Hub can install or update it now, with the reason when it can't.
     can_install: bool,
     install_note: Option<String>,
-    /// Being downloaded or installed now.
     installing: bool,
+    /// The Hub: a downloaded update waits for a restart.
+    restart_ready: Option<String>,
 }
 
-/// "0.9.1" → [0, 9, 1] (anything after a '-' or '+' is ignored).
-fn version_parts(v: &str) -> Vec<u64> {
-    v.split(['-', '+']).next().unwrap_or("").split('.').map(|x| x.parse().unwrap_or(0)).collect()
-}
-fn newer(latest: &str, installed: &str) -> bool {
-    version_parts(latest) > version_parts(installed)
-}
-
-fn fetch_manifest(url: &str) -> Res<Value> {
-    let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .map_err(|e| format!("Could not reach the release page: {e}"))?;
-    let text = resp.into_string().map_err(|e| format!("The release page could not be read: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("The release page's latest.json could not be read: {e}"))
-}
-
-fn view(app: &AppHandle, hub: &Hub, p: &'static Program) -> ProgramView {
-    let found = find(app, p);
-    let manifest = hub.manifests.lock().unwrap().get(p.id).cloned();
+fn view(app: &AppHandle, hub: &Hub, c: &'static Component) -> ComponentView {
+    let manifest = hub.manifests.lock().unwrap().get(c.id).cloned();
+    let released = manifest.as_ref().map(|m| !m.is_null());
     let latest = manifest.as_ref().and_then(|m| m["version"].as_str()).map(str::to_string);
-    let version = found.as_ref().and_then(|f| f.version.clone());
-    let has_build = |m: &Value| platform().is_some_and(|k| m["platforms"][k]["url"].is_string());
-    let install_note = if p.manifest.is_none() {
+    let managed_entry = if c.kind == Kind::Hub { None } else { packages::installed(app, c.id) };
+    let legacy = legacy(app, c);
+    let (managed, version, path) = match (c.kind, &managed_entry) {
+        (Kind::Hub, _) => (
+            true,
+            Some(HUB_VERSION.to_string()),
+            std::env::current_exe().ok().map(|p| p.display().to_string()),
+        ),
+        (_, Some(e)) => {
+            (true, e["version"].as_str().map(str::to_string), e["path"].as_str().map(str::to_string))
+        }
+        (_, None) => match legacy.first() {
+            Some(l) => (false, l.version.clone(), Some(l.path.clone())),
+            None => (false, None, None),
+        },
+    };
+    let installed = managed || !legacy.is_empty();
+    let build_here = |m: &Value| match c.kind {
+        Kind::Hub => packages::self_platform(&packages::self_install())
+            .is_some_and(|k| m["platforms"][k]["url"].is_string()),
+        _ => packages::platform().is_some_and(|k| m["platforms"][k]["url"].is_string()),
+    };
+    let needs_hub = manifest
+        .as_ref()
+        .and_then(|m| m["requires"]["hub"].as_str())
+        .filter(|v| !packages::at_least(HUB_VERSION, v));
+    let install_note = if released == Some(false) {
         Some("Not released yet".to_string())
-    } else if platform().is_none() {
-        Some(
-            "The Hub can install it on 64-bit Windows and Linux only; download it from the release page"
-                .into(),
-        )
-    } else if found.as_ref().is_some_and(|f| f.source == Source::System) {
-        Some(
-            "Installed as a system package: update it by installing the new .deb from the release page"
-                .into(),
-        )
-    } else if found.as_ref().is_some_and(|f| f.source == Source::Located) {
-        Some(
-            "You chose this file in Settings: update it the way you installed it, or forget the location"
-                .into(),
-        )
-    } else if manifest.as_ref().is_some_and(|m| !has_build(m)) {
-        Some("The newest release has no build for this computer".into())
+    } else if c.kind == Kind::Hub {
+        match packages::self_install() {
+            packages::SelfInstall::Unsupported(why) => Some(why),
+            _ => None,
+        }
+    } else if packages::platform().is_none() {
+        Some("The Hub installs programs on 64-bit Windows and Linux".into())
+    } else if !managed && !legacy.is_empty() {
+        Some("Installed on its own: switch it to the Hub to have the Hub keep it updated".into())
     } else {
         None
-    };
-    ProgramView {
-        id: p.id,
-        name: p.name,
-        does: p.does,
-        released: p.manifest.is_some(),
-        installed: found.is_some(),
-        path: found.as_ref().map(|f| f.path.display().to_string()),
-        source: found.as_ref().map(|f| f.source.key()),
-        update: match (&latest, &version) {
-            (Some(l), Some(v)) => newer(l, v),
-            _ => false,
+    }
+    .or_else(|| needs_hub.map(|v| format!("Needs Hub {v} or newer: update the Hub first")))
+    .or_else(|| {
+        manifest
+            .as_ref()
+            .filter(|m| !m.is_null() && !build_here(m))
+            .map(|_| "The newest release has no package for this computer".into())
+    });
+    let restart_ready = if c.kind == Kind::Hub { hub.restart_ready.lock().unwrap().clone() } else { None };
+    ComponentView {
+        id: c.id,
+        name: c.name,
+        does: c.does,
+        kind: match c.kind {
+            Kind::Hub => "hub",
+            Kind::Service => "service",
+            Kind::Program => "program",
         },
+        update: managed
+            && restart_ready.is_none()
+            && matches!((&latest, &version), (Some(l), Some(v)) if packages::newer(l, v)),
+        managed,
+        installed,
         version,
+        path,
+        legacy,
         latest,
-        running: running(p.id),
-        can_install: install_note.is_none(),
+        released,
+        running: c.kind == Kind::Hub || running(c.id),
+        can_install: install_note.is_none() && released == Some(true),
         install_note,
-        installing: hub.installing.lock().unwrap().as_deref() == Some(p.id),
+        installing: hub.installing.lock().unwrap().as_deref() == Some(c.id),
+        restart_ready,
     }
 }
 
-/// Every program of the suite. `check`: fetch each one's newest release first (needs the internet;
-/// a failure leaves the last known release and is not an error).
+/// Every component. `check`: fetch each one's newest package first (needs the internet; a
+/// failure keeps what was known and is not an error).
 #[tauri::command]
-pub async fn programs(app: AppHandle, hub: tauri::State<'_, Hub>, check: bool) -> Res<Vec<ProgramView>> {
+pub async fn components(app: AppHandle, hub: tauri::State<'_, Hub>, check: bool) -> Res<Vec<ComponentView>> {
     if check {
-        for p in CATALOGUE {
-            if let Some(url) = p.manifest {
-                if let Ok(m) = fetch_manifest(url) {
-                    hub.manifests.lock().unwrap().insert(p.id.into(), m);
-                }
+        for c in CATALOGUE {
+            if let Ok(m) = packages::fetch_manifest(c.id) {
+                hub.manifests.lock().unwrap().insert(c.id.into(), m.unwrap_or(Value::Null));
             }
         }
     }
-    Ok(CATALOGUE.iter().map(|p| view(&app, &hub, p)).collect())
+    Ok(CATALOGUE.iter().map(|c| view(&app, &hub, c)).collect())
 }
+
+// ---------------------------------------------------------------------------------------------
+// Launching
+// ---------------------------------------------------------------------------------------------
 
 /// Starts a program, with a model to open when one is given.
 #[tauri::command]
-pub fn launch(app: AppHandle, id: String, model: Option<String>) -> Res<()> {
-    let p = program(&id)?;
-    let found = find(&app, p).ok_or_else(|| format!("{} is not installed", p.name))?;
-    if running(p.id) {
-        return Err(match model {
-            Some(_) => format!(
-                "{} is already open. Switch to it and open the model there: a program that is already running can't be handed a model yet.",
-                p.name
-            ),
-            None => format!("{} is already open", p.name),
-        });
+pub async fn launch(
+    app: AppHandle,
+    hub: tauri::State<'_, Hub>,
+    id: String,
+    model: Option<String>,
+) -> Res<()> {
+    let c = component(&id)?;
+    if c.kind != Kind::Program {
+        return Err("Only programs are started from the Hub".into());
     }
-    let mut cmd = std::process::Command::new(&found.path);
+    let v = view(&app, &hub, c);
+    let path = v.path.filter(|_| v.installed).ok_or_else(|| format!("{} is not installed", c.name))?;
+    if running(c.id) {
+        // Studio 0.9.3 and later hand a second start to the running copy.
+        let forwards = c.id == "studio"
+            && v.version.as_deref().is_some_and(|ver| packages::at_least(ver, STUDIO_FORWARDS_FROM));
+        if !forwards {
+            return Err(match model {
+                Some(_) => format!("{} is already open. Switch to it and open the model there.", c.name),
+                None => format!("{} is already open", c.name),
+            });
+        }
+    }
+    let mut cmd = std::process::Command::new(&path);
     if let Some(m) = &model {
-        let dir = library::model_dir(&app, m)?;
-        if !dir.join("meta.json").is_file() {
-            return Err("This model is no longer in the models folder".into());
+        if m.is_empty() || !m.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-') {
+            return Err("Invalid model id".into());
         }
         cmd.args(["--model", m]);
     }
-    if let Some(dir) = found.path.parent() {
+    if let Some(dir) = Path::new(&path).parent() {
         cmd.current_dir(dir);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("{} could not be started: {e}", p.name))?;
-    // Collect its exit when it closes, so no finished process is left behind (and taken for a
-    // running one).
+    let mut child = cmd.spawn().map_err(|e| format!("{} could not be started: {e}", c.name))?;
+    // Collect its exit when it closes, so no finished process is left behind.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
     if let Some(m) = &model {
-        library::log(&app, m, "Hub", &format!("Opened in {}", p.name.trim_start_matches("Yendory ")));
+        library::log(&app, m, "Hub", &format!("Opened in {}", c.name.trim_start_matches("Yendory ")));
     }
     Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
-// Installing and updating
+// Installing, updating and removing
 // ---------------------------------------------------------------------------------------------
 
-/// Checks a download against its signature from `latest.json` and the project's updater key.
-fn verify(data: &[u8], signature: &str) -> Res<()> {
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD;
-    let decode = |s: &str| {
-        b64.decode(s.trim())
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .ok_or_else(|| "The installer's signature could not be read".to_string())
+/// The icon a package may carry for menu shortcuts.
+fn package_icon(exe: &Path) -> Option<PathBuf> {
+    exe.parent().map(|d| d.join("icon.png")).filter(|p| p.is_file())
+}
+
+/// Starts the Network just installed and checks it is the version expected.
+fn check_network(exe: &Path, version: &str) -> Res<()> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--version");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| format!("The new Yendory Network could not be started: {e}"))?;
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    if v["network"].as_str() != Some(version) {
+        return Err(format!("The package said Yendory Network {version}, but it holds another program"));
+    }
+    if v["api"].as_u64() != Some(yendory_client::API as u64) {
+        return Err("This Yendory Network speaks another API than this Hub: update the Hub first".into());
+    }
+    Ok(())
+}
+
+/// Stops the running Network before it is replaced (refused while another program uses it).
+fn stop_network(app: &AppHandle, hub: &Hub) -> Res<()> {
+    let Some(pid) = yendory_client::service_info().map(|s| s.pid).filter(|p| pid_alive(*p)) else {
+        return Ok(());
     };
-    let key = minisign_verify::PublicKey::decode(&decode(UPDATER_KEY)?).map_err(|e| e.to_string())?;
-    let sig = minisign_verify::Signature::decode(&decode(signature)?)
-        .map_err(|_| "The installer's signature could not be read".to_string())?;
-    key.verify(data, &sig, true).map_err(|_| {
-        "The downloaded installer is not signed by the Yendory project; it was not installed".to_string()
-    })
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Progress {
-    id: String,
-    /// downloading, checking, installing.
-    stage: &'static str,
-    received: u64,
-    total: Option<u64>,
-}
-
-fn download(app: &AppHandle, id: &str, url: &str, cancel: &AtomicBool) -> Res<Vec<u8>> {
-    // No limit on the whole download (installers are large), only on connecting and on a stall.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(20))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .build();
-    let resp = agent.get(url).call().map_err(|e| format!("The download could not start: {e}"))?;
-    let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok());
-    let mut reader = resp.into_reader();
-    let mut data = Vec::with_capacity(total.unwrap_or(0).min(1 << 30) as usize);
-    let mut buf = vec![0u8; 1 << 16];
-    let mut last = std::time::Instant::now();
-    loop {
-        if cancel.load(Ordering::Acquire) {
-            return Err("Cancelled".into());
-        }
-        let n = reader.read(&mut buf).map_err(|e| format!("The download was interrupted: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        data.extend_from_slice(&buf[..n]);
-        if last.elapsed().as_millis() > 150 {
-            last = std::time::Instant::now();
-            let _ = app.emit(
-                "install-progress",
-                Progress { id: id.into(), stage: "downloading", received: data.len() as u64, total },
-            );
+    if let Err(e) = hub.call(app, "shutdown", json!({})) {
+        if !e.contains("lost") {
+            return Err(e);
         }
     }
-    if total.is_some_and(|t| t != data.len() as u64) {
-        return Err("The download ended early; try again".into());
+    hub.disconnect();
+    // Its process must be gone (it holds the lock that keeps one copy running), not only its
+    // service.json.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while pid_alive(pid) {
+        if std::time::Instant::now() > until {
+            return Err("The Yendory Network did not stop; try again".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
-    Ok(data)
+    Ok(())
 }
 
-fn install_now(app: &AppHandle, hub: &Hub, p: &'static Program) -> Res<()> {
-    let url = p.manifest.ok_or("Not released yet")?;
-    if running(p.id) {
-        return Err(format!("Close {} first, then install again", p.name));
+/// Installs or updates one component from its newest package (not the Hub itself).
+pub(crate) fn install_one(app: &AppHandle, hub: &Hub, c: &'static Component, depth: u8) -> Res<String> {
+    let manifest =
+        packages::fetch_manifest(c.id)?.ok_or_else(|| format!("{} is not released yet", c.name))?;
+    hub.manifests.lock().unwrap().insert(c.id.into(), manifest.clone());
+    let version = manifest["version"].as_str().ok_or("The package has no version")?.to_string();
+    if let Some(need) = manifest["requires"]["hub"].as_str().filter(|v| !packages::at_least(HUB_VERSION, v)) {
+        return Err(format!("{} {version} needs Hub {need} or newer: update the Hub first", c.name));
     }
-    let manifest = fetch_manifest(url)?;
-    hub.manifests.lock().unwrap().insert(p.id.into(), manifest.clone());
-    let v = view(app, hub, p);
-    if !v.can_install {
-        return Err(v.install_note.unwrap_or_else(|| "It can't be installed here".into()));
+    // What it needs from the suite comes first (Studio needs the Network).
+    if let Some(reqs) = manifest["requires"].as_object() {
+        for (id, need) in reqs {
+            let (Ok(dep), Some(need)) = (component(id), need.as_str()) else { continue };
+            if dep.kind == Kind::Hub || dep.id == c.id || depth > 2 {
+                continue;
+            }
+            let have =
+                packages::installed(app, dep.id).and_then(|e| e["version"].as_str().map(str::to_string));
+            if !have.is_some_and(|h| packages::at_least(&h, need)) {
+                install_one(app, hub, dep, depth + 1)?;
+            }
+        }
     }
-    let key = platform().ok_or("No builds for this computer")?;
-    let build = &manifest["platforms"][key];
-    let (Some(file_url), Some(signature)) = (build["url"].as_str(), build["signature"].as_str()) else {
-        return Err("The newest release has no build for this computer".into());
-    };
-    let version = manifest["version"].as_str().unwrap_or("").to_string();
-    let data = download(app, p.id, file_url, &hub.cancel)?;
-    let _ = app.emit(
-        "install-progress",
-        Progress {
-            id: p.id.into(),
-            stage: "checking",
-            received: data.len() as u64,
-            total: Some(data.len() as u64),
-        },
-    );
-    verify(&data, signature)?;
-    let _ = app.emit(
-        "install-progress",
-        Progress {
-            id: p.id.into(),
-            stage: "installing",
-            received: data.len() as u64,
-            total: Some(data.len() as u64),
-        },
-    );
-    if cfg!(windows) {
-        // The program's own installer, in its passive mode (a progress bar, no questions). It
-        // installs over an earlier version and keeps that version's data.
-        let name = file_url.rsplit('/').next().unwrap_or("setup.exe").replace("%20", " ");
-        let path = std::env::temp_dir().join(name);
-        write_atomic(&path, &data)?;
-        let mut child = std::process::Command::new(&path)
-            .arg("/P")
-            .spawn()
-            .map_err(|e| format!("The installer could not be started: {e}"))?;
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-    } else {
-        let path = appimage_path(app, p)?;
-        write_atomic(&path, &data)?;
-        #[cfg(unix)]
+    let key = packages::platform().ok_or("No packages for this computer")?;
+    let build = manifest["platforms"][key].clone();
+    if build.is_null() {
+        return Err(format!("{} {version} has no package for this computer", c.name));
+    }
+    if c.kind == Kind::Program && running(c.id) {
+        return Err(format!("Close {} first, then try again", c.name));
+    }
+    let data = packages::download(app, c.id, &build, &hub.cancel)?;
+    packages::progress(app, c.id, "installing", None);
+    let exe = packages::place(app, c.id, &version, &build, &data)?;
+    let folder = packages::programs_dir(app)?.join(c.id).join(&version);
+    let activated = (|| {
+        match c.kind {
+            Kind::Service => {
+                check_network(&exe, &version)?;
+                stop_network(app, hub)?;
+                let dir = yendory_client::paths::network_dir().ok_or("No data folder")?;
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let info = yendory_client::InstallInfo { version: version.clone(), path: exe.clone() };
+                write_atomic(
+                    &dir.join(yendory_client::paths::INSTALL_FILE),
+                    &serde_json::to_vec_pretty(&info).map_err(|e| e.to_string())?,
+                )?;
+            }
+            Kind::Program => packages::shortcut(c.name, &exe, package_icon(&exe).as_deref())?,
+            Kind::Hub => {}
+        }
+        packages::commit(app, c.id, &version, &exe)
+    })();
+    if let Err(e) = activated {
+        // The new version is not used; the one that was there stays.
+        if packages::installed(app, c.id).and_then(|e| e["version"].as_str().map(str::to_string)).as_deref()
+            != Some(&version)
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_dir_all(&folder);
         }
-        let shown = path.display().to_string();
-        update_json(&installed_file(app)?, |m| {
-            m.insert(p.id.into(), json!({"path": shown, "version": version, "time": now()}));
-        })?;
+        return Err(e);
     }
-    Ok(())
+    if c.kind == Kind::Service {
+        // The new Network starts now, so the Hub keeps working.
+        hub.network(app)?;
+    }
+    Ok(version)
 }
 
-/// Downloads the newest release of a program for this computer, checks its signature and
-/// installs it (Windows: runs its installer; Linux: keeps the AppImage in the Hub's folder).
+/// Downloads and installs the Hub's own newest package; it takes effect at the restart.
+fn update_self(app: &AppHandle, hub: &Hub) -> Res<String> {
+    let manifest = packages::fetch_manifest("hub")?.ok_or("The Hub has no package yet")?;
+    hub.manifests.lock().unwrap().insert("hub".into(), manifest.clone());
+    let version = manifest["version"].as_str().ok_or("The package has no version")?.to_string();
+    if !packages::newer(&version, HUB_VERSION) {
+        return Err("This is the newest Hub".into());
+    }
+    let how = packages::self_install();
+    let key = packages::self_platform(&how).ok_or_else(|| match &how {
+        packages::SelfInstall::Unsupported(why) => why.clone(),
+        _ => "No Hub package for this computer".into(),
+    })?;
+    let build = manifest["platforms"][&key].clone();
+    if build.is_null() {
+        return Err("The newest Hub has no package for this computer".into());
+    }
+    let data = packages::download(app, "hub", &build, &hub.cancel)?;
+    packages::progress(app, "hub", "installing", None);
+    let exe = packages::replace_self(&how, &build, &data, &version)?;
+    *hub.restart_ready.lock().unwrap() = Some(version.clone());
+    RESTART_INTO.lock().unwrap().replace(exe);
+    Ok(version)
+}
+
+static RESTART_INTO: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Installs, updates or repairs a component. Returns every component's state.
 #[tauri::command]
-pub async fn install_program(
+pub async fn install_component(
     app: AppHandle,
     hub: tauri::State<'_, Hub>,
     id: String,
-) -> Res<Vec<ProgramView>> {
-    let p = program(&id)?;
+) -> Res<Vec<ComponentView>> {
+    let c = component(&id)?;
     {
         let mut busy = hub.installing.lock().unwrap();
         if let Some(other) = busy.as_deref() {
             return Err(format!(
-                "Wait until {} has finished installing",
-                program(other).map(|p| p.name).unwrap_or("the other program")
+                "Wait until {} has finished",
+                component(other).map(|c| c.name).unwrap_or("the other install")
             ));
         }
-        *busy = Some(p.id.into());
+        *busy = Some(c.id.into());
     }
     hub.cancel.store(false, Ordering::Release);
-    let result = install_now(&app, &hub, p);
+    let result = if c.kind == Kind::Hub {
+        update_self(&app, &hub)
+    } else if c.kind == Kind::Program
+        && !packages::installed(&app, c.id).is_some()
+        && !legacy(&app, c).is_empty()
+    {
+        Err(format!(
+            "{} is installed on its own. Switch it to the Hub instead, so there is one copy.",
+            c.name
+        ))
+    } else {
+        install_one(&app, &hub, c, 0)
+    };
     *hub.installing.lock().unwrap() = None;
-    result?;
-    Ok(CATALOGUE.iter().map(|p| view(&app, &hub, p)).collect())
+    let version = result?;
+    if c.kind != Kind::Hub {
+        log_install(&app, c, &version);
+    }
+    Ok(CATALOGUE.iter().map(|c| view(&app, &hub, c)).collect())
+}
+
+fn log_install(app: &AppHandle, c: &Component, version: &str) {
+    let path = match hub_dir(app) {
+        Ok(d) => d.join("installs.jsonl"),
+        Err(_) => return,
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}", json!({"time": now(), "id": c.id, "version": version}));
+    }
+}
+
+/// Removes a program the Hub installed (its models and data are kept).
+#[tauri::command]
+pub async fn remove_component(
+    app: AppHandle,
+    hub: tauri::State<'_, Hub>,
+    id: String,
+) -> Res<Vec<ComponentView>> {
+    let c = component(&id)?;
+    if c.kind != Kind::Program {
+        return Err(format!("{} can't be removed from the Hub", c.name));
+    }
+    if running(c.id) {
+        return Err(format!("Close {} first", c.name));
+    }
+    packages::uninstall(&app, c.id)?;
+    packages::remove_shortcut(c.name);
+    Ok(CATALOGUE.iter().map(|c| view(&app, &hub, c)).collect())
 }
 
 #[tauri::command]
@@ -544,11 +618,22 @@ pub fn cancel_install(hub: tauri::State<'_, Hub>) {
     hub.cancel.store(true, Ordering::Release);
 }
 
+/// Starts the updated Hub and closes this one.
+#[tauri::command]
+pub fn restart_hub(app: AppHandle) -> Res<()> {
+    let exe = RESTART_INTO.lock().unwrap().clone().ok_or("No update is waiting")?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["--updated-from", HUB_VERSION]);
+    cmd.spawn().map_err(|e| format!("The new Hub could not be started: {e}"))?;
+    app.exit(0);
+    Ok(())
+}
+
 /// Lets the owner point the Hub at a program installed somewhere it does not look.
 #[tauri::command]
 pub async fn locate_program(app: AppHandle, id: String) -> Res<bool> {
-    let p = program(&id)?;
-    let Some(picked) = app.dialog().file().set_title(format!("Where is {}?", p.name)).blocking_pick_file()
+    let c = component(&id)?;
+    let Some(picked) = app.dialog().file().set_title(format!("Where is {}?", c.name)).blocking_pick_file()
     else {
         return Ok(false);
     };
@@ -559,66 +644,37 @@ pub async fn locate_program(app: AppHandle, id: String) -> Res<bool> {
         if !locations.is_object() {
             *locations = json!({});
         }
-        locations[p.id] = Value::String(shown);
+        locations[c.id] = Value::String(shown);
     })?;
     Ok(true)
 }
 
-#[tauri::command]
-pub fn forget_location(app: AppHandle, id: String) -> Res<()> {
-    let p = program(&id)?;
-    update_json(&settings_file(&app)?, |m| {
+pub(crate) fn forget_located(app: &AppHandle, id: &str) -> Res<()> {
+    update_json(&settings_file(app)?, |m| {
         if let Some(l) = m.get_mut("locations").and_then(Value::as_object_mut) {
-            l.remove(p.id);
+            l.remove(id);
         }
     })
+}
+
+#[tauri::command]
+pub fn forget_location(app: AppHandle, id: String) -> Res<()> {
+    forget_located(&app, component(&id)?.id)
 }
 
 /// Opens the release page in the browser.
 #[tauri::command]
 pub fn open_releases() -> Res<()> {
     let result = if cfg!(windows) {
-        std::process::Command::new("cmd").args(["/C", "start", "", RELEASES]).spawn()
+        std::process::Command::new("cmd").args(["/C", "start", "", RELEASE_PAGE]).spawn()
     } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(RELEASES).spawn()
+        std::process::Command::new("open").arg(RELEASE_PAGE).spawn()
     } else {
-        std::process::Command::new("xdg-open").arg(RELEASES).spawn()
+        std::process::Command::new("xdg-open").arg(RELEASE_PAGE).spawn()
     };
-    let mut child = result.map_err(|_| format!("Open {RELEASES} in your browser"))?;
+    let mut child = result.map_err(|_| format!("Open {RELEASE_PAGE} in your browser"))?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn versions_compare_by_number() {
-        assert!(newer("0.10.0", "0.9.9"));
-        assert!(newer("1.0.0", "0.9.9"));
-        assert!(!newer("0.9.1", "0.9.1"));
-        assert!(!newer("0.9.1-dev.98", "0.9.1"));
-        assert!(newer("0.9.2", "0.9.1-dev.98"));
-    }
-
-    #[test]
-    fn a_tampered_installer_is_refused() {
-        // A signature in the format latest.json carries, for other data: refused.
-        let sig = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd1dWSGhHb2VJZnJTNE9QMGNDRUtnZURxREtaZUhVQUlHQnVGSThCMU9jbitCVjhnNncyazZDREFoYlhmSldkQnU5bjUwVSs2cmpNYWJUZ1lCUlpabjR5VkpJRHVZa0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzkxMDMzCWZpbGU6WWVuZG9yeSBTdHVkaW9fMC45LjFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuOS4xCjUwT2NUa09VTU5JRVZidUFHSGQ2RFZuMnYweWg4S2NWdGhSbTE0WkpHQTJPUk9QQmFFVkQxVG5FUkpkcytLTlBoQmxLaTNuVHRxRmJGMXh4amI4REJ3PT0K";
-        assert!(verify(b"not the installer", sig).unwrap_err().contains("not signed"));
-        assert!(verify(b"x", "garbage").is_err());
-    }
-
-    /// With YENDORY_HUB_INSTALLER (a downloaded installer) and YENDORY_HUB_SIGNATURE (its
-    /// signature from latest.json): the real file passes. Run by hand:
-    /// `cargo test --release -- --ignored real_installer`.
-    #[test]
-    #[ignore]
-    fn a_real_installer_passes() {
-        let data = std::fs::read(std::env::var("YENDORY_HUB_INSTALLER").unwrap()).unwrap();
-        verify(&data, &std::env::var("YENDORY_HUB_SIGNATURE").unwrap()).unwrap();
-    }
 }

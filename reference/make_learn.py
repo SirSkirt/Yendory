@@ -2,7 +2,7 @@
 
     python3 make_learn.py <lesson_dir> <checkpoint.nnova2> <out.json> [--min_count N] [--eval]
 
-Records, for crates/yendory-engine/tests/learn.rs:
+Records, for dependency/engine/tests/learn.rs:
   - every parsed item (kind, file, held-out flag, segments, prompt/answer/contradicted, turns)
   - the grown word vocabulary (grow_vocabulary over the training items)
   - encoded training rows for a fixed selection of training items (ids, targets, mask)

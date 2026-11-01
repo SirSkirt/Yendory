@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/yendory-engine"]
+members = ["dependency/engine", "dependency/client", "dependency/network"]
 
 [workspace.package]
 edition = "2021"

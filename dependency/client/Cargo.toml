@@ -1,0 +1,13 @@
+[package]
+name = "yendory-client"
+version = "0.1.0"
+description = "Yendory client: how a program of the Yendory suite finds, starts and talks to the Yendory Network"
+edition.workspace = true
+rust-version = "1.89"
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"

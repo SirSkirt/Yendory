@@ -1,6 +1,6 @@
 [package]
 name = "yendory-hub"
-version = "0.1.0"
+version = "0.1.1"
 description = "Yendory Hub: create and open models, install and launch the Yendory programs"
 edition = "2021"
 publish = false
@@ -21,21 +21,25 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "2"
-# Installers downloaded for Studio are checked against the project's updater key before they run.
+# Packages are checked against the project's updater key before they are installed.
 minisign-verify = "0.2"
 base64 = "0.22"
-# Whether Studio is running (it must be closed before a model it may have open is changed).
+# Packages are zip files.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Whether a program is running (it must be closed before it is updated or its model changed).
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }
-# Creating and importing models: the one Engine (CPU only; the Hub never trains).
-yendory-engine = { path = "../../../crates/yendory-engine" }
+# The Yendory Network: every model is made and changed through it (the Hub holds no Engine).
+yendory-client = { path = "../../../dependency/client" }
 
-# Desktop: the Hub updates itself from the release page (signed; see src/update.rs).
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
-
-# Windows: where Studio's installer recorded it (the uninstall entry in the registry).
+# Windows: finding (and removing) a Studio installed by its own installer, and the Hub's own entry
+# in Apps & features.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+
+[features]
+# Development and tests only: lets YENDORY_RELEASES and YENDORY_UPDATER_KEY replace the release
+# page and the updater key. Never on in release builds.
+dev-overrides = []
 
 [profile.release]
 codegen-units = 1

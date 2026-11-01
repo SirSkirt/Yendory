@@ -6,9 +6,10 @@ Yendory is an open-source kit for creating, teaching and exporting AI models bui
 Bicameral neural architecture first developed for Neural Nova. A model can have any name; Nova
 is the first student, not the engine.
 
-- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`crates/yendory-engine`).
-- **Yendory Hub** — the front door: make or import models, keep them on shelves, install and launch the other programs (`apps/hub`, Tauri; this branch, `yendory-hub`).
-- **Yendory Studio** — the training app for Windows, Linux and Android (`apps/studio`, on the `yendory-studio` branch).
+- **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`dependency/engine`).
+- **Yendory Network** — the background service that runs the Engine for every program (`dependency/network`; [docs/NETWORK.md](docs/NETWORK.md)).
+- **Yendory Hub** — the front door and the suite's installer: models on shelves, and it installs and updates the Network, Studio and itself (`apps/hub`; this branch, `yendory-hub`).
+- **Yendory Studio** — the training app (`apps/studio`, on the `yendory-studio` branch).
 - **Yendory Tools** — apps and games that put trained models to work, through the Nexus technology (later).
 
 *Studio teaches. Engine thinks. Nexus connects.*
@@ -26,7 +27,9 @@ It is deliberately not a Llama-style network. See [docs/ARCHITECTURE.md](docs/AR
 ## Repository
 
 ```
-crates/yendory-engine/   the Engine library (no UI, no Tauri)
+dependency/engine/       the Engine library (no UI, no Tauri)
+dependency/network/      the Yendory Network service (runs the Engine for every program)
+dependency/client/       how a program finds, starts and talks to the Network
 apps/hub/                Yendory Hub (Tauri 2: Rust backend + HTML/JS); Studio is on the yendory-studio branch
 reference/               numpy reference = the specification, plus golden/compat generators
 tests/compat/            golden vectors, a real trained checkpoint, expected reference outputs
