@@ -10,8 +10,11 @@ client library) on `yendory-hub`, Yendory Studio on `yendory-studio`.
 Tools holds no copy of the Engine or the Network: it uses `yendory-client` and `yendory-engine`
 from yendory-hub, pinned to one commit in `apps/tools/src-tauri/Cargo.toml`; move the pin on
 purpose. Every model is opened and every line it writes comes through the Network. Tools uses the
-Engine only for what needs no model (Nexus's announcements and actions, checking lessons). A
-change Tools needs in the Network is made on yendory-hub by whoever owns the Network there.
+Engine for what needs no model file (Nexus's announcements and actions, checking lessons) and for
+the game-skill network (`yendory_engine::skill`): it trains and plays a Nova Neuro model's game
+skills itself, but reads and saves them only through the Network (`model.skill`,
+`model.skill.save`; docs/FORMAT.md on yendory-hub, format 2). A change Tools needs in the Network
+is made on yendory-hub by whoever owns the Network there.
 
 Real games (docs/GAME_TRAINING.md) are played from the screen with virtual keyboard and mouse
 input. Every virtual input goes through the safety layer (`live/safety.rs`: permitted controls
@@ -28,7 +31,7 @@ Models are handed between programs through Studio's models folder and `--model <
 
 ## Version numbers
 
-Tools is at **0.1.4**. A push that changes Tools raises its last digit by one, and the last digit
+Tools is at **0.1.5**. A push that changes Tools raises its last digit by one, and the last digit
 carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
 in every place that holds it:
 

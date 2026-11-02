@@ -42,12 +42,22 @@ fn data_dir(app: &AppHandle) -> Res<PathBuf> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenModel {
-    id: String,
-    name: String,
-    architecture: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) architecture: String,
     parameters: u64,
     step: u64,
     context: u64,
+}
+
+/// A Network call from anywhere in Tools (the connection is made, or remade, as needed).
+pub(crate) fn network_call(app: &AppHandle, method: &str, params: Value) -> Res<Value> {
+    app.state::<Tools>().call(app, method, params)
+}
+
+/// The model Tools has open, if any.
+pub(crate) fn open_model_now(app: &AppHandle) -> Option<OpenModel> {
+    app.state::<Tools>().open.lock().unwrap().clone()
 }
 
 #[derive(Default)]
@@ -181,6 +191,9 @@ async fn models(app: AppHandle, tools: tauri::State<'_, Tools>) -> Res<Vec<Value
 async fn open_model(app: AppHandle, tools: tauri::State<'_, Tools>, id: String) -> Res<OpenModel> {
     if tools.measuring.load(Ordering::Acquire) {
         return Err("Wait until the measurement has finished, or stop it".into());
+    }
+    if app.state::<live::Live>().busy_with_model() {
+        return Err("Wait until the game training, play or measuring has finished, or stop it".into());
     }
     let opened = tools.call(&app, "models.open", json!({"id": id}))?;
     let model = open_model_of(&opened["meta"]);
@@ -473,8 +486,10 @@ pub fn run() {
             live::recording_validate,
             live::recording_update,
             live::recording_delete,
-            live::nova::players,
-            live::nova::player_create,
+            live::nova::skills_view,
+            live::nova::skill_create,
+            live::nova::skill_delete,
+            live::nova::player_move,
             live::nova::player_delete,
             live::nova::train_start,
             live::nova::train_stop,

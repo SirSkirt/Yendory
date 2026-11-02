@@ -5,7 +5,7 @@ use super::autoplay::{self, Brain, Decide};
 use super::policy::{check_arch, gradient_check, random_sequence, Policy};
 use super::recording::{self, Split};
 use super::safety::{Controller, STOPS};
-use super::{alive, data_dir, player, profile, script, sys, train, Live, RangeProcess};
+use super::{alive, data_dir, profile, script, sys, train, Live, RangeProcess};
 use crate::Res;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -278,7 +278,7 @@ fn phase3(app: &AppHandle, game: &str) -> Res<Vec<Check>> {
 }
 
 /// Phase 4: the network's maths, saving, learning, and playing through the safety layer.
-fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check>> {
+fn phase4(app: &AppHandle, game: &str) -> Res<Vec<Check>> {
     let mut out = Vec::new();
     let (checked, worst) = gradient_check(42);
     out.push(check("The network's gradients are right", worst < 2e-2, format!("{checked} weights in every kind of layer compared with finite differences; worst relative error {worst:.4}")));
@@ -298,11 +298,10 @@ fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check
 
     let data = data_dir(app)?;
     let prof = profile::load(&data, game)?;
-    match player_id {
-        Some(id) => {
-            let info = player::load_info(&data, game, id)?;
-            player::fits(&info, &prof)?;
-            let clips = train::load_clips(&data, &info, Split::Train)?;
+    match super::skills::open_model(app).and_then(|m| super::skills::get(app, game).map(|k| (m, k))) {
+        Ok((m, skill)) => {
+            super::skills::fits(&skill.spec, &prof)?;
+            let clips = train::load_clips(&data, &skill.spec, Split::Train)?;
             if clips.is_empty() {
                 out.push(check(
                     "Training lowers the loss on your recordings",
@@ -311,7 +310,7 @@ fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check
                 ));
             } else {
                 // A short training on a copy (nothing is saved): the loss on a fixed batch must fall.
-                let (mut policy, _) = player::load_latest(&data, &info)?;
+                let (mut policy, _) = skill.latest_policy()?;
                 let mut adam = super::policy::Adam::new(policy.parameters());
                 let mut batch = Vec::new();
                 for c in clips.iter() {
@@ -320,7 +319,7 @@ fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check
                         let inputs: Vec<Vec<f32>> = (start..start + 6)
                             .map(|t| {
                                 super::policy::encode(
-                                    &info.arch,
+                                    &skill.spec.arch,
                                     &[&c.pictures[t.saturating_sub(1)], &c.pictures[t]],
                                 )
                             })
@@ -345,13 +344,17 @@ fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check
                     adam.step(&mut policy, &grad, 1e-3, 0.0);
                 }
                 let last = loss(&policy);
-                out.push(check("Training lowers the loss on your recordings", last < first, format!("{} sequences from your recordings: loss {first:.3} → {last:.3} after 30 steps (on a copy; nothing saved)", batch.len())));
+                out.push(check(
+                    "Training lowers the loss on your recordings",
+                    last < first,
+                    format!("{}'s skill, {} sequences from your recordings: loss {first:.3} → {last:.3} after 30 steps (on a copy; nothing saved)", m.name, batch.len()),
+                ));
             }
         }
-        None => out.push(check(
+        Err(e) => out.push(check(
             "Training lowers the loss on your recordings",
             false,
-            "make a player on 2.5 first, then choose it here",
+            format!("{e} (open a Neuro model with a skill for this game: 2.5 Train)"),
         )),
     }
 
@@ -399,14 +402,10 @@ fn phase4(app: &AppHandle, game: &str, player_id: Option<&str>) -> Res<Vec<Check
     Ok(out)
 }
 
-/// Runs a phase's automatic checks (2, 3 or 4). `game` and `player` are for phases 3 and 4.
+/// Runs a phase's automatic checks (2, 3 or 4). `game` is for phases 3 and 4 (phase 4 uses the
+/// open model's skill for it).
 #[tauri::command]
-pub async fn checks_run(
-    app: AppHandle,
-    phase: u8,
-    game: Option<String>,
-    player: Option<String>,
-) -> Res<Vec<Check>> {
+pub async fn checks_run(app: AppHandle, phase: u8, game: Option<String>) -> Res<Vec<Check>> {
     let live = app.state::<Live>();
     if live.running.swap(true, Ordering::AcqRel) {
         return Err("Something is already running (actions, a recording, or play)".into());
@@ -415,7 +414,7 @@ pub async fn checks_run(
     let result = match phase {
         2 => phase2(&app),
         3 => phase3(&app, &game),
-        4 => phase4(&app, &game, player.as_deref()),
+        4 => phase4(&app, &game),
         _ => Err("No such phase".into()),
     };
     live.running.store(false, Ordering::Release);

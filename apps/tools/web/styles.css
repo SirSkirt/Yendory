@@ -463,3 +463,5 @@ main { max-width: 1112px; }
 .check-list li .note { display: block; margin-top: 2px; }
 .ledger td.better { color: var(--good); font-weight: 600; }
 .ledger td.worse { color: var(--bad); }
+.model-line { display: flex; gap: 12px; align-items: center; margin: 6px 0; font-size: 15px; }
+.model-line .warn { color: var(--warn); }

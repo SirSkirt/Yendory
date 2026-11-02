@@ -110,7 +110,7 @@ async function chooseModel() {
   for (const m of list) {
     pick.append(el("button", { type: "button", onclick: async () => { overlay.remove(); await openModel(m.id); } },
       el("span", {}, el("b", {}, m.name), m.openBy?.length ? ` · open in ${m.openBy.join(", ")}` : ""),
-      el("small", {}, `${short(m.parameters)} · step ${fmt(m.step)}`)));
+      el("small", {}, `Nova ${m.architecture === "neuro" ? "Neuro" : "Bicameral"} · ${short(m.parameters)} · step ${fmt(m.step)}`)));
   }
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
   document.body.append(overlay);
@@ -121,6 +121,8 @@ async function openModel(id) {
   if (!m) return;
   S.model = m;
   S.match = null;
+  T.selected = null;
+  T.history = [];
   await loadReports();
   toast(`Opened ${m.name}`);
   render();
@@ -839,77 +841,116 @@ async function deleteRecording() {
 }
 
 // ---- Real games: training (generation 0) --------------------------------------------------------
+// Game skills belong to the open model (a Nova Neuro model from Yendory Hub); the backend reads
+// and saves them through the Network (src-tauri/src/live/skills.rs).
 const T = { profile: null, data: null, selected: null, training: false, history: [] };
 const f3 = v => (v == null || !isFinite(v) ? "—" : v.toFixed(3));
+const runsOf = k => (k?.notes?.runs || []);
+const bestOf = k => runsOf(k).map(r => r.best).filter(Boolean).at(-1);
 
 async function renderTrain() {
   if (!L.info) return;
   profileOptions($("trainProfile"), T.profile ?? R.profile ?? L.editing?.id, false);
   const id = $("trainProfile").value;
   T.profile = id || null;
-  const body = $("playersTable").tBodies[0];
+  const body = $("skillsTable").tBodies[0];
   if (!id) { body.replaceChildren(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "Make a game profile first (2.1)."))); $("trainPanel").hidden = true; return; }
-  const d = await act("players", { id });
+  const d = await act("skills_view", { id });
   if (!d) return;
   T.data = d;
-  T.training = d.trainingNow != null || T.training;
+  T.training = d.trainingNow || T.training;
   const rec = r => `${r.count} recording${r.count === 1 ? "" : "s"}, ${clock(r.seconds * 1000)}`;
   $("trainRecs").textContent = `Your play: ${rec(d.training)} for training, ${rec(d.testing)} held out for testing.` + (d.testing.count ? "" : " Mark one for testing (2.4) to measure what is learned.");
-  body.replaceChildren(...(d.players.length ? d.players.map(p => {
-    const best = p.runs.map(r => r.best).filter(Boolean).at(-1);
-    return el("tr", { class: T.selected === p.id ? "open-row" : "" },
-      el("td", {}, p.name),
-      el("td", {}, p.size),
-      el("td", {}, `generation ${p.lineage.generation}, ${p.lineage.method}`),
-      el("td", { class: "num" }, fmt(p.steps)),
+  const m = d.model;
+  $("trainModel").replaceChildren(m ? el("span", {}, "Model: ", el("b", {}, m.name), ` (Nova ${m.architecture === "neuro" ? "Neuro" : "Bicameral"})`) : el("span", {}, "No model open."),
+    d.problem && m ? el("span", { class: "warn" }, ` ${d.problem}`) : "");
+  $("trainOpenModel").disabled = T.training;
+  const game = gameName(id);
+  body.replaceChildren(...(d.skills.length ? d.skills.map(k => {
+    const best = bestOf(k);
+    return el("tr", { class: T.selected === k.game ? "open-row" : "" },
+      el("td", {}, k.name),
+      el("td", {}, k.size),
+      el("td", {}, `generation ${k.lineage.generation}, ${k.lineage.method}`),
+      el("td", { class: "num" }, fmt(k.steps)),
       el("td", { class: "num" + (best && best.loss < best.baselineLoss ? " better" : "") }, best ? f3(best.loss) : "—"),
       el("td", { class: "num" }, best ? f3(best.baselineLoss) : "—"),
-      el("td", {}, el("button", { type: "button", onclick: () => selectPlayer(p.id) }, "Open")));
-  }) : [el("tr", {}, el("td", { colspan: 7, class: "empty" }, "No players for this game yet."))]));
-  if (T.selected && !d.players.some(p => p.id === T.selected)) T.selected = null;
+      el("td", {}, k.game === id ? el("button", { type: "button", onclick: () => selectSkill(k.game) }, "Open") : el("span", { class: "note" }, "choose its game above")));
+  }) : [el("tr", {}, el("td", { colspan: 7, class: "empty" }, m ? (d.problem ? d.problem : `${m.name} has no game skills yet.`) : "Open a model to see its game skills."))]));
+  const has = d.skills.some(k => k.game === id);
+  $("newSkillForm").hidden = !m || !!d.problem || has;
+  $("newSkillNote").hidden = $("newSkillForm").hidden;
+  $("newSkill").textContent = m ? `Teach ${m.name} ${game}` : "Add the skill";
+  // Players kept in Tools by 0.1.4.
+  $("oldPlayers").hidden = !d.oldPlayers.length;
+  $("oldPlayersBody").replaceChildren(...d.oldPlayers.map(p => el("tr", {},
+    el("td", {}, p.name), el("td", { class: "num" }, `${fmt(p.steps)} steps`),
+    el("td", {}, el("button", { type: "button", disabled: !m || !!d.problem || has, title: has ? "The model already has a skill for this game" : null, onclick: () => movePlayer(p.id) }, m ? `Move into ${m.name}` : "Move into a model"),
+      " ", el("button", { type: "button", class: "quiet", onclick: () => deleteOldPlayer(p.id) }, "Delete")))));
+  if (has && !T.selected) T.selected = id;
+  if (T.selected && T.selected !== id) T.selected = has ? id : null;
+  if (T.selected && !has) T.selected = null;
+  if (T.selected && !T.history.length) loadHistory();
   renderTrainPanel();
 }
 
-function selectPlayer(id) {
-  T.selected = id;
+const gameName = id => L.profiles.find(p => p.id === id)?.name ?? id;
+const skillNow = () => T.data?.skills.find(k => k.game === T.selected);
+
+function loadHistory() {
   T.history = [];
-  const p = T.data?.players.find(x => x.id === id);
-  const last = p?.runs.at(-1)?.settings;
+  const k = skillNow();
+  for (const r of runsOf(k)) {
+    if (r.first) T.history.push({ step: r.first.step, held: r.first.loss, base: r.first.baselineLoss });
+    if (r.best) T.history.push({ step: r.best.step, held: r.best.loss, base: r.best.baselineLoss });
+  }
+}
+
+function selectSkill(game) {
+  T.selected = game;
+  const last = runsOf(skillNow()).at(-1)?.settings;
   $("trSteps").value = last?.steps ?? 1500;
   $("trRate").value = last?.learningRate ?? 0.0005;
   $("trOffset").value = last?.offset ?? 1;
   $("trBatch").value = last?.batch ?? 16;
   $("trLength").value = last?.length ?? 8;
-  if (p) for (const r of p.runs) {
-    if (r.first) T.history.push({ step: r.first.step, held: r.first.loss, base: r.first.baselineLoss });
-    if (r.best) T.history.push({ step: r.best.step, held: r.best.loss, base: r.best.baselineLoss });
-  }
+  loadHistory();
   renderTrain();
 }
 
 function renderTrainPanel() {
-  const p = T.data?.players.find(x => x.id === T.selected);
-  $("trainPanel").hidden = !p;
-  if (!p) return;
-  $("trainTitle").textContent = `${p.name}: ${fmt(p.steps)} steps so far, accepted at step ${fmt(p.acceptedStep)}`;
+  const k = skillNow();
+  $("trainPanel").hidden = !k;
+  if (!k) return;
+  if (!$("trSteps").value) selectSkill(k.game);
+  $("trainTitle").textContent = `${T.data.model?.name ?? "The model"} plays ${k.name}: ${fmt(k.steps)} steps so far, accepted at step ${fmt(k.acceptedStep)}`;
   $("trStart").hidden = T.training;
   $("trStop").hidden = !T.training;
   $("trDelete").disabled = T.training;
+  $("trDelete").textContent = "Remove the skill";
   $("trStart").disabled = !T.data.training.count;
   if (!T.data.training.count) $("trNote").textContent = "Record some of your play on 2.3 (marked for training) first.";
-  const best = p.runs.map(r => r.best).filter(Boolean).at(-1);
+  const best = bestOf(k);
   if (best && !T.training) showMeasure(best);
   drawTrainChart();
 }
 
-async function makePlayer() {
-  const name = $("newPlayerName").value.trim() || "Gaming Nova";
-  const p = await act("player_create", { id: T.profile, name, size: $("newPlayerSize").value });
-  if (!p) return;
-  $("newPlayerName").value = "";
-  T.selected = p.id;
+async function makeSkill() {
+  const k = await act("skill_create", { id: T.profile, size: $("newSkillSize").value });
+  if (!k) return;
+  T.selected = k.game;
+  T.history = [];
   await renderTrain();
-  selectPlayer(p.id);
+  selectSkill(k.game);
+}
+
+async function movePlayer(player) {
+  if (await act("player_move", { id: T.profile, player })) { T.selected = T.profile; T.history = []; toast("Moved into the model."); }
+  renderTrain();
+}
+
+async function deleteOldPlayer(player) {
+  if (await act("player_delete", { id: T.profile, player })) renderTrain();
 }
 
 async function startTraining() {
@@ -918,7 +959,7 @@ async function startTraining() {
     learningRate: Number($("trRate").value), weightDecay: 0.0001, offset: Number($("trOffset").value), measureEvery: 100, seed: Date.now() % 100000,
   };
   const fresh = document.querySelector("input[name=trFrom]:checked")?.value === "fresh";
-  const ok = await act("train_start", { id: T.profile, player: T.selected, settings, fresh });
+  const ok = await act("train_start", { id: T.profile, settings, fresh });
   if (ok === undefined) return;
   T.training = true;
   $("trMeter").hidden = false;
@@ -930,7 +971,7 @@ async function startTraining() {
 }
 
 function trainProgress(pl) {
-  if (pl.player !== T.selected) return;
+  if (pl.game !== T.selected) return;
   const g = pl.progress;
   const w = `${(100 * g.step) / g.steps}%`;
   $("trBar").style.width = w;
@@ -942,15 +983,15 @@ function trainProgress(pl) {
   drawTrainChart();
 }
 
-function trainEnded(info, error) {
+function trainEnded(spec, error) {
   T.training = false;
   $("trMeter").hidden = true;
   $("sideRun").hidden = true;
   $("sideRunTitle").textContent = "Measuring";
   if (error) $("trNote").textContent = `Training stopped: ${error}`;
   else {
-    const r = info.runs.at(-1);
-    $("trNote").textContent = `${r.stopped ? "Stopped" : "Done"} after ${fmt(r.stepsDone)} steps.` + (r.best ? ` Accepted: held-out loss ${f3(r.best.loss)} against the baseline's ${f3(r.best.baselineLoss)}.` : r.heldOut.length ? " No measurement beat the accepted weights; they are kept." : " Nothing was held out, so the latest weights were accepted.");
+    const r = runsOf(spec).at(-1);
+    $("trNote").textContent = `${r.stopped ? "Stopped" : "Done"} after ${fmt(r.stepsDone)} steps; saved in the model.` + (r.best ? ` Accepted: held-out loss ${f3(r.best.loss)} against the baseline's ${f3(r.best.baselineLoss)}.` : r.heldOut.length ? " No measurement beat the accepted weights; they are kept." : " Nothing was held out, so the latest weights were accepted.");
   }
   if (S.route === "train") renderTrain();
 }
@@ -993,34 +1034,31 @@ function drawTrainChart() {
   line("base", css.getPropertyValue("--ink-soft").trim() || "#777", [5, 4]);
 }
 
-async function deletePlayer() {
-  const p = T.data?.players.find(x => x.id === T.selected);
-  if (!p) return;
-  if (!(await act("player_delete", { id: T.profile, player: p.id }))) return;
+async function deleteSkill() {
+  if (!skillNow()) return;
+  if (!(await act("skill_delete", { id: T.profile }))) return;
   T.selected = null;
+  T.history = [];
   renderTrain();
 }
 
 // ---- Real games: play and measure ---------------------------------------------------------------
 const P = { playing: false, measuring: false };
 
-async function playerOptions(select, game, chosen) {
-  const d = game ? await act("players", { id: game }) : null;
-  const list = d?.players || [];
-  select.replaceChildren(...(list.length ? list.map(p => el("option", { value: p.id, "data-note": `${fmt(p.steps)} steps` }, p.name)) : [el("option", { value: "" }, "No players yet (2.5)")]));
-  if (list.some(p => p.id === chosen)) select.value = chosen;
-  return list;
-}
-
 async function renderAutoplay() {
   if (!L.info) return;
-  profileOptions($("apProfile"), T.profile ?? L.editing?.id, false);
-  const list = await playerOptions($("apPlayer"), $("apProfile").value, T.selected);
-  $("apStart").disabled = !list.length || P.playing || P.measuring;
+  profileOptions($("apProfile"), $("apProfile").value || T.profile || L.editing?.id, false);
+  const id = $("apProfile").value;
+  const d = id ? await act("skills_view", { id }) : null;
+  const k = d?.skills.find(x => x.game === id);
+  const m = d?.model;
+  $("apSkill").textContent = !m ? "Open a model first." : d.problem ? d.problem : k ? `${m.name} plays with its skill for this game (${fmt(k.steps)} steps).` : `${m.name} has no skill for this game: add one on 2.5.`;
+  const can = !!(m && !d.problem && k);
+  $("apStart").disabled = !can || P.playing || P.measuring;
   $("apStart").hidden = P.playing;
   $("apStopBtn").hidden = !P.playing;
-  const range = $("apProfile").value === RANGE_ID;
-  $("evStart").disabled = !range || !list.length || P.playing || P.measuring;
+  const range = id === RANGE_ID;
+  $("evStart").disabled = !range || !can || P.playing || P.measuring;
   $("evStart").hidden = P.measuring;
   $("evStop").hidden = !P.measuring;
   if (!range) $("evNote").textContent = "Choose the Yendory Range game to measure on it.";
@@ -1029,7 +1067,7 @@ async function renderAutoplay() {
 async function startPlay() {
   // Tools asks for permission in its own dialog, every time.
   const decide = document.querySelector("input[name=apDecide]:checked")?.value || "likely";
-  const ok = await act("play_start", { id: $("apProfile").value, player: $("apPlayer").value, decide, record: $("apRecord").checked });
+  const ok = await act("play_start", { id: $("apProfile").value, decide, record: $("apRecord").checked });
   if (!ok) return;
   P.playing = true;
   $("apLive").hidden = false;
@@ -1055,7 +1093,7 @@ function playEnded(r, error) {
 
 async function startMeasure() {
   const decide = document.querySelector("input[name=apDecide]:checked")?.value || "likely";
-  const ok = await act("evaluate_start", { player: $("apPlayer").value, episodes: Number($("evEpisodes").value), seconds: Number($("evSeconds").value), decide });
+  const ok = await act("evaluate_start", { episodes: Number($("evEpisodes").value), seconds: Number($("evSeconds").value), decide });
   if (!ok) return;
   P.measuring = true;
   $("evTable").hidden = true;
@@ -1070,7 +1108,7 @@ function measureEnded(rows, error) {
   if (error) { $("evNote").textContent = `Measuring stopped: ${error}`; renderAutoplay(); return; }
   const best = Math.max(...rows.map(r => r.hitsPerMinute));
   $("evNote").textContent = rows[0] && rows[0].hitsPerMinute > Math.max(...rows.slice(1).map(r => r.hitsPerMinute))
-    ? `${rows[0].who} beat both baselines on layouts it never saw.` : `${rows[0]?.who ?? "The player"} did not beat both baselines.`;
+    ? `${rows[0].who} beat both baselines on layouts it never saw.` : `${rows[0]?.who ?? "The model"} did not beat both baselines.`;
   $("evTable").hidden = false;
   $("evTable").tBodies[0].replaceChildren(...rows.map(r => el("tr", {},
     el("td", {}, r.who), el("td", { class: "num" + (r.hitsPerMinute === best && best > 0 ? " better" : "") }, trim1(r.hitsPerMinute)),
@@ -1084,7 +1122,6 @@ async function renderChecks() {
   if (!L.info) return;
   profileOptions($("check3Game"), $("check3Game").value || RANGE_ID, false);
   profileOptions($("check4Game"), $("check4Game").value || RANGE_ID, false);
-  await playerOptions($("check4Player"), $("check4Game").value, $("check4Player").value || T.selected);
 }
 
 function showChecks(list, results) {
@@ -1094,7 +1131,7 @@ function showChecks(list, results) {
 async function runChecks(phase) {
   const list = $("checks" + phase);
   list.replaceChildren(el("li", { class: "note" }, "Running… leave the keyboard and mouse alone."));
-  const args = { phase, game: phase === 3 ? $("check3Game").value : phase === 4 ? $("check4Game").value : null, player: phase === 4 ? $("check4Player").value || null : null };
+  const args = { phase, game: phase === 3 ? $("check3Game").value : phase === 4 ? $("check4Game").value : null };
   try { showChecks(list, await invoke("checks_run", args)); }
   catch (e) { list.replaceChildren(el("li", { class: "fail" }, el("b", {}, "✗"), "The checks could not run", el("span", { class: "note" }, String(e)))); }
 }
@@ -1114,7 +1151,11 @@ function renderSettings() {
 async function handed(h) {
   if (!h) return;
   if (h.problem) notice(h.problem, true);
-  else if (h.id) { notice(""); await openModel(h.id); }
+  else if (h.id) {
+    notice("");
+    await openModel(h.id);
+    if (S.model?.architecture === "neuro") notice(`${S.model.name} came from Yendory Hub. To teach it a game, record yourself playing (2.3), then add and train its game skill on 2.5 Train.`, false, el("button", { type: "button", onclick: () => { notice(""); show("train"); } }, "Go to 2.5 Train"));
+  }
 }
 
 function wire() {
@@ -1186,11 +1227,12 @@ function wire() {
   $("viewCheck").addEventListener("click", checkRecording);
   $("viewDelete").addEventListener("click", deleteRecording);
   window.addEventListener("resize", () => { if (S.route === "recordings") drawTimeline(); if (S.route === "train") drawTrainChart(); });
-  $("trainProfile").addEventListener("change", () => { T.profile = $("trainProfile").value; T.selected = null; renderTrain(); });
-  $("newPlayer").addEventListener("click", makePlayer);
+  $("trainProfile").addEventListener("change", () => { T.profile = $("trainProfile").value; T.selected = null; T.history = []; renderTrain(); });
+  $("newSkill").addEventListener("click", makeSkill);
+  $("trainOpenModel").addEventListener("click", chooseModel);
   $("trStart").addEventListener("click", startTraining);
   $("trStop").addEventListener("click", () => invoke("train_stop"));
-  $("trDelete").addEventListener("click", deletePlayer);
+  $("trDelete").addEventListener("click", deleteSkill);
   listen("train-progress", e => trainProgress(e.payload));
   listen("train-done", e => trainEnded(e.payload, null));
   listen("train-failed", e => trainEnded(null, String(e.payload)));

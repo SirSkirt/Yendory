@@ -171,9 +171,10 @@ jobs:
               "${FILES[@]}"
           fi
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
-          # Tools needs the Hub's package installer (0.1.1) and the Network's model.reply (API 1, 0.1.0).
+          # Tools needs the Hub's package installer (0.1.1) and the Network's game skills (0.1.2:
+          # model.skill, model.skill.save; Engine 0.9.4's format 2).
           python3 .github/scripts/package.py manifest --id tools --name "Yendory Tools" --version "$VERSION" --notes "Yendory Tools $VERSION" \
-            --requires hub=0.1.1 --requires network=0.1.0 \
+            --requires hub=0.1.1 --requires network=0.1.2 \
             --platform "windows-x86_64=dist/windows-x86_64/yendory-tools_${VERSION}_windows-x86_64.zip,yendory-tools.exe,$URL/yendory-tools_${VERSION}_windows-x86_64.zip" \
             --platform "linux-x86_64=dist/linux-x86_64/yendory-tools_${VERSION}_linux-x86_64.zip,Yendory-Tools.AppImage,$URL/yendory-tools_${VERSION}_linux-x86_64.zip" \
             > package.json

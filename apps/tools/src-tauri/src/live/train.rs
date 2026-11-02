@@ -11,8 +11,7 @@
 //!   model only counts as having learned when it beats that.
 //! - The accepted weights are the best measured on held-out recordings; training can stop and
 //!   continue later from where it was.
-use super::player::{self, PlayerInfo};
-use super::policy::{encode, sigmoid, softmax, Adam, Loss, Policy, Rng, Target};
+use super::policy::{encode, sigmoid, softmax, Adam, Loss, Policy, Rng, Skill, SkillSpec, Target};
 use super::profile::Profile;
 use super::recording::{self, Split, AFTER_GAP};
 use crate::Res;
@@ -140,22 +139,22 @@ pub fn bin_of(bins: &[f32], v: f32) -> usize {
 const MEMORY_LIMIT: usize = 3 << 30;
 
 /// Loads the person's recordings of the game for `split` (and checks they fit the player).
-pub fn load_clips(data: &Path, info: &PlayerInfo, split: Split) -> Res<Vec<Clip>> {
+pub fn load_clips(data: &Path, info: &SkillSpec, split: Split) -> Res<Vec<Clip>> {
     let mut clips = Vec::new();
     let mut bytes = 0usize;
     for r in
-        recording::list(data, &info.profile).into_iter().filter(|r| r.player == "person" && r.split == split)
+        recording::list(data, &info.game).into_iter().filter(|r| r.player == "person" && r.split == split)
     {
         let a = &info.arch;
         if r.width as usize != a.width
             || r.height as usize != a.height
             || r.channels as usize != a.channels
             || r.keys != info.keys
-            || r.buttons != info.buttons
+            || r.buttons.iter().map(|b| b.name()).ne(info.buttons.iter().map(String::as_str))
         {
             continue;
         }
-        let mut reader = recording::open(data, &info.profile, &r.id)?;
+        let mut reader = recording::open(data, &info.game, &r.id)?;
         let mut clip = Clip { id: r.id.clone(), pictures: vec![], targets: vec![], starts: vec![] };
         for i in 0..reader.ticks.len() {
             let t = reader.ticks[i];
@@ -179,7 +178,7 @@ pub fn load_clips(data: &Path, info: &PlayerInfo, split: Split) -> Res<Vec<Clip>
 }
 
 /// The input for the picture at `t`: the last `frames` pictures of its stretch.
-fn input_at(info: &PlayerInfo, clip: &Clip, t: usize) -> Vec<f32> {
+fn input_at(info: &SkillSpec, clip: &Clip, t: usize) -> Vec<f32> {
     let k = info.arch.frames;
     let mut idx = vec![t; k];
     let mut cur = t;
@@ -208,7 +207,7 @@ pub struct Frequencies {
     pub my: Vec<f64>,
 }
 
-pub fn frequencies(info: &PlayerInfo, clips: &[Clip]) -> Frequencies {
+pub fn frequencies(info: &SkillSpec, clips: &[Clip]) -> Frequencies {
     let a = &info.arch;
     let nb = a.mouse_bins.len();
     let mut f = Frequencies {
@@ -247,7 +246,7 @@ pub fn frequencies(info: &PlayerInfo, clips: &[Clip]) -> Frequencies {
 /// Measures the network on held-out clips, the memory carried through each stretch as in play.
 pub fn measure(
     p: &Policy,
-    info: &PlayerInfo,
+    info: &SkillSpec,
     clips: &[Clip],
     freq: &Frequencies,
     offset: usize,
@@ -255,8 +254,7 @@ pub fn measure(
 ) -> Measure {
     let a = &p.arch;
     let goal = vec![0f32; a.goal];
-    let names: Vec<String> =
-        info.keys.iter().cloned().chain(info.buttons.iter().map(|b| b.name().to_string())).collect();
+    let names: Vec<String> = info.keys.iter().chain(info.buttons.iter()).cloned().collect();
     let nc = names.len();
     let (mut tp, mut fp, mut fneg, mut used, mut pred) =
         (vec![0f64; nc], vec![0f64; nc], vec![0f64; nc], vec![0f64; nc], vec![0f64; nc]);
@@ -365,34 +363,41 @@ pub struct Progress {
     pub accepted: bool,
 }
 
-/// Trains the player; returns its info with the run recorded. `fresh`: start again from the
-/// accepted weights with a new optimizer instead of continuing from the latest.
+/// The training runs recorded in a skill's notes.
+pub fn runs(spec: &SkillSpec) -> Vec<Run> {
+    spec.notes.get("runs").and_then(|r| serde_json::from_value(r.clone()).ok()).unwrap_or_default()
+}
+
+/// Trains a game skill; returns it with the run recorded. `fresh`: start again from the
+/// accepted weights with a new optimizer instead of continuing from the latest. `save` keeps
+/// the skill (in its model, through the Network) at every measurement and at the end.
+#[allow(clippy::too_many_arguments)]
 pub fn train(
     data: &Path,
     profile: &Profile,
-    player_id: &str,
+    mut skill: Skill,
     settings: Settings,
     fresh: bool,
     stop: &AtomicBool,
     mut progress: impl FnMut(&Progress),
-) -> Res<PlayerInfo> {
+    mut save: impl FnMut(&Skill) -> Res<()>,
+) -> Res<Skill> {
     settings.check()?;
-    let mut info = player::load_info(data, &profile.id, player_id)?;
-    player::fits(&info, profile)?;
-    let clips = load_clips(data, &info, Split::Train)?;
-    let held = load_clips(data, &info, Split::Test)?;
+    super::skills::fits(&skill.spec, profile)?;
+    let clips = load_clips(data, &skill.spec, Split::Train)?;
+    let held = load_clips(data, &skill.spec, Split::Test)?;
     let usable: usize =
         clips.iter().map(|c| (0..c.targets.len()).filter(|&t| valid(c, t, settings.offset)).count()).sum();
     if usable < settings.length * 4 {
         return Err("There is not enough of your play recorded for training (record some on 2.3, marked for training)".into());
     }
-    let freq = frequencies(&info, &clips);
+    let freq = frequencies(&skill.spec, &clips);
     let (mut policy, mut adam) = if fresh {
-        let p = player::load_policy(data, &info)?;
+        let p = skill.policy()?;
         let n = p.parameters();
         (p, Adam::new(n))
     } else {
-        player::load_latest(data, &info)?
+        skill.latest_policy()?
     };
     let mut run = Run {
         started: std::time::SystemTime::now()
@@ -408,11 +413,11 @@ pub fn train(
         first: None,
         best: None,
     };
-    let fixed = info.clone();
+    let fixed = skill.spec.clone();
     let measure_now = |p: &Policy, step: u64| {
         (!held.is_empty()).then(|| measure(p, &fixed, &held, &freq, settings.offset, step))
     };
-    let first = measure_now(&policy, info.steps);
+    let first = measure_now(&policy, skill.spec.steps);
     // The accepted weights stand until a measurement beats them (on this run's held-out set).
     let mut best_loss = first.as_ref().map(|m| m.loss).unwrap_or(f64::INFINITY);
     run.first = first.clone();
@@ -440,7 +445,7 @@ pub fn train(
         }
     }
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
-    let mut rng = Rng::new(settings.seed ^ info.steps);
+    let mut rng = Rng::new(settings.seed ^ skill.spec.steps);
     let mut recent = std::collections::VecDeque::new();
     for step in 1..=settings.steps {
         let batch: Vec<(usize, usize)> =
@@ -495,7 +500,7 @@ pub fn train(
             g.iter_mut().for_each(|v| *v *= k);
         }
         adam.step(&mut policy, &g, settings.learning_rate, settings.weight_decay);
-        info.steps += 1;
+        skill.spec.steps += 1;
         run.steps_done = step;
         recent.push_back(loss.total / settings.batch as f64);
         if recent.len() > 50 {
@@ -505,7 +510,7 @@ pub fn train(
         let stopping = stop.load(Ordering::Acquire);
         let last = step == settings.steps || stopping;
         if step % settings.measure_every == 0 || last {
-            let m = measure_now(&policy, info.steps);
+            let m = measure_now(&policy, skill.spec.steps);
             let accepted = match &m {
                 Some(m) if m.loss < best_loss => {
                     best_loss = m.loss;
@@ -516,13 +521,15 @@ pub fn train(
                 None => true,
             };
             if accepted {
-                player::save_policy(data, &info, "weights.bin", &policy)?;
-                info.accepted_step = info.steps;
+                skill.accepted.clone_from(&policy.w);
+                skill.spec.accepted_step = skill.spec.steps;
                 if m.is_some() {
                     run.best = m.clone();
                 }
             }
-            player::save_latest(data, &info, &policy, &adam)?;
+            skill.latest.clone_from(&policy.w);
+            skill.adam = adam.clone();
+            save(&skill)?;
             progress(&Progress {
                 step,
                 steps: settings.steps,
@@ -544,16 +551,24 @@ pub fn train(
             break;
         }
     }
-    if !info.lineage.method.contains("imitation") {
-        info.lineage.method = if info.lineage.method == "new" {
+    let lineage = &mut skill.spec.lineage;
+    if !lineage.method.contains("imitation") {
+        lineage.method = if lineage.method == "new" {
             "imitation".into()
         } else {
-            format!("{}, imitation", info.lineage.method)
+            format!("{}, imitation", lineage.method)
         };
     }
-    info.runs.push(run);
-    player::save_info(data, &info)?;
-    Ok(info)
+    let mut all = runs(&skill.spec);
+    all.push(run);
+    if !skill.spec.notes.is_object() {
+        skill.spec.notes = serde_json::json!({});
+    }
+    skill.spec.notes["runs"] = serde_json::to_value(&all).map_err(|e| e.to_string())?;
+    skill.latest.clone_from(&policy.w);
+    skill.adam = adam;
+    save(&skill)?;
+    Ok(skill)
 }
 
 #[cfg(test)]
@@ -633,7 +648,7 @@ mod tests {
             }
             wr.finish("stopped").unwrap();
         }
-        let info = player::create(&data, &profile, "Nova", Size::Small, 3).unwrap();
+        let skill = crate::live::skills::new_skill(&data, &profile, Size::Small, 3).unwrap();
         let settings = Settings {
             steps: 150,
             batch: 8,
@@ -644,9 +659,23 @@ mod tests {
         };
         let stop = AtomicBool::new(false);
         let mut seen = Vec::new();
-        let done =
-            train(&data, &profile, &info.id, settings, false, &stop, |p| seen.push(p.clone())).unwrap();
-        let run = done.runs.last().unwrap();
+        let mut saved: Vec<Skill> = Vec::new();
+        let done = train(
+            &data,
+            &profile,
+            skill,
+            settings,
+            false,
+            &stop,
+            |p| seen.push(p.clone()),
+            |k| {
+                saved.push(k.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        let all = runs(&done.spec);
+        let run = all.last().unwrap();
         let first = run.first.as_ref().unwrap();
         let best = run.best.as_ref().unwrap();
         assert_eq!(run.recordings.len(), 2);
@@ -660,22 +689,26 @@ mod tests {
         assert!(best.loss < first.loss);
         let w = best.controls.iter().find(|c| c.name == "w").unwrap();
         assert!(w.f1 > 0.9, "{w:?}");
-        assert_eq!(done.lineage.method, "imitation");
+        assert_eq!(done.spec.lineage.method, "imitation");
         assert!(seen.iter().any(|p| p.accepted));
-        // Continuing works, and the accepted weights load.
+        // Saved at every measurement (3) and at the end; the accepted weights are what plays.
+        assert_eq!(saved.len(), 4);
+        assert_eq!(done.policy().unwrap().w, done.accepted);
+        // Continuing works from the latest weights and optimizer.
         let more = train(
             &data,
             &profile,
-            &info.id,
+            done,
             Settings { steps: 20, measure_every: 10, ..Settings::default() },
             false,
             &stop,
             |_| {},
+            |_| Ok(()),
         )
         .unwrap();
-        assert_eq!(more.runs.len(), 2);
-        assert_eq!(more.steps, 170);
-        assert!(player::load_policy(&data, &more).is_ok());
+        assert_eq!(runs(&more.spec).len(), 2);
+        assert_eq!(more.spec.steps, 170);
+        assert_eq!(more.adam.t, 170);
         let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -1,6 +1,8 @@
 # Game training in Yendory Tools (plan)
 
-Status: **phases 2, 3 and 4 built** (Tools 0.1.2: game profiles, the safety layer, virtual
+Status: **phases 2, 3 and 4 built**, and since Tools 0.1.5 the network is a **game skill of a
+Nova Neuro model** (made in Yendory Hub, saved in the model's own file; "Skills in the model"
+below) (Tools 0.1.2: game profiles, the safety layer, virtual
 input, capture, the emergency stop and the test range; 0.1.3: recording a person's play, and
 inspecting, replaying and checking recordings; 0.1.4: Gaming Nova's network, generation 0 by
 imitation, live play and measuring on the range, and a Checks page that verifies each phase on
@@ -338,13 +340,11 @@ interconnect), AdamW, gradient clipping at 1. The backward pass is checked again
 differences for every kind of layer (a test, and a check in the window). Training a tick takes
 about 3 ms on one core (the batch is spread over every core); a decision in play about 1 ms.
 
-**Players** (`games/<profile>/players/<id>/`): `player.json` (the architecture with the controls
-in order and the mouse steps, the lineage: generation, parent, method; every training run with
-its settings, the recordings used and held out, the measurement before and the best),
-`weights.bin` (the accepted weights), `last.bin` and `adam.bin` (to continue). The mouse steps are
-chosen from the person's own movements (zero and five sizes each way at the 20/45/70/90/98%
-quantiles of a tick's movement). A player fits the profile it was made from; if the picture or
-the controls change, a new player is needed (the window says so).
+**Players** (0.1.4 only; since 0.1.5 these are **game skills inside the model**, below):
+`games/<profile>/players/<id>/` held `player.json`, `weights.bin` (accepted), `last.bin` and
+`adam.bin`. The mouse steps are chosen from the person's own movements (zero and five sizes each
+way at the 20/45/70/90/98% quantiles of a tick's movement). A skill fits the profile it was made
+from; if the picture or the controls change, a new one is needed (the window says so).
 
 **Training (2.5 Train)**: only recordings by a person, marked for training; each picture is
 paired with the controls `reaction` ticks later (1 by default), in stretches of 8 ticks with the
@@ -399,3 +399,33 @@ few minutes on the range (some marked for testing), train a player on 2.5 and me
 
 Next: phase 5, evaluation beyond the range (rewards from the screen, evaluation episodes,
 champions), then generations.
+
+## Skills in the model (Tools 0.1.5, Engine 0.9.4, Network 0.1.2)
+
+Gaming Nova is no longer a separate player kept by Tools: it is a **game skill of a Nova Neuro
+model**. Make a Neuro model in Yendory Hub, choose **Open in Tools** (it works while Tools is
+open too), and on **2.5 Train** add its skill for a game and train it. The skill is saved inside
+the model's own file (format 2, docs/FORMAT.md on yendory-hub): its description (game, network
+architecture, controls, lineage, steps, every training run) and its accepted weights, latest
+weights and optimizer state. The model goes wherever it goes (export, Hub shelves), the Hub's
+card lists its skills, and deleting the model deletes them.
+
+- **One network, in the Engine**: the skill network moved from Tools to `yendory_engine::skill`
+  unchanged (the same maths, the same gradient check).
+- **Through the Network**: Tools reads a skill (`model.skill`), trains and plays it itself, and
+  saves it (`model.skill.save`) at every held-out measurement and at the end. The Network
+  refuses to save while another program has the model open (its next save would undo the
+  skill), and refuses Bicameral models (only Neuro keeps skills).
+- **Older programs**: an Engine before 0.9.4 refuses a model with skills ("Unsupported Nova Neuro
+  checkpoint (nova-neuro format 2)") instead of opening it and dropping the skills when it saves.
+  **Studio needs its Engine pin moved** to yendory-hub f4f03ca or later to open such models.
+- **Players from 0.1.4** are listed on 2.5 (under "Players kept in Tools") with **Move into** the
+  open model (as its skill for the game) or Delete.
+- **2.6 Play** and **Measure** use the open model's skill; the **2.7 Checks** for phase 4 use it for
+  the training check.
+
+Checked: the Engine's format tests and whole suite, a Network test on the real service, Tools'
+tests, and end to end under Xvfb with the real Network: a Neuro model made through the Network,
+Tools started with `--model` (as the Hub does), the skill added (the model's file becomes format
+2, its meta.json lists the skill), trained 200 steps (saved into the model), played on the range
+with the stop keys, and the phase 4 checks on the model's skill.

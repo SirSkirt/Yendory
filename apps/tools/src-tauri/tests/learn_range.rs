@@ -23,7 +23,7 @@ use yendory_tools_lib::live::record::{record, Setup};
 use yendory_tools_lib::live::recording::{self, Split};
 use yendory_tools_lib::live::safety::Controller;
 use yendory_tools_lib::live::train::{self, Settings};
-use yendory_tools_lib::live::{player, sys, RangeProcess};
+use yendory_tools_lib::live::{skills, sys, RangeProcess};
 use yendory_tools_lib::range::{angle_diff, TURN_PER_UNIT};
 
 const EXE: &str = env!("CARGO_BIN_EXE_yendory-tools");
@@ -147,8 +147,9 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
     assert!(teacher_hits >= 5, "the teacher itself must play well enough to learn from");
 
     // Learning: from the recordings only.
-    let info = player::create(&data, &prof, "Learner", Size::Small, 7).unwrap();
-    eprintln!("mouse steps: {:?}", info.arch.mouse_bins);
+    // A new skill, as a Neuro model gets one (kept in memory here: no model or Network needed).
+    let skill = skills::new_skill(&data, &prof, Size::Small, 7).unwrap();
+    eprintln!("mouse steps: {:?}", skill.spec.arch.mouse_bins);
     let settings = Settings {
         steps: 1200,
         batch: 16,
@@ -158,31 +159,41 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
         ..Settings::default()
     };
     let t0 = Instant::now();
-    let trained = train::train(&data, &prof, &info.id, settings, false, &AtomicBool::new(false), |p| {
-        if let Some(m) = &p.measure {
-            eprintln!(
-                "step {}: train {:.3}, held out {:.3} (baseline {:.3}){}",
-                p.step,
-                p.train_loss,
-                m.loss,
-                m.baseline_loss,
-                if p.accepted { " accepted" } else { "" }
-            );
-        }
-    })
+    let trained = train::train(
+        &data,
+        &prof,
+        skill,
+        settings,
+        false,
+        &AtomicBool::new(false),
+        |p| {
+            if let Some(m) = &p.measure {
+                eprintln!(
+                    "step {}: train {:.3}, held out {:.3} (baseline {:.3}){}",
+                    p.step,
+                    p.train_loss,
+                    m.loss,
+                    m.baseline_loss,
+                    if p.accepted { " accepted" } else { "" }
+                );
+            }
+        },
+        |_| Ok(()),
+    )
     .unwrap();
     eprintln!("trained in {:.0} s", t0.elapsed().as_secs_f64());
-    let best = trained.runs.last().unwrap().best.clone().expect("a held-out measurement");
+    let best = train::runs(&trained.spec).last().unwrap().best.clone().expect("a held-out measurement");
     assert!(best.loss < best.baseline_loss, "held-out {} vs baseline {}", best.loss, best.baseline_loss);
 
     // Measuring on layouts nobody played, against the deciders that can't have learned.
-    let policy = player::load_policy(&data, &trained).unwrap();
-    let untrained = Policy::new(trained.arch.clone(), 99).unwrap();
-    let freq = train::frequencies(&trained, &train::load_clips(&data, &trained, Split::Train).unwrap());
+    let policy = trained.policy().unwrap();
+    let untrained = Policy::new(trained.spec.arch.clone(), 99).unwrap();
+    let freq =
+        train::frequencies(&trained.spec, &train::load_clips(&data, &trained.spec, Split::Train).unwrap());
     let mut brains = vec![
         ("trained".to_string(), Brain::net(policy)),
         ("untrained".to_string(), Brain::net(untrained)),
-        ("frequencies".to_string(), Brain::Frequencies { freq, bins: trained.arch.mouse_bins.clone() }),
+        ("frequencies".to_string(), Brain::Frequencies { freq, bins: trained.spec.arch.mouse_bins.clone() }),
     ];
     let setup =
         EvalSetup { data: &data, profile: &prof, window, episodes: 4, seconds: 20.0, decide: Decide::Likely };

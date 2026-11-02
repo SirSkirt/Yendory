@@ -12,6 +12,7 @@ pub mod record;
 pub mod recording;
 pub mod safety;
 pub mod script;
+pub mod skills;
 pub mod sys;
 pub mod train;
 
@@ -150,6 +151,12 @@ pub struct Live {
 }
 
 impl Live {
+    /// Whether a game skill of the open model is being trained or played (the model must stay
+    /// open until it ends).
+    pub fn busy_with_model(&self) -> bool {
+        self.training_stop.lock().unwrap().is_some() || self.play_stop.lock().unwrap().is_some()
+    }
+
     /// The emergency stop: everything held is released and everything running ends.
     pub fn emergency_stop(&self) {
         STOPS.fetch_add(1, Ordering::AcqRel);

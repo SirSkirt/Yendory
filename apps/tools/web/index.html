@@ -291,21 +291,28 @@
   <!-- 2.5 Train -->
   <section class="page lead-section" id="page-train" hidden>
     <h2>Train</h2>
-    <p class="lede">Generation 0 learns by imitation: from your recordings, the controls you used after each picture. Recordings marked for testing are never trained on; the network is measured on them, beside the <b>frequency baseline</b>, which uses each control as often as you did but never looks at the picture. Only a network that beats that baseline has learned something from what it sees.</p>
+    <p class="lede">The open model learns a game by imitation (generation 0): from your recordings, the controls you used after each picture. Recordings marked for testing are never trained on; the network is measured on them, beside the <b>frequency baseline</b>, which uses each control as often as you did but never looks at the picture. Only a network that beats that baseline has learned something from what it sees.</p>
     <div class="line-form">
       <label for="trainProfile">Game</label><select id="trainProfile"></select>
       <span class="note" id="trainRecs">—</span>
     </div>
-    <table class="ledger" id="playersTable">
-      <thead><tr><th>Player</th><th>Size</th><th>Lineage</th><th class="num">Steps</th><th class="num">Held-out loss</th><th class="num">Baseline</th><th></th></tr></thead>
+    <div class="model-line" id="trainModelLine"><span id="trainModel">—</span> <button type="button" id="trainOpenModel">Open a model…</button></div>
+    <p class="note">Game skills belong to a model: make a Nova Neuro model in Yendory Hub, take it here with <b>Open in Tools</b> (or Open a model… above), and teach it a game. The skill is saved inside the model, so it goes wherever the model goes.</p>
+    <table class="ledger" id="skillsTable">
+      <thead><tr><th>Game</th><th>Size</th><th>Lineage</th><th class="num">Steps</th><th class="num">Held-out loss</th><th class="num">Baseline</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
-    <div class="line-form">
-      <label for="newPlayerName">New player</label><input id="newPlayerName" maxlength="40" placeholder="Gaming Nova">
-      <select id="newPlayerSize"><option value="small" data-note="about 0.3M weights; quick">Small</option><option value="medium" data-note="about 1M weights; slower">Medium</option></select>
-      <button type="button" id="newPlayer">Make it</button>
+    <div class="line-form" id="newSkillForm">
+      <label for="newSkillSize">Teach it this game</label>
+      <select id="newSkillSize"><option value="small" data-note="about 0.3M weights; quick">Small skill</option><option value="medium" data-note="about 1M weights; slower">Medium skill</option></select>
+      <button type="button" id="newSkill">Add the skill</button>
     </div>
-    <p class="note">A new player starts untrained (random weights). It takes the game's controls and picture as they are now, and its mouse steps from the sizes of your mouse movements in your training recordings.</p>
+    <p class="note" id="newSkillNote">A new skill starts untrained (random weights). It takes the game's controls and picture as they are now, and its mouse steps from the sizes of your mouse movements in your training recordings.</p>
+    <div id="oldPlayers" hidden>
+      <h3>Players kept in Tools (from 0.1.4)</h3>
+      <p class="note">Before skills moved into models, players were kept in Tools. Move one into the open model to keep its training, or delete it.</p>
+      <table class="ledger compact"><tbody id="oldPlayersBody"></tbody></table>
+    </div>
     <div id="trainPanel" hidden>
       <h3 id="trainTitle">—</h3>
       <div class="field-row"><label for="trSteps">Steps</label><input id="trSteps" type="number" min="1" max="1000000" class="narrow-num"><span class="note">each step learns from a batch of short stretches of your play</span></div>
@@ -328,10 +335,10 @@
   <!-- 2.6 Play -->
   <section class="page lead-section" id="page-autoplay" hidden>
     <h2>Play</h2>
-    <p class="lede">A player plays the game by itself: every tick it sees the picture and decides every control, and the safety layer turns that into presses, releases and mouse movement. Tools asks you every time before a network may use the keyboard and mouse; <span class="mono">Ctrl+Alt+End</span> stops it at once.</p>
+    <p class="lede">The open model plays the game by itself, with its skill for it: every tick it sees the picture and decides every control, and the safety layer turns that into presses, releases and mouse movement. Tools asks you every time before a network may use the keyboard and mouse; <span class="mono">Ctrl+Alt+End</span> stops it at once.</p>
     <div class="line-form">
       <label for="apProfile">Game</label><select id="apProfile"></select>
-      <label for="apPlayer">Player</label><select id="apPlayer"></select>
+      <span class="note" id="apSkill">—</span>
     </div>
     <div class="field-row checks"><span class="field-label">Decisions</span>
       <label class="check-inline"><input type="radio" name="apDecide" value="likely" checked> Most likely (a control is used when it is more likely than not)</label>
@@ -347,7 +354,7 @@
     <p class="note" id="apDone"></p>
 
     <h3>Measure on the test range</h3>
-    <p class="note">The player, the untrained network and the frequency baseline each play the same episodes on layouts no recording of yours used; the range counts shots and hits. Only for the test range (start it on 2.1 first).</p>
+    <p class="note">The open model, an untrained network and the frequency baseline each play the same episodes on layouts no recording of yours used; the range counts shots and hits. Only for the test range (start it on 2.1 first).</p>
     <div class="line-form">
       <label for="evEpisodes">Episodes</label><input id="evEpisodes" type="number" min="1" max="50" value="5" class="narrow-num">
       <label for="evSeconds">Seconds each</label><input id="evSeconds" type="number" min="5" max="55" value="30" class="narrow-num">
@@ -381,8 +388,8 @@
 
     <div class="check-card">
       <h3>Phase 4: the network, training, playing</h3>
-      <div class="line-form"><label for="check4Game">Game</label><select id="check4Game"></select><label for="check4Player">Player</label><select id="check4Player"></select><button type="button" class="primary" data-check="4">Run the checks</button></div>
-      <p class="note">Then by hand: record several minutes on the range (2.3), some marked for testing; make a player and train it (2.5) until its held-out loss is clearly below the baseline; then measure it on the range (2.6). It has learned when it beats both the untrained network and the frequency baseline.</p>
+      <div class="line-form"><label for="check4Game">Game</label><select id="check4Game"></select><button type="button" class="primary" data-check="4">Run the checks</button></div>
+      <p class="note">The training check uses the open model's skill for the game. Then by hand: record several minutes on the range (2.3), some marked for testing; open a Neuro model, add the range skill and train it (2.5) until its held-out loss is clearly below the baseline; then measure it on the range (2.6). It has learned when it beats both the untrained network and the frequency baseline.</p>
       <ul class="check-list" id="checks4"></ul>
     </div>
   </section>

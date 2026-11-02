@@ -13,8 +13,8 @@ Same layout as Studio: numbered sections in a sidebar, the open model in the pag
 | **2.2 Controls check** | Test actions (`hold w+shift 500; move 15 0; click left`) sent to the game through the safety layer, with every action and refusal logged; on the test range, what the range received. |
 | **2.3 Record** | You play; Tools records what you see and the controls you use, in step (only the profile's controls, only while the game is in front), for training or held out for testing. |
 | **2.4 Recordings** | Replay a recording picture by picture with the controls used at each moment and a timeline, check it against the raw input, mark it for training or testing, delete it. |
-| **2.5 Train** | Gaming Nova players (networks) for a game: make one, train it on your recordings (generation 0, imitation), measured on held-out recordings beside the frequency baseline; continue or start over. |
-| **2.6 Play** | A player plays the game by itself through the safety layer (after you allow it, each time), optionally recorded; on the test range, measure it against the untrained network and the frequency baseline on unseen layouts. |
+| **2.5 Train** | The open model's game skills (a Nova Neuro model from Yendory Hub): add its skill for a game, train it on your recordings (generation 0, imitation), measured on held-out recordings beside the frequency baseline; continue or start over. The skill is saved inside the model. |
+| **2.6 Play** | The open model plays the game by itself with its skill, through the safety layer (after you allow it, each time), optionally recorded; on the test range, measure it against the untrained network and the frequency baseline on unseen layouts. |
 | **2.7 Checks** | Each phase checked on its own on this computer: the picture, input and safety (2), recording (3), the network, training and play (4). |
 | **3.1 Apps** | Later. |
 | **Settings** | The Yendory Network's state, the folders, the versions. |
@@ -47,4 +47,4 @@ range with real input and capture (`tests/live_range.rs`).
 Yendory Hub installs and updates Tools; there is no installer of its own.
 `.github/workflows/tools-release.yml` builds a signed package for Windows and Linux and, when
 `apps/tools/package.json`'s version is new, publishes `tools-v<version>` and `package.json` on the
-`tools-updates` release (it needs Hub 0.1.1 and Network 0.1.0).
+`tools-updates` release (it needs Hub 0.1.1 and Network 0.1.2, for game skills).
