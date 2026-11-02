@@ -20,8 +20,12 @@
       <button type="button" class="nav-item" data-route="lessons" title="Lessons"><span class="nav-num">1.3</span><span class="nav-label">Lessons</span></button>
       <button type="button" class="nav-item" data-route="scoreboard" title="Scoreboard"><span class="nav-num">1.4</span><span class="nav-label">Scoreboard</span></button>
     </div>
+    <div class="nav-group nav-live" role="group" aria-labelledby="nav-live"><div class="nav-head" id="nav-live" title="Real games"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/><circle cx="12" cy="10.5" r="2.5"/><path d="M12 6.5v1.5M12 13v1.5M8 10.5h1.5M14.5 10.5H16"/></svg><span class="nav-label">Real games</span></div>
+      <button type="button" class="nav-item" data-route="profiles" title="Game profiles"><span class="nav-num">2.1</span><span class="nav-label">Game profiles</span></button>
+      <button type="button" class="nav-item" data-route="controls" title="Controls check"><span class="nav-num">2.2</span><span class="nav-label">Controls check</span></button>
+    </div>
     <div class="nav-group nav-apps" role="group" aria-labelledby="nav-apps"><div class="nav-head" id="nav-apps" title="Apps"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Apps</span></div>
-      <button type="button" class="nav-item" data-route="apps" title="Apps"><span class="nav-num">2.1</span><span class="nav-label">Apps</span></button>
+      <button type="button" class="nav-item" data-route="apps" title="Apps"><span class="nav-num">3.1</span><span class="nav-label">Apps</span></button>
     </div>
   </nav>
   <div class="side-bottom">
@@ -33,6 +37,7 @@
 <header class="pagebar">
   <div class="pagebar-title"><div class="crumb" id="pageCrumb">Games</div><h2 id="pageTitle">Games</h2></div>
   <div class="pagebar-side">
+    <button type="button" class="stop-button" id="liveStop" hidden title="Release every control and stop (Ctrl+Alt+End)">Stop</button>
     <div class="current" id="currentModel" aria-live="polite">No model open</div>
     <button type="button" id="openModel">Open a model…</button>
   </div>
@@ -116,7 +121,87 @@
     </table>
   </section>
 
-  <!-- 2.1 Apps -->
+  <!-- 2.1 Game profiles -->
+  <section class="page lead-section" id="page-profiles" hidden>
+    <h2>Game profiles</h2>
+    <p class="lede">Real games a network plays from the screen, with a virtual keyboard and mouse. A profile says which window is the game, which controls a network may use (nothing else can be pressed), what it sees, and the safety limits every action passes through.</p>
+    <div class="line-form">
+      <label for="profilePick">Game</label><select id="profilePick"></select>
+      <button type="button" id="rangeStart" title="Tools' own small first-person game, for checking everything with a known answer">Start the test range</button>
+      <button type="button" id="profileDelete">Delete the profile</button>
+    </div>
+    <p class="stop-line" id="stopLine">—</p>
+    <div class="live-grid">
+      <form class="live-form" id="profileForm" autocomplete="off">
+        <h3>The game</h3>
+        <div class="field-row"><label for="pfName">Name</label><input id="pfName" maxlength="60" placeholder="Ravenfield"></div>
+        <div class="field-row"><label for="pfWindowPick">Window</label><select id="pfWindowPick"></select><button type="button" id="pfWindowsRefresh">Look again</button></div>
+        <div class="field-row"><label for="pfTitle">Title contains</label><input id="pfTitle" maxlength="200"></div>
+        <div class="field-row"><label for="pfProcess">Program</label><input id="pfProcess" maxlength="200" placeholder="any"></div>
+        <p class="note">Tools finds the game by its window's title and program, so the profile still works after the game restarts.</p>
+
+        <h3>Controls a network may use</h3>
+        <div id="pfKeys" class="key-groups"></div>
+        <div class="field-row checks">
+          <span class="field-label">Mouse</span>
+          <label class="check-inline"><input type="checkbox" id="pfMouse"> Movement</label>
+          <label class="check-inline"><input type="checkbox" data-button="left"> Left button</label>
+          <label class="check-inline"><input type="checkbox" data-button="right"> Right button</label>
+          <label class="check-inline"><input type="checkbox" data-button="middle"> Middle button</label>
+        </div>
+        <div class="field-row"><label for="pfScale">Mouse sensitivity</label><input id="pfScale" type="number" min="0.05" max="20" step="0.05" class="narrow-num"><span class="note">units sent per unit asked for</span></div>
+        <p class="note">The Windows key, Print Screen and media keys can't be permitted at all, and Tools never holds combinations that reach the system (Alt+Tab, Alt+F4, Ctrl+Esc, Ctrl with Alt).</p>
+
+        <h3>What it sees</h3>
+        <div class="field-row"><label for="pfWidth">Picture</label><input id="pfWidth" type="number" min="16" max="640" class="narrow-num"><span>×</span><input id="pfHeight" type="number" min="9" max="480" class="narrow-num"><span class="note">pixels</span></div>
+        <div class="field-row checks"><span class="field-label">Colour</span><label class="check-inline"><input type="radio" name="pfColour" value="colour"> Colour</label><label class="check-inline"><input type="radio" name="pfColour" value="grey"> Grey (a third of the size)</label></div>
+        <div class="field-row"><label for="pfFps">Pictures a second</label><input id="pfFps" type="number" min="1" max="60" class="narrow-num"><span class="note">also how often it decides</span></div>
+
+        <h3>Safety limits</h3>
+        <div class="field-row"><label for="pfHold">Longest hold</label><input id="pfHold" type="number" min="50" max="60000" class="narrow-num"><span class="note">ms, then the control is released</span></div>
+        <div class="field-row"><label for="pfRate">Actions a second</label><input id="pfRate" type="number" min="1" max="200" class="narrow-num"><span class="note">presses and mouse moves; releases are never limited</span></div>
+        <div class="field-row"><label for="pfStep">Largest mouse step</label><input id="pfStep" type="number" min="1" max="5000" class="narrow-num"><span class="note">units in one move</span></div>
+        <p class="note">Input goes only to the game while it is in front: when another window comes forward, every control is released and input pauses.</p>
+        <div class="actions"><button type="submit" class="primary" id="pfSave">Save the profile</button><span class="note" id="pfSaved"></span></div>
+      </form>
+      <aside class="live-side">
+        <h3>What the network sees</h3>
+        <div class="preview-frame"><canvas id="preview" width="128" height="72"></canvas></div>
+        <p class="note" id="previewNote">Choose the game's window.</p>
+        <div class="actions"><button type="button" id="previewToggle">Watch</button><button type="button" id="bringFront">Bring the game to the front</button></div>
+        <p class="note" id="previewHelp"></p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 2.2 Controls check -->
+  <section class="page lead-section" id="page-controls" hidden>
+    <h2>Controls check</h2>
+    <p class="lede">Send test actions to the game through the safety layer and see what happened to each one. Check here that a game receives Tools' keyboard and mouse before recording or training on it. On the test range, the range's own report shows exactly what arrived.</p>
+    <div class="line-form">
+      <label for="checkProfile">Game</label><select id="checkProfile"></select>
+      <span class="note" id="checkWindow">—</span>
+    </div>
+    <div class="presets" id="presets">
+      <button type="button" data-actions="hold w 250">Hold W for 250 ms</button>
+      <button type="button" data-actions="move 15 0">Mouse 15 right</button>
+      <button type="button" data-actions="hold w+shift 500">W and Shift together</button>
+      <button type="button" data-actions="press right; move 60 0 300; release right">Aim with the right button</button>
+      <button type="button" data-actions="click left">Left click</button>
+      <button type="button" data-actions="release all">Release everything</button>
+    </div>
+    <label for="checkActions" class="field-label">Actions</label>
+    <textarea id="checkActions" rows="4" spellcheck="false">hold w 250; move 15 0; hold w+shift 500; click left</textarea>
+    <p class="note">One action per line or between semicolons: <span class="mono">press</span>, <span class="mono">release</span>, <span class="mono">hold w+shift 500</span>, <span class="mono">tap e</span>, <span class="mono">click left</span>, <span class="mono">move 15 0</span> (or <span class="mono">move 60 0 300</span> over 300 ms), <span class="mono">wait 200</span>. Whatever the actions press is released when they end.</p>
+    <div class="actions"><button type="button" class="primary" id="checkRun">Run on the game</button><span class="note" id="checkStatus"></span></div>
+    <div class="range-report" id="rangeReport" hidden></div>
+    <table class="ledger compact" id="checkLog">
+      <thead><tr><th class="num">ms</th><th>Action</th><th>What happened</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- 3.1 Apps -->
   <section class="page lead-section" id="page-apps" hidden>
     <h2>Apps</h2>
     <p class="lede">Apps come after games: tools a model uses through Nexus the same way it plays, such as a calculator or a notebook, where it acts, reads the result and answers. Games come first because every move in them can be graded.</p>

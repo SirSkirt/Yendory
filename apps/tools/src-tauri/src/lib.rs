@@ -16,7 +16,9 @@ use yendory_client::Client;
 pub mod games;
 mod handoff;
 pub mod lessons;
+pub mod live;
 pub mod play;
+pub mod range;
 pub mod score;
 pub mod turn;
 
@@ -428,8 +430,10 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_dialog::init())
         .manage(Tools::default())
+        .manage(live::Live::default())
         .setup(|app| {
             *app.state::<Tools>().handed.lock().unwrap() = handoff::model_argument(std::env::args());
+            live::watch_stop_keys(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -447,6 +451,20 @@ pub fn run() {
             stop_measure,
             lessons_preview,
             save_lessons,
+            live::live_info,
+            live::live_windows,
+            live::live_profiles,
+            live::live_save_profile,
+            live::live_delete_profile,
+            live::live_find_window,
+            live::live_front,
+            live::live_preview,
+            live::live_run,
+            live::live_stop,
+            live::range_start,
+            live::range_state,
+            live::range_reset,
+            live::range_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yendory Tools");

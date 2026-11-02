@@ -1,0 +1,232 @@
+# Game training in Yendory Tools (plan)
+
+Status: **phase 2 built** (Tools 0.1.1: game profiles, the safety layer, virtual input, capture, the
+emergency stop and the test range; see "Built so far" at the end). The rest is the plan. The goal
+(from the owner): Gaming Nova learns to
+play real games from the screen, through virtual keyboard and mouse, first by imitating the
+owner's play, then by its own experience and by generations of candidates, without any
+game-specific bot code. Conversational Nova later talks with the owner and gives Gaming Nova its
+goals.
+
+This document records what the current suite offers for that, what it does not, and the order of
+work. Each phase ends with something tested on a real window, not just a page.
+
+## 1. What exists and what carries over
+
+| Part | What it has | Use for game training |
+|---|---|---|
+| **Tools** (`apps/tools`) | Studio's notebook shell, the text games (Tic-tac-toe, Nim, maze) played through Nexus, lessons, the scoreboard (held-out positions, reports kept per model), `--model` hand-off | The shell, the scoreboard's ideas (held-out evaluation, reports per model, history) and the release path. The text games stay as they are. |
+| **Engine** (`dependency/engine`) | Bicameral and Neuro models: transformers over **text tokens**, its own reverse-mode autodiff (`model/tape.rs`), AdamW, `.nnova2` checkpoints, GPU training through wgpu, teaching sessions with candidates, guards, probation and held-out checks | The *rules* for protecting the accepted model (candidate vs accepted, held-out guards, probation branches) carry over as concepts. The model itself cannot: it has no image input, no multi-label or continuous outputs, and its autodiff is private to the Engine (`pub(crate)`). |
+| **Nexus** (`engine/src/nexus.rs`) | Text actions and results, one turn at a time | Not for real-time play (a game doesn't wait for a line of text). Still the right channel for Conversational Nova's side. |
+| **Network** (`dependency/network`) | Opens models, `model.reply` / `model.chat`, one service on 127.0.0.1 | Conversational Nova (later). Training jobs are planned there but not built; it listens on this computer only. |
+| **Studio** | Classroom, acceptance and probation, recovery points | The acceptance/probation behaviour to copy for champions. |
+| **Hub** | Signed packages, installs and updates Tools | Unchanged: Tools ships the new features in its own package. |
+
+**The main finding.** The Engine's models read text. A game frame is not text: turning pixels into
+characters would give a 256-token model a picture of a few hundred dots with no sense of two
+dimensions, and every decision would cost a full pass over that sequence. Gaming Nova therefore
+needs a network made for frames and controls: a small convolutional encoder over the last few
+frames and heads that output the state of each permitted control. This is a second kind of model
+next to Bicameral/Neuro, not a replacement; the plan keeps it in the Engine's style (plain Rust,
+no ML framework, gradient-checked, a documented file format) so it can move into
+`dependency/engine` once it has proven itself, where the Network could then run it and its
+training, and where Neuro's bus can be connected to it (the neural interconnect).
+
+## 2. How a game is played by a network
+
+**Ticks.** Play runs in fixed ticks (20 per second by default, set per profile). Every tick: grab
+the game window, shrink it to the profile's size, give the network the last few frames and its
+previous action, and get back the *state* of every permitted control for this tick:
+
+- each permitted key: held or not (one yes/no output per key);
+- each permitted mouse button: held or not;
+- mouse movement x and y: one of a set of steps (for example 0, ±1, ±3, ±8, ±20, ±50 units),
+  chosen as classes rather than a single number, so "a small or a large turn" can both be likely.
+
+Holding is how long a control stays on across ticks: "hold W for 250 ms" is W on for 5 ticks, W
+and Shift together are two keys on at once, "hold the right button while aiming" is the button on
+while mouse steps change. The input layer turns changes of state into press and release events,
+so timing is exact to the tick, and the raw events (with microsecond times) are kept in
+recordings too.
+
+**Safety layer (between the network and the system).** Every action passes through it:
+
+- only the profile's permitted keys and buttons exist; everything else (system keys, Alt+Tab,
+  the Windows key, Escape unless allowed) cannot be expressed at all;
+- input is sent only while the chosen game window is in the foreground; when focus leaves it,
+  everything is released and play pauses;
+- a maximum hold time, a maximum action rate and mouse step limits per profile;
+- an **emergency stop** hotkey (global, works while the game has focus) and a stop button: both
+  release every control and end autonomous play at once; the same happens when Tools closes,
+  crashes, or (later) loses its connection to a remote inference machine;
+- optional take-over: any physical keyboard or mouse use during autonomous play pauses it;
+- autonomous play starts only after an explicit confirmation each session, and everything sent
+  is logged.
+
+**Limits worth knowing.** On Windows, virtual input (`SendInput`) goes to whichever window has
+focus, so keeping it to the game is done by the focus rule above, not by the operating system.
+Real isolation (a second desktop session or a virtual machine running the game) is possible later
+but not in the first version. Windows marks injected input as injected; Tools does not hide this,
+and it is not for games with anti-cheat or for online play. Games in exclusive fullscreen may not
+be capturable; borderless windowed works.
+
+**Platforms.** Windows: capture by copying what the screen shows in the game's drawing area (GDI,
+shrunk as it is copied), input through `SendInput` with scan codes and relative mouse movement,
+recording (phase 3) through Raw Input, which still sees mouse movement when the game locks the
+cursor. The screen copy means the game must be visible (borderless or windowed; an exclusive
+full-screen game may come out black); Windows Graphics Capture, which sees a covered window too,
+can replace it if that matters. Linux: X11 only (capture with GetImage, input with XTEST, the stop
+keys with a key grab; recording with XInput2), through x11rb; Wayland does not allow either.
+
+## 3. Recordings (demonstrations and episodes)
+
+A recording is a folder in Tools' data (`games/<profile>/recordings/<id>/`):
+
+- `recording.json`: the profile as it was (controls in order, frame size, tick rate), who played
+  (a person or which model), the split (training or evaluation), notes, length, sizes;
+- `frames.bin`: the frames at the profile's size, one after another, compressed in chunks;
+- `ticks.bin`: per tick, the time, the frame index, the held keys and buttons, the mouse movement
+  since the previous tick, and (for model play) the network's choice before the safety layer;
+- `events.jsonl`: the raw input events with their times.
+
+Size: a 128x72 grey frame is 9 KB, about 11 MB a minute before compression. Each profile has a
+storage limit; recording stops at it and nothing is deleted without the owner deleting it.
+
+Recordings can be inspected (frames, a timeline of the controls) and replayed in Tools; a replay
+shows exactly what was saved, frame by frame with the inputs drawn beside it.
+
+## 4. Generation 0 (imitation)
+
+Training learns the person's control state for each tick from the frames before it
+(behavioural cloning: cross-entropy for the mouse steps, a yes/no loss per key and button), with
+Adam and the network's own backward pass. Held-out data is **whole recordings** (neighbouring
+frames are nearly identical, so a random split would only measure memory). It reports per-control
+accuracy on the held-out recordings, keeps the best checkpoint by held-out loss, and can be
+stopped and resumed.
+
+Then the model plays live (same tick loop, same safety layer), and its episodes are saved as
+recordings marked as model play, so they can be watched and reused.
+
+The files: `players/<id>/player.json` (architecture, profile and control order, frame size,
+mouse steps, training history, parent) and `weights.bin` (little-endian f32), documented here once
+built. Players live in Tools' data, not in Studio's models folder (Studio and the Network read
+`.nnova2` models only).
+
+**A command input from the start.** The network also gets the current command (none, follow me,
+move to the objective, take cover, …) as an input, so Command Mode does not need a new
+architecture later. Recordings can be tagged with the command being demonstrated.
+
+## 5. Evaluation, generations and continuous learning (later phases)
+
+**Rewards without a game API.** Per profile, rewards are built from things on the screen and from
+the person: screen-region detectors (a colour or a template appears: a hit marker, a kill notice,
+a death screen), how long an episode lasts, how much the view changes (stuck or moving), and the
+owner's rating of an episode. Optional integrations per game (for Ravenfield, a mod reporting
+kills, deaths and flags) can make them exact, but are never required. Several measures together,
+never one number.
+
+**Making candidates better (how weights change).** Selecting a winner changes nothing by itself,
+so each method that makes a candidate changes weights on purpose:
+
+1. more imitation on new demonstrations;
+2. **corrections**: the person takes over when the model goes wrong; those ticks become training
+   data in the situations the model actually reaches (DAgger), probably the strongest method here;
+3. reward-weighted imitation of the model's own episodes (better episodes count more, worse ones
+   are pushed away from), which needs no new machinery beyond the imitation trainer;
+4. policy-gradient fine-tuning on the model's own episodes, once rewards are trustworthy;
+5. variation between candidates: different data mixes, learning rates and seeds, and small
+   weight noise; parents are combined by training a child on both parents' best episodes
+   (distillation), not by averaging weights.
+
+**Speed is the hard limit.** A real game runs in real time, one copy at a time on one PC: about
+1 hour of play is 72,000 ticks. Reinforcement learning from pixels usually needs millions. So
+demonstrations and corrections do most of the teaching, and generations compare a handful of
+candidates over repeated, comparable episodes (the same scenarios for every candidate), not
+thousands.
+
+**Champions.** The accepted model is never replaced automatically by a weaker one: a candidate
+becomes champion only by beating it on the evaluation episodes (never trained on) without losing
+on a fixed benchmark of earlier skills, as Studio accepts checkpoints. Candidates that lose
+can continue on probation for a limited number of rounds, as in Studio. Every champion stays
+restorable, and every generation is recorded (parents, method, results, accepted or not).
+
+**Continuous learning.** Play collects experience; training happens separately and periodically
+on a candidate, mixed with earlier data (replay) so old skills are kept, and the candidate is
+accepted only through the same checks.
+
+## 6. Later: two machines, Conversational Nova
+
+The tick loop is split from the start into the **rig** (capture, input, safety; where the game
+runs) and the **brain** (the network), talking through messages with tick numbers and deadlines.
+In the first version both run in Tools on one PC; later the brain can run on another computer
+(over the Network, once it can listen beyond this computer with a key). A late action is dropped
+and the controls released after a timeout; a lost connection releases everything.
+
+Conversational Nova (a Bicameral or Neuro model through the Network) comes after Gaming Nova can
+play: first in Command Mode (it chooses a command, which is Gaming Nova's command input), then
+the neural interconnect (a learned vector in place of the command, with its own training).
+Discord is part of that later work.
+
+## 7. A test range before Ravenfield
+
+To prove the whole chain (capture, input, recording, training, live play, scoring) with a known
+answer before a real game, Tools gets a small original first-person **test range**: its own window,
+mouse to turn, WASD to move, click to hit targets, read only through the screen and driven only
+through virtual input like any game; it reports its score to Tools as an optional integration,
+so evaluation can be checked against the truth. It also lets these features be tested
+automatically on Linux in CI. Ravenfield follows with its own profile.
+
+## 8. Order of work
+
+| Phase | Delivers | Checked by |
+|---|---|---|
+| 2 Input and capture | Window list and choice, profiles with permitted controls, the safety layer, emergency stop, capture at a set size and rate | The test range receives exactly the inputs sent (automatic test on Linux); the owner's check on Windows with the range and Ravenfield |
+| 3 Demonstrations | Recording the person's play in sync, the recordings list, inspection and replay, storage limits | Replay matches what was played; tick times and inputs agree with the raw events |
+| 4 Generation 0 | The network, gradient checks, imitation training with held-out recordings, stop and resume, live play, saving and reloading | On the test range: a model trained on demonstrations scores clearly above random play |
+| 5 Evaluation | Reward definitions per profile, evaluation episodes, reports, champion acceptance | The range's true score agrees with the screen-based rewards |
+| 6 Generations | Candidates, methods 1-5, selection, history, champions | A later generation beats generation 0 on held-out scenarios of the range |
+| 7 Continuous learning | Experience datasets, periodic candidates, replay | Earlier benchmarks hold while new skills improve |
+| 8 Advanced | Controller, two machines, Conversational Nova, Command Mode, interconnect, Discord, transfer between games | — |
+
+The first milestone the owner asked for (choose a window, permitted controls, capture, record,
+save, inspect and replay, train a small model, let it play, evaluate, save and reload) is phases
+2 to 4 plus the first part of 5.
+
+## Built so far (phase 2, Tools 0.1.1)
+
+Code: `apps/tools/src-tauri/src/live/` (controls, the safety layer, scripts, profiles, the system
+layer for Windows and X11) and `src/range/` (the test range).
+
+- **Real games, 2.1 Game profiles**: choose the game's window from the open ones (it is found
+  again by title and program), permit keys (from a fixed table: nothing outside it can ever be
+  pressed) and mouse buttons and movement, set the mouse sensitivity, the picture (size, colour
+  or grey, pictures a second) and the safety limits. *What the network sees* shows the window's
+  picture at that size and rate, and the rate actually reached.
+- **2.2 Controls check**: test actions written as text (`hold w+shift 500; move 15 0; click
+  left`) run through the safety layer, with a log of every action and every refusal; on the test
+  range, the range's own report of what it received.
+- **The safety layer** (`live/safety.rs`): only permitted controls; no combinations that reach the
+  system (Alt+Tab, Alt+F4, Alt+Esc, Alt+Space, Alt+Enter, Ctrl+Esc, Ctrl with Alt); input only
+  while the game is in front (when it leaves, everything is released and input pauses); the
+  longest hold; actions a second (releases never limited); the largest mouse step; everything
+  released when actions end, on the emergency stop, and when Tools closes.
+- **The emergency stop**: Ctrl+Alt+End in any program (a low-level keyboard hook on Windows, a key
+  grab on X11; the game never sees those keys), or the Stop button in the page bar.
+- **The test range** (`yendory-tools --range`): Tools' own first-person game in its own process
+  and window. It reads raw keys and mouse movement as games do and reports the truth on standard
+  output (presses and mouse units received, position, angle, shots, hits, score).
+
+Checked: unit tests (controls, combinations, the safety layer with a fake desktop, scripts,
+profiles, picture shrinking, the range's game and drawing), and `tests/live_range.rs` on a real X
+display (CI runs it under Xvfb): the range receives exactly the presses and mouse units sent, the
+view turns by the expected angle, refused keys never arrive, the picture changes when the view
+turns, another window coming to the front releases everything and pauses input, and the stop keys
+pressed on the keyboard release everything. The window itself was driven by hand under Xvfb
+(profiles, the preview at 20 pictures a second, the controls check, the stop keys).
+
+**Not yet checked on Windows**: the Windows code is compiled and linted for Windows but has not
+run there. To check it: start Tools, *Start the test range* (2.1), *Watch*, then 2.2 *Run on the
+game*; the range's report should match the actions. Then make a profile for Ravenfield (windowed or
+borderless) and run the same checks on it.
+
+Next: phase 3, recording the person's play in sync with the pictures.

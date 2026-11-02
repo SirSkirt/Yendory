@@ -13,13 +13,18 @@ purpose. Every model is opened and every line it writes comes through the Networ
 Engine only for what needs no model (Nexus's announcements and actions, checking lessons). A
 change Tools needs in the Network is made on yendory-hub by whoever owns the Network there.
 
+Real games (docs/GAME_TRAINING.md) are played from the screen with virtual keyboard and mouse
+input. Every virtual input goes through the safety layer (`live/safety.rs`: permitted controls
+only, no system combinations, only while the game is in front, the emergency stop); never add a
+path that sends input around it.
+
 Models are handed between programs through Studio's models folder and `--model <id>`
 (docs/HANDOFF.md on yendory-hub). Yendory Hub installs and updates Tools from its signed package
 (docs/PACKAGES.md on yendory-hub); Tools has no installer and doesn't update itself.
 
 ## Version numbers
 
-Tools is at **0.1.0**. A push that changes Tools raises its last digit by one, and the last digit
+Tools is at **0.1.1**. A push that changes Tools raises its last digit by one, and the last digit
 carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
 in every place that holds it:
 

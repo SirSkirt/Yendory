@@ -9,12 +9,18 @@ Same layout as Studio: numbered sections in a sidebar, the open model in the pag
 | **1.2 Play** | A game between the open model and the perfect player, a random player, or you. Step through it turn by turn: the model's actions, the results it got, its reply, and each move graded (best, legal, no move; held out). |
 | **1.3 Lessons** | The perfect player's turns as a Multi-Turn Conversation lesson file (held-out positions left out). Teaching through the Network waits for its training job; the file can be taught in Studio's Classroom meanwhile. |
 | **1.4 Scoreboard** | Measures the open model on a game: wins, draws and losses, legal and best moves, and best moves in held-out positions, kept per model. |
-| **2.1 Apps** | Later. |
+| **2.1 Game profiles** | Real games, played from the screen with a virtual keyboard and mouse: the game's window, the controls a network may use, the picture it sees, the safety limits, and a live view of that picture. *Start the test range* opens Tools' own small first-person game. |
+| **2.2 Controls check** | Test actions (`hold w+shift 500; move 15 0; click left`) sent to the game through the safety layer, with every action and refusal logged; on the test range, what the range received. |
+| **3.1 Apps** | Later. |
 | **Settings** | The Yendory Network's state, the folders, the versions. |
 
 Tools opens models through the Yendory Network (`yendory-client`, pinned to a commit of
 yendory-hub) and takes `--model <id>` from Yendory Hub (a second start hands it to the running
-copy). See [docs/GAMES.md](../../docs/GAMES.md).
+copy). See [docs/GAMES.md](../../docs/GAMES.md) for the text games and
+[docs/GAME_TRAINING.md](../../docs/GAME_TRAINING.md) for real games.
+
+**Emergency stop** for real games: Ctrl+Alt+End, in any program, releases every control and stops
+everything running (or the Stop button in the page bar).
 
 ## Build
 
@@ -26,8 +32,10 @@ npx tauri build        # this computer's builds
 ```
 
 `cargo test --release` in `src-tauri` checks the games and their perfect players, turns through
-Nexus, matches, lessons (parsed as Studio reads them, and fitting a 256-token context) and the
-scoreboard.
+Nexus, matches, lessons (parsed as Studio reads them, and fitting a 256-token context), the
+scoreboard, and for real games the controls, the safety layer, scripts, profiles and the test
+range. On Linux, run it under an X display (`xvfb-run -a cargo test --release`) to also play the
+range with real input and capture (`tests/live_range.rs`).
 
 ## Releases
 

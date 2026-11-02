@@ -1,6 +1,6 @@
 [package]
 name = "yendory-tools"
-version = "0.1.0"
+version = "0.1.1"
 description = "Yendory Tools: games and apps that trained Yendory models play and use, through Nexus"
 edition = "2021"
 publish = false
@@ -29,6 +29,27 @@ yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "3fd04ac93
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # A second copy of Tools hands its --model to the running one (docs/HANDOFF.md on yendory-hub).
 tauri-plugin-single-instance = "2"
+# The test range's window (`--range`), with the windowing library Tauri already uses.
+tao = "0.37"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The range draws with GTK on Linux (the same GTK as Tauri's windows).
+gtk = "0.18"
+# Game windows, capture, virtual input (XTEST) and the emergency stop key on X11, in plain Rust.
+x11rb = { version = "0.13", features = ["xtest"] }
+
+[target.'cfg(windows)'.dependencies]
+# The range draws with softbuffer on Windows (already in Tauri's tree there).
+softbuffer = "0.4"
+# Game windows, capture (GDI), virtual input (SendInput) and the emergency stop key (a keyboard hook).
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 codegen-units = 1

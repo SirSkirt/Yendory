@@ -43,7 +43,7 @@ jobs:
       - name: Linux GUI libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev xvfb
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "apps/tools/src-tauri -> target"
@@ -52,7 +52,9 @@ jobs:
         working-directory: apps/tools/src-tauri
       - run: cargo clippy --release --all-targets -- -D warnings
         working-directory: apps/tools/src-tauri
-      - run: cargo test --release
+      # Under a virtual X display, so the test range is played with real input and capture
+      # (tests/live_range.rs).
+      - run: xvfb-run -a cargo test --release
         working-directory: apps/tools/src-tauri
 
   desktop:

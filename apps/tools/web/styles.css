@@ -410,3 +410,30 @@ main { max-width: 1112px; }
 .toast { position: fixed; right: 18px; bottom: 18px; max-width: min(520px, calc(100% - 36px)); background: var(--sheet); border: 1px solid var(--rule-strong); border-left: 4px solid var(--accent); padding: 10px 14px; box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent); font-size: 14px; z-index: 80; }
 .toast.error { border-left-color: var(--bad); }
 .toast[hidden] { display: none; }
+
+/* ---- Real games ------------------------------------------------------------------------------ */
+.stop-button { background: var(--bad); color: #fff; border-color: var(--bad); font-weight: 700; letter-spacing: .03em; margin-right: 10px; }
+.stop-button:hover { background: color-mix(in srgb, var(--bad) 85%, #000); }
+.stop-line { font-size: 14px; border-left: 3px solid var(--bad); padding: 4px 10px; background: var(--sheet); max-width: 90ch; }
+.stop-line.warn { border-left-color: var(--warn); }
+.live-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 380px); gap: 28px; align-items: start; }
+@media (max-width: 1000px) { .live-grid { grid-template-columns: 1fr; } }
+.live-form h3, .live-side h3 { margin-top: 22px; }
+.field-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.field-row > label:first-child, .field-label { min-width: 10.5em; font-size: 14px; color: var(--ink-soft); }
+.field-row input:not([type=checkbox]):not([type=radio]):not(.narrow-num) { flex: 1 1 220px; }
+.field-row.checks .check-inline { margin-right: 4px; }
+.key-groups { display: grid; gap: 8px; }
+.key-group { display: flex; gap: 8px; align-items: baseline; }
+.key-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.key-chip { position: relative; cursor: pointer; }
+.key-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.key-chip span { display: inline-block; min-width: 2.2em; text-align: center; padding: 3px 7px; font: 13px var(--mono); border: 1px solid var(--rule-strong); border-radius: 4px; background: var(--sheet); }
+.key-chip input:checked + span { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.key-chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.preview-frame { background: var(--ink); border: 1px solid var(--rule-strong); line-height: 0; }
+.preview-frame canvas { width: 100%; height: auto; image-rendering: pixelated; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+#checkActions { width: 100%; font: 14px var(--mono); padding: 8px; background: var(--sheet); color: var(--ink); border: 1px solid var(--rule-strong); }
+.ledger tr.refused td { color: var(--bad); }
+.range-report { margin: 14px 0; }
