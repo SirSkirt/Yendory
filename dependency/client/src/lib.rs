@@ -356,3 +356,65 @@ fn read_loop(stream: TcpStream, pending: Pending, events: mpsc::Sender<Event>, a
         let _ = tx.send(Err(Error::new("disconnected", "The connection to the Yendory Network was lost")));
     }
 }
+
+/// Weights on the wire: little-endian f32 values in base64 (standard alphabet, padded), as the
+/// Network's skill methods send and take them (docs/NETWORK.md).
+pub mod floats {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(values: &[f32]) -> String {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    pub fn decode(text: &str) -> Result<Vec<f32>, String> {
+        let text = text.trim_end_matches('=');
+        let mut val = [0u8; 256];
+        for (i, &c) in ALPHABET.iter().enumerate() {
+            val[c as usize] = i as u8 + 1;
+        }
+        let mut bytes = Vec::with_capacity(text.len() * 3 / 4);
+        let (mut acc, mut bits) = (0u32, 0u32);
+        for c in text.bytes() {
+            let v = val[c as usize];
+            if v == 0 {
+                return Err("Weights are not valid base64".into());
+            }
+            acc = (acc << 6) | (v - 1) as u32;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                bytes.push((acc >> bits) as u8);
+            }
+        }
+        if bytes.len() % 4 != 0 {
+            return Err("Weights are not whole numbers of f32 values".into());
+        }
+        Ok(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn floats_round_trip() {
+            for n in [0, 1, 2, 3, 7, 1000] {
+                let v: Vec<f32> = (0..n).map(|i| i as f32 * -0.37 + 1e-3).collect();
+                assert_eq!(super::decode(&super::encode(&v)).unwrap(), v);
+            }
+            assert!(super::decode("!!!!").is_err());
+            assert!(super::decode("AAA=").is_err(), "two bytes are not a float");
+        }
+    }
+}

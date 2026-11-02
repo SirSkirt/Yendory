@@ -1,22 +1,31 @@
 //! `.nnova2` checkpoint reading and writing (layout in docs/FORMAT.md).
 //! The layout is unchanged from Neural Nova and the numpy reference; files are interchangeable.
 use super::{spec, Bicameral, Config};
+use crate::skill::{layout_len, Adam, Skill, SkillSpec, MAX_SKILL_PARAMETERS};
 use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"NNOVA2\0\0";
 /// Nova Neuro checkpoints: a separate, versioned format (`.nneuro`), never read as `.nnova2`.
 const NEURO_MAGIC: &[u8; 8] = b"NNEURO1\0";
 
-/// The architecture header of a `.nneuro` checkpoint.
+/// The architecture header of a `.nneuro` checkpoint. Format 1: no game skills; format 2: the
+/// skills are listed here and their weights follow the learned words (docs/FORMAT.md).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct NeuroHeader {
     architecture: String,
     format: u32,
     config: Config,
     design: super::NeuroSpec,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skills: Vec<SkillSpec>,
 }
 const WORDS_MAGIC: &[u8; 8] = b"WORDUNIT";
+const SKILLS_MAGIC: &[u8; 8] = b"SKILLSET";
+/// The header holds every skill's description (and its trainer's notes): larger than a bare
+/// configuration, still bounded.
 const MAX_CONFIG_JSON: usize = 8192;
+const MAX_HEADER_WITH_SKILLS: usize = 16 << 20;
+const MAX_SKILLS: usize = 64;
 
 /// Rejects configurations that would panic or allocate absurdly before any weights are read.
 pub(crate) fn validate_config(c: &Config) -> Result<(), String> {
@@ -103,12 +112,29 @@ impl Bicameral {
         if let Some(design) = &self.neuro {
             let header = NeuroHeader {
                 architecture: "nova-neuro".into(),
-                format: 1,
+                format: if self.skills.is_empty() { 1 } else { 2 },
                 config: self.config.clone(),
                 design: design.clone(),
+                skills: self.skills.iter().map(|k| k.spec.clone()).collect(),
             };
             let json = serde_json::to_vec(&header).map_err(|e| e.to_string())?;
-            return Ok(self.body(NEURO_MAGIC, &json));
+            let mut out = self.body(NEURO_MAGIC, &json);
+            if !self.skills.is_empty() {
+                out.extend_from_slice(SKILLS_MAGIC);
+                for k in &self.skills {
+                    k.check()?;
+                    out.extend_from_slice(&k.adam.t.to_le_bytes());
+                    for arr in [&k.accepted, &k.latest, &k.adam.m, &k.adam.v] {
+                        for &x in arr {
+                            out.extend_from_slice(&x.to_le_bytes());
+                        }
+                    }
+                }
+            }
+            return Ok(out);
+        }
+        if !self.skills.is_empty() {
+            return Err("Game skills are kept only by Nova Neuro models".into());
         }
         let config = match &self.stored_config_json {
             Some(raw) if serde_json::from_slice::<Config>(raw).ok().as_ref() == Some(&self.config) => {
@@ -152,19 +178,39 @@ impl Bicameral {
             return Err("Not a Nova-2 or Nova Neuro checkpoint".into());
         }
         let len = r.u32()? as usize;
-        if len > MAX_CONFIG_JSON {
+        if len > if neuro { MAX_HEADER_WITH_SKILLS } else { MAX_CONFIG_JSON } {
             return Err("Invalid Nova-2 configuration".into());
         }
         let json = r.take(len)?;
+        let mut skill_specs: Vec<SkillSpec> = Vec::new();
         let (config, design) = if neuro {
             let h: NeuroHeader = serde_json::from_slice(json).map_err(|e| e.to_string())?;
-            if h.architecture != "nova-neuro" || h.format != 1 {
+            let known = h.architecture == "nova-neuro"
+                && match h.format {
+                    1 => h.skills.is_empty(),
+                    2 => !h.skills.is_empty(),
+                    _ => false,
+                };
+            if !known {
                 return Err(format!(
                     "Unsupported Nova Neuro checkpoint ({} format {})",
                     h.architecture, h.format
                 ));
             }
             h.design.validate(&h.config)?;
+            if h.skills.len() > MAX_SKILLS {
+                return Err("The checkpoint lists more game skills than the Engine allows".into());
+            }
+            for (i, k) in h.skills.iter().enumerate() {
+                k.arch.check()?;
+                if layout_len(&k.arch) > MAX_SKILL_PARAMETERS {
+                    return Err("A game skill in the checkpoint is larger than the Engine allows".into());
+                }
+                if h.skills[..i].iter().any(|o| o.game == k.game) {
+                    return Err("The checkpoint has two skills for the same game".into());
+                }
+            }
+            skill_specs = h.skills;
             (h.config, Some(h.design))
         } else {
             let c = serde_json::from_slice::<Config>(json).map_err(|e| e.to_string())?;
@@ -208,6 +254,26 @@ impl Bicameral {
             model.tokenizer.push_word(word);
         }
         model.tokenizer.validate()?;
+        if !skill_specs.is_empty() {
+            if r.take(8)? != SKILLS_MAGIC {
+                return Err("The checkpoint's game skills are missing".into());
+            }
+            for spec in skill_specs {
+                let n = layout_len(&spec.arch);
+                if data.len() - r.pos < 8 + 16 * n {
+                    return Err("Nova-2 checkpoint is truncated".into());
+                }
+                let t = r.u64()?;
+                let mut arrays = [vec![0f32; n], vec![0f32; n], vec![0f32; n], vec![0f32; n]];
+                for a in arrays.iter_mut() {
+                    r.f32s(a)?;
+                }
+                let [accepted, latest, m, v] = arrays;
+                let skill = Skill { spec, accepted, latest, adam: Adam { m, v, t } };
+                skill.check()?;
+                model.skills.push(skill);
+            }
+        }
         if r.pos != data.len() {
             return Err("Unexpected Nova-2 checkpoint trailer".into());
         }
@@ -286,5 +352,94 @@ mod tests {
         huge.extend_from_slice(&(json.len() as u32).to_le_bytes());
         huge.extend_from_slice(&json);
         assert!(Bicameral::from_bytes(&huge).is_err());
+    }
+
+    fn skill(game: &str) -> Skill {
+        let arch = crate::skill::check_arch();
+        let spec = SkillSpec {
+            game: game.into(),
+            name: "Test range".into(),
+            size: crate::skill::Size::Small,
+            seed: 5,
+            keys: vec!["w".into(), "a".into()],
+            buttons: vec!["left".into()],
+            arch,
+            lineage: crate::skill::Lineage { generation: 0, parent: None, method: "imitation".into() },
+            steps: 12,
+            accepted_step: 10,
+            created: 1,
+            notes: serde_json::json!({"runs": [{"steps": 12}]}),
+        };
+        let mut k = Skill::new(spec).unwrap();
+        k.latest[0] += 0.5;
+        k.adam.t = 12;
+        k.adam.m[1] = 0.25;
+        k
+    }
+
+    fn neuro_model() -> Bicameral {
+        let p = &crate::model::neuro::presets()[0];
+        Bicameral::with_design(p.config.clone(), Some(p.design.clone()), 3)
+    }
+
+    #[test]
+    fn game_skills_ride_in_format_2_and_leave_format_1_alone() {
+        let mut m = neuro_model();
+        let plain = m.to_bytes().unwrap();
+        // Without skills: format 1, exactly as before.
+        assert!(String::from_utf8_lossy(&plain[..400]).contains("\"format\":1"));
+        assert!(!String::from_utf8_lossy(&plain[..400]).contains("skills"));
+        m.skills.push(skill("yendory-range"));
+        let bytes = m.to_bytes().unwrap();
+        assert!(String::from_utf8_lossy(&bytes[..400]).contains("\"format\":2"));
+        let back = Bicameral::from_bytes(&bytes).unwrap();
+        assert_eq!(back.weights, m.weights);
+        assert_eq!(back.skills.len(), 1);
+        let (a, b) = (&back.skills[0], &m.skills[0]);
+        assert_eq!(a.spec, b.spec);
+        assert_eq!(
+            (&a.accepted, &a.latest, &a.adam.m, &a.adam.v, a.adam.t),
+            (&b.accepted, &b.latest, &b.adam.m, &b.adam.v, b.adam.t)
+        );
+        assert_eq!(back.to_bytes().unwrap(), bytes);
+        // Removing the skills gives the format-1 file back.
+        let mut none = back.clone();
+        none.skills.clear();
+        assert_eq!(none.to_bytes().unwrap(), plain);
+        // Kept when the vocabulary is resized.
+        let wider = back.with_word_capacity(back.word_capacity() + 4, 1).unwrap();
+        assert_eq!(wider.skills.len(), 1);
+    }
+
+    #[test]
+    fn damaged_or_impossible_skills_are_refused() {
+        let mut m = neuro_model();
+        m.skills.push(skill("g"));
+        let bytes = m.to_bytes().unwrap();
+        // Cut anywhere in the skills, or with a byte too many.
+        let plain_len = {
+            let mut p = m.clone();
+            p.skills.clear();
+            p.to_bytes().unwrap().len()
+        };
+        let extra = bytes.len() - plain_len;
+        for cut in [bytes.len() - 1, bytes.len() - extra / 2, bytes.len() - extra + 4] {
+            assert!(Bicameral::from_bytes(&bytes[..cut]).is_err(), "cut at {cut}");
+        }
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(Bicameral::from_bytes(&longer).is_err());
+        // Two skills for one game; a Bicameral model with a skill.
+        m.skills.push(skill("g"));
+        assert!(Bicameral::from_bytes(&m.to_bytes().unwrap()).is_err());
+        let mut b = Bicameral::with_config(small(), 1);
+        b.skills.push(skill("g"));
+        assert!(b.to_bytes().is_err());
+        // A skill whose weights don't fit its network is never written.
+        let mut bad = neuro_model();
+        let mut k = skill("g");
+        k.latest.pop();
+        bad.skills.push(k);
+        assert!(bad.to_bytes().is_err());
     }
 }

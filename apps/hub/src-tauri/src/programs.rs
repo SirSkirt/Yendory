@@ -365,9 +365,10 @@ pub async fn launch(
     let v = view(&app, &hub, c);
     let path = v.path.filter(|_| v.installed).ok_or_else(|| format!("{} is not installed", c.name))?;
     if running(c.id) {
-        // Studio 0.9.3 and later hand a second start to the running copy.
-        let forwards = c.id == "studio"
-            && v.version.as_deref().is_some_and(|ver| packages::at_least(ver, STUDIO_FORWARDS_FROM));
+        // Studio 0.9.3 and later, and every Tools, hand a second start to the running copy.
+        let forwards = c.id == "tools"
+            || (c.id == "studio"
+                && v.version.as_deref().is_some_and(|ver| packages::at_least(ver, STUDIO_FORWARDS_FROM)));
         if !forwards {
             return Err(match model {
                 Some(_) => format!("{} is already open. Switch to it and open the model there.", c.name),

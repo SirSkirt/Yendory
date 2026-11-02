@@ -187,7 +187,7 @@ const atLeast = (have, need) => {
   for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
   return true;
 };
-const opensModels = studio => !!(STUDIO_OPENS_MODELS_FROM && studio?.version && atLeast(studio.version, STUDIO_OPENS_MODELS_FROM));
+const opensModels = p => p?.id === "tools" || !!(STUDIO_OPENS_MODELS_FROM && p?.version && atLeast(p.version, STUDIO_OPENS_MODELS_FROM));
 /** Installed on its own (not by the Hub): it can be switched to the Hub. */
 const onItsOwn = c => c && c.installed && !c.managed && c.legacy.length > 0;
 
@@ -229,7 +229,7 @@ function renderSidebar() {
   $("programList").replaceChildren(...programs().map(p => {
     const status = p.released === false && !p.installed ? "not released" : p.running ? "open"
       : onItsOwn(p) ? "on its own" : p.update ? "update" : p.installed ? "installed" : "install";
-    const opens = p.installed && (!p.running || (p.id === "studio" && opensModels(p)));
+    const opens = p.installed && (!p.running || opensModels(p));
     const title = opens ? (m ? `Open ${m.name} in ${shortName(p)}` : `Start ${shortName(p)}`) : `${p.name}: ${status}`;
     return el("button", { type: "button", class: "sb-item", title,
       onclick: () => (opens ? launch(p.id, m?.id) : show("programs")) },
@@ -395,9 +395,14 @@ function renderCard() {
     if (studioRunning) why = `Studio is open: ${m.name} opens there.`;
     else if (!opensModels(studio)) why = `Studio${studio.version ? " " + studio.version : ""} starts on its Models page: choose ${m.name} there. Studio ${STUDIO_OPENS_MODELS_FROM} and later open it directly.`;
   }
-  const toolsButton = tools?.installed && !tools.running
+  // Tools hands a second start to the running copy, so it can be given a model while open.
+  const toolsButton = tools?.installed
     ? el("button", { type: "button", onclick: () => launch("tools", m.id) }, "Open in Tools")
-    : el("button", { type: "button", disabled: true }, tools && tools.released === false ? "Tools · not released yet" : "Tools");
+    : tools && tools.released !== false
+      ? el("button", { type: "button", onclick: () => show("programs") }, "Install Tools…")
+      : el("button", { type: "button", disabled: true }, "Tools · not released yet");
+  if (tools?.running && !why) why = `Tools is open: ${m.name} opens there.`;
+  const skills = (m.skills || []).map(k => `${k.name} (generation ${k.generation}, ${fmt(k.steps)} steps)`);
   const locked = studioRunning || m.openBy.length > 0;
   const lockedTitle = locked ? `Close ${m.openBy.length ? m.openBy.join(" and ") : "Studio"} first: it may have this model open` : null;
   card.replaceChildren(
@@ -410,6 +415,7 @@ function renderCard() {
     row("Context", `${fmt(m.context)} tokens`),
     row("Read", m.read.length ? m.read.join(", ") : "Nothing yet"),
     row("Lessons taught", m.lessons ? fmt(m.lessons) : "None yet"),
+    m.architecture === "neuro" ? row("Game skills", skills.length ? skills.join(", ") : "None yet: open it in Tools to teach it a game") : "",
     row("Changed", when(m.updated)),
     row("Origin", m.origin === "new" || !m.origin ? `Created ${when(m.created)}` : `Imported from ${m.origin}`),
     row("File", bytes(m.fileBytes), { mono: true }),

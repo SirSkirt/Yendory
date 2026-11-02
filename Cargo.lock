@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "yendory-engine"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "yendory-network"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "getrandom",
  "serde",

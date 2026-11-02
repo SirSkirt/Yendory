@@ -33,5 +33,31 @@ size, and the file layout is the same (the `embed` matrix has `vocab` rows and `
 `vocab` entries). Token ids are 32-bit in the Engine. Files stay readable by the numpy
 reference at any vocabulary size (checked at 100,128 ids in CI).
 
+## Nova Neuro and game skills
+
+A Nova Neuro checkpoint has the magic `NNEURO1\0` and, in place of the config, a JSON header
+`{"architecture": "nova-neuro", "format": 1, "config": …, "design": …}`; the rest of the layout
+(step, weights, Adam state, learned words) is the same.
+
+**Format 2** (Engine 0.9.4): the model carries **game skills** (`skill.rs`): networks that play a
+real game from its pictures, trained in Yendory Tools. The header has `"format": 2` and a
+`"skills"` list (each skill's `SkillSpec`: the game, its name, size, seed, network architecture,
+the controls in order, lineage, steps, the step its accepted weights were kept at, and the
+trainer's notes). After the learned words:
+
+| Field | Type | Notes |
+|---|---|---|
+| magic | 8 bytes | `SKILLSET` |
+| per skill, in the header's order: step | u64 | the skill's optimizer step |
+| accepted weights | f32 × k | what plays (`k` from the skill's architecture) |
+| latest weights | f32 × k | to continue training |
+| Adam m, v | f32 × k each | |
+
+No bytes may follow. A Neuro model without skills is written as format 1, byte for byte as
+before; a Bicameral model never carries skills. Engines before 0.9.4 refuse format 2 ("Unsupported
+Nova Neuro checkpoint (nova-neuro format 2)") instead of opening the model and dropping its skills
+when they save it. On load: at most 64 skills, one per game, each architecture checked and at
+most 64M weights, every value finite, the step and lengths exact.
+
 The model-package format that will wrap `.nnova2` (manifest, checksums, runtime vs archive
 exports) is a pending decision (D3/D4 in docs/STATUS.md).

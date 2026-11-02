@@ -251,3 +251,90 @@ fn chat_streams_stops_and_reloads() {
     // Only a program that has the model open may reload it.
     assert_eq!(studio.call("models.reload", json!({"id": b})).unwrap_err().code, "refused");
 }
+
+#[test]
+fn game_skills_are_saved_into_neuro_models() {
+    use yendory_client::floats::{decode, encode};
+    use yendory_engine::skill::{check_arch, Lineage, Size, Skill, SkillSpec};
+    let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let n = Network::start("skills", 60);
+    let hub = n.connect("Yendory Hub").unwrap();
+    let tools = n.connect("Yendory Tools").unwrap();
+    let make = |arch: &str, preset: &str| {
+        let m = hub
+            .call(
+                "models.create",
+                json!({"name": "Nova", "architecture": arch, "preset": preset, "context": 256}),
+            )
+            .unwrap();
+        m["meta"]["id"].as_str().unwrap().to_string()
+    };
+    let neuro = make("neuro", "neuro-core-1m");
+    let bica = make("bicameral", "nova2");
+    tools.call("models.open", json!({"id": neuro})).unwrap();
+    assert_eq!(tools.call("model.skills", json!({"id": neuro})).unwrap(), json!([]));
+
+    let spec = SkillSpec {
+        game: "yendory-range".into(),
+        name: "Yendory Range".into(),
+        size: Size::Small,
+        seed: 3,
+        arch: check_arch(),
+        keys: vec!["w".into(), "a".into()],
+        buttons: vec!["left".into()],
+        lineage: Lineage { generation: 0, parent: None, method: "imitation".into() },
+        steps: 40,
+        accepted_step: 30,
+        created: 1,
+        notes: json!({"runs": 1}),
+    };
+    let mut skill = Skill::new(spec.clone()).unwrap();
+    skill.latest[2] = 0.75;
+    skill.adam.t = 40;
+    let save = |client: &Client, id: &str, k: &Skill| {
+        client.call(
+            "model.skill.save",
+            json!({"id": id, "spec": k.spec, "accepted": encode(&k.accepted), "latest": encode(&k.latest),
+                   "m": encode(&k.adam.m), "v": encode(&k.adam.v), "t": k.adam.t}),
+        )
+    };
+    let entry = save(&tools, &neuro, &skill).unwrap();
+    assert_eq!(entry["meta"]["skills"][0]["game"], "yendory-range");
+    assert_eq!(entry["meta"]["skills"][0]["steps"], 40);
+    assert_eq!(entry["meta"]["name"], "Nova", "other fields kept");
+
+    // Read back exactly, from memory and from the file.
+    let back = tools.call("model.skill", json!({"id": neuro, "game": "yendory-range"})).unwrap();
+    assert_eq!(decode(back["latest"].as_str().unwrap()).unwrap(), skill.latest);
+    assert_eq!(back["t"], 40);
+    let file = yendory_engine::Bicameral::load(
+        n.data.join("org.yendory.studio/models").join(&neuro).join("model.nnova2"),
+    )
+    .unwrap();
+    assert_eq!(file.skills[0].spec, spec);
+    assert_eq!(file.skills[0].accepted, skill.accepted);
+
+    // Not while another program has the model open (its next save would undo it).
+    hub.call("models.open", json!({"id": neuro})).unwrap();
+    let e = save(&tools, &neuro, &skill).unwrap_err();
+    assert_eq!(e.code, "refused");
+    hub.call("models.close", json!({"id": neuro})).unwrap();
+
+    // Not into a Bicameral model; not with weights that don't fit.
+    tools.call("models.open", json!({"id": bica})).unwrap();
+    assert!(save(&tools, &bica, &skill).unwrap_err().message.contains("Neuro"));
+    let mut short = skill.clone();
+    short.accepted.pop();
+    assert_eq!(save(&tools, &neuro, &short).unwrap_err().code, "invalid");
+
+    // Removed again: the file is the plain format again.
+    tools.call("model.skill.delete", json!({"id": neuro, "game": "yendory-range"})).unwrap();
+    let file = yendory_engine::Bicameral::load(
+        n.data.join("org.yendory.studio/models").join(&neuro).join("model.nnova2"),
+    )
+    .unwrap();
+    assert!(file.skills.is_empty());
+    let listed = hub.call("models.list", json!({})).unwrap();
+    let meta = listed.as_array().unwrap().iter().find(|m| m["meta"]["id"] == neuro.as_str()).unwrap();
+    assert_eq!(meta["meta"]["skills"], json!([]));
+}

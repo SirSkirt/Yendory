@@ -324,6 +324,31 @@ pub fn export(models: &Path, id: &str, path: &Path) -> Res<u64> {
     Ok(bytes.len() as u64)
 }
 
+/// Writes an open model's checkpoint after its game skills changed, and the skills' summary in
+/// its meta.json (every other field kept as written): `skills` lists each skill's game, name,
+/// steps, generation and method, so the Hub shows them without reading the checkpoint.
+pub fn save_skills(models: &Path, id: &str, model: &Bicameral) -> Res<Value> {
+    let dir = model_dir(models, id)?;
+    let mut meta = read_meta(&dir)?;
+    write_atomic(&dir.join("model.nnova2"), &model.to_bytes()?)?;
+    meta["skills"] = Value::Array(
+        model
+            .skills
+            .iter()
+            .map(|k| {
+                json!({
+                    "game": k.spec.game, "name": k.spec.name, "steps": k.spec.steps,
+                    "generation": k.spec.lineage.generation, "method": k.spec.lineage.method,
+                    "parameters": k.parameters(),
+                })
+            })
+            .collect(),
+    );
+    meta["updated"] = json!(now());
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)?;
+    Ok(entry(&dir, meta))
+}
+
 /// Loads a model's checkpoint (the file decides its size and design).
 pub fn load(models: &Path, id: &str) -> Res<(Value, Bicameral)> {
     let dir = model_dir(models, id)?;

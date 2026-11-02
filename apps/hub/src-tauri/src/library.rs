@@ -63,6 +63,9 @@ pub struct ModelView {
     plan: Option<PlanView>,
     /// Programs that have the model open through the Network.
     open_by: Vec<String>,
+    /// Game skills it carries (Nova Neuro; trained in Yendory Tools): the summary its meta.json
+    /// keeps (game, name, steps, generation, method, parameters).
+    skills: Vec<Value>,
 }
 
 fn num(v: &Value, key: &str) -> u64 {
@@ -192,6 +195,7 @@ fn view_of(entry: &Value, plans: &[Value], log: &[Value]) -> ModelView {
         recent: recent(meta, &mine),
         plan: plan_of(&id, plans),
         open_by: list(entry, "openBy").iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        skills: list(meta, "skills").to_vec(),
         id,
     }
 }

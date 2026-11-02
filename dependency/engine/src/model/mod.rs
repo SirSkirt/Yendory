@@ -296,6 +296,9 @@ pub struct Bicameral {
     /// Nova Neuro (experimental): the modules that replace the Dense hemisphere. `None` for
     /// Nova Bicameral, whose behaviour and checkpoints are unchanged.
     pub neuro: Option<NeuroSpec>,
+    /// Game skills (Nova Neuro only): networks that play games from their pictures, saved in
+    /// the model's file (docs/FORMAT.md, "Game skills"). Text never passes through them.
+    pub skills: Vec<crate::skill::Skill>,
 }
 struct Rng(u64);
 impl Rng {
@@ -352,6 +355,7 @@ impl Bicameral {
             offsets,
             stored_config_json: None,
             neuro,
+            skills: Vec::new(),
         }
     }
     /// Parameters a configuration would have, without building the model.
@@ -427,6 +431,7 @@ impl Bicameral {
         let config = Config { vocab: crate::tokenizer::BASE + words, ..self.config.clone() };
         checkpoint::validate_config(&config)?;
         let mut out = Bicameral::with_design(config, self.neuro.clone(), seed);
+        out.skills = self.skills.clone();
         out.momentum.fill(0.);
         out.variance.fill(0.);
         for slot in &self.slots {

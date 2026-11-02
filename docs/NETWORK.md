@@ -74,6 +74,10 @@ Error codes: `unauthorized`, `invalid`, `refused` (a rule said no; the message s
 | `model.chat` | `id`, `prompt`, `maxTokens`, `sampling` (optional: `temperature`, `topK`, `topP`, `repetitionPenalty`, `seed`; greedy without), `stream` (optional) | `{text, tokens, finished, stopped, step, sampling}`: Studio's chat reply, the same the Engine writes with those settings. With `stream`, each token's text arrives first as a `model.token` event to this program only (Network 0.1.1) |
 | `model.stop` | `stream` | `true` when that reply of this program was being written (it stops after the current token), else `false` (0.1.1) |
 | `models.reload` | `id` | the entry; reads the model's file again for every program that has it open, after the caller wrote it itself (Studio, while it still trains on its own) (0.1.1) |
+| `model.skills` | `id` | the open model's game skills: each one's description (`SkillSpec`: game, name, size, arch, controls, lineage, steps, notes), no weights (0.1.2) |
+| `model.skill` | `id`, `game` | `{spec, accepted, latest, m, v, t}`: one skill with its accepted weights, latest weights and optimizer state; floats as base64 little-endian f32 (`yendory_client::floats`) (0.1.2) |
+| `model.skill.save` | `id`, `spec`, `accepted`, `latest`, `m`, `v`, `t` | the entry; adds or replaces the skill for `spec.game` and saves the model's file (format 2, docs/FORMAT.md) and a `skills` summary in meta.json. Refused for a model that is not Nova Neuro, for weights that don't fit the skill's network, and while another program has the model open (0.1.2) |
+| `model.skill.delete` | `id`, `game` | the entry; the file goes back to format 1 when no skill is left (0.1.2) |
 
 Events: `models.changed` (`id`, `change`: created, imported, renamed, deleted),
 `network.stopping` (`reason`), and `model.token` (`stream`, `text`; only to the program whose

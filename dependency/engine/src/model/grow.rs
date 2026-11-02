@@ -239,6 +239,7 @@ impl Bicameral {
         let mut out = Bicameral::with_design(config, design, seed);
         out.tokenizer = self.tokenizer.clone();
         out.step = self.step;
+        out.skills = self.skills.clone();
         let old: HashMap<&str, &Slot> = self.slots.iter().map(|s| (s.name.as_str(), s)).collect();
         let (split, blocks) = (self.config.split, self.config.blocks);
         // The original block a new block index corresponds to (None: a new block).

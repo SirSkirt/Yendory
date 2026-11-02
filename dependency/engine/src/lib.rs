@@ -26,6 +26,7 @@ pub mod learn;
 pub mod memory;
 pub mod model;
 pub mod nexus;
+pub mod skill;
 pub mod tokenizer;
 pub use model::size_presets;
 

@@ -606,6 +606,92 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
                     .unwrap_or_default();
             Ok(library::entry(&dir, meta))
         }
+        "model.skills" => {
+            // The open model's game skills (their descriptions, no weights).
+            let id = str_param(p, "id")?;
+            let model = state.held(id, client)?;
+            let model = model.lock().unwrap();
+            Ok(json!(model.skills.iter().map(|k| &k.spec).collect::<Vec<_>>()))
+        }
+        "model.skill" => {
+            // One skill with its weights: the accepted ones, the latest, and the optimizer's
+            // moments and step (floats in base64, yendory_client::floats).
+            let id = str_param(p, "id")?;
+            let game = str_param(p, "game")?;
+            let model = state.held(id, client)?;
+            let model = model.lock().unwrap();
+            let k = model
+                .skills
+                .iter()
+                .find(|k| k.spec.game == game)
+                .ok_or_else(|| refused("This model has no skill for that game".into()))?;
+            use yendory_client::floats::encode;
+            Ok(json!({
+                "spec": k.spec, "accepted": encode(&k.accepted), "latest": encode(&k.latest),
+                "m": encode(&k.adam.m), "v": encode(&k.adam.v), "t": k.adam.t,
+            }))
+        }
+        "model.skill.save" => {
+            // Adds or replaces the skill for `spec.game` and saves the model's file. Refused when
+            // another program has the model open (its next save would undo this), and for
+            // models that are not Nova Neuro.
+            let id = str_param(p, "id")?;
+            state.not_open_elsewhere(id, client, "game skill").map_err(refused)?;
+            let spec: yendory_engine::skill::SkillSpec =
+                serde_json::from_value(p.get("spec").cloned().unwrap_or_default())
+                    .map_err(|e| invalid(format!("`spec`: {e}")))?;
+            use yendory_client::floats::decode;
+            let arr = |k: &str| decode(str_param(p, k)?).map_err(invalid);
+            let skill = yendory_engine::skill::Skill {
+                spec,
+                accepted: arr("accepted")?,
+                latest: arr("latest")?,
+                adam: yendory_engine::skill::Adam {
+                    m: arr("m")?,
+                    v: arr("v")?,
+                    t: p.get("t").and_then(Value::as_u64).unwrap_or(0),
+                },
+            };
+            skill.check().map_err(invalid)?;
+            let held = state.held(id, client)?;
+            let _w = state.library.lock().unwrap();
+            let mut model = held.lock().unwrap();
+            if model.neuro.is_none() {
+                return Err(refused(
+                    "Game skills are kept only by Nova Neuro models: make a Neuro model in Yendory Hub"
+                        .into(),
+                ));
+            }
+            let mut next = model.clone();
+            match next.skills.iter_mut().find(|k| k.spec.game == skill.spec.game) {
+                Some(k) => *k = skill,
+                None => next.skills.push(skill),
+            }
+            let entry = library::save_skills(models, id, &next).map_err(refused)?;
+            *model = next;
+            drop(model);
+            state.broadcast("models.changed", json!({"id": id, "change": "skills"}));
+            Ok(entry)
+        }
+        "model.skill.delete" => {
+            let id = str_param(p, "id")?;
+            let game = str_param(p, "game")?;
+            state.not_open_elsewhere(id, client, "game skill").map_err(refused)?;
+            let held = state.held(id, client)?;
+            let _w = state.library.lock().unwrap();
+            let mut model = held.lock().unwrap();
+            let mut next = model.clone();
+            let before = next.skills.len();
+            next.skills.retain(|k| k.spec.game != game);
+            if next.skills.len() == before {
+                return Err(refused("This model has no skill for that game".into()));
+            }
+            let entry = library::save_skills(models, id, &next).map_err(refused)?;
+            *model = next;
+            drop(model);
+            state.broadcast("models.changed", json!({"id": id, "change": "skills"}));
+            Ok(entry)
+        }
         "hello" => Err(invalid("Already connected")),
         _ => Err(("unknown_method", format!("The Yendory Network {VERSION} has no method `{method}`"))),
     }

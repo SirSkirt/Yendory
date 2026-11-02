@@ -66,6 +66,12 @@ works through the Network, the Hub refuses renames and deletes while Studio runs
 
 | Program | Reads `--model` | Hands it to a running copy | Through the Network |
 |---|---|---|---|
-| Hub 0.1.2 | — (starts programs with it) | — | yes |
+| Hub 0.1.3 | — (starts programs with it; Tools too while it runs) | — | yes |
 | Studio 0.9.3 | yes | yes | not yet (docs/NETWORK.md, "Studio on the Network") |
-| Tools | not released | | |
+| Tools 0.1.5 | yes | yes (every version) | yes; trains a Neuro model's game skills and saves them into the model through the Network (Network 0.1.2) |
+
+**Game skills.** A Nova Neuro model can carry game skills in its own file (docs/FORMAT.md,
+format 2). Only Tools changes them, through the Network (`model.skill.save`), and only while no
+other program has the model open. A program on an Engine older than 0.9.4 can't open a model
+with skills (it refuses rather than dropping them): Studio needs its Engine pin moved to read
+such models.
