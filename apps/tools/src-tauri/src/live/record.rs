@@ -4,7 +4,8 @@
 //! Only the profile's controls are recorded (other keys are never written down, so typing
 //! elsewhere is not kept), and only while the game is in front: switching away pauses the
 //! recording, and those moments are left out. It ends on the Stop button, the emergency stop
-//! keys (the recording is kept), the storage limit, or the game's window closing.
+//! keys (the recording is kept), the game's window closing, or the disk refusing to take more.
+//! There is no length limit: a recording runs as long as the person plays.
 use super::profile::Profile;
 use super::recording::{self, control_line, held_line, motion_line, Info, Split, Tick, Writer, AFTER_GAP};
 use super::safety::STOPS;
@@ -42,8 +43,6 @@ pub struct Setup<'a> {
     pub window: u64,
     pub split: Split,
     pub notes: String,
-    /// Bytes the recording may still take (the profile's limit less what its recordings use).
-    pub room: u64,
 }
 
 /// Records until stopped; returns the finished recording's info.
@@ -120,9 +119,6 @@ pub fn record(
         }
         if STOPS.load(Ordering::Acquire) != stops {
             break "ended with the emergency stop keys".to_string();
-        }
-        if w.bytes() >= s.room {
-            break format!("the game's storage limit ({} MB) was reached", p.storage_mb);
         }
 
         let now = Instant::now();
@@ -213,10 +209,13 @@ pub fn record(
                 buttons |= 1 << b;
             }
         }
-        w.tick(
+        if let Err(e) = w.tick(
             Tick { t_us: us(now), keys, buttons, dx: dx as f32, dy: dy as f32, flags, ..Tick::default() },
             &pixels,
-        )?;
+        ) {
+            // Usually a full disk: what was written so far is kept.
+            break format!("the recording could not be written any further ({e})");
+        }
         active = held.clone();
         dx = 0.0;
         dy = 0.0;
@@ -313,14 +312,8 @@ mod tests {
             stop2.store(true, Ordering::Release);
         });
         let mut desk = fake.clone();
-        let setup = Setup {
-            data: &data,
-            profile: &profile,
-            window: 1,
-            split: Split::Train,
-            notes: "t".into(),
-            room: u64::MAX,
-        };
+        let setup =
+            Setup { data: &data, profile: &profile, window: 1, split: Split::Train, notes: "t".into() };
         let info = record(setup, &mut desk, rx, &stop, |_| {}).unwrap();
         person.join().unwrap();
         assert!(info.complete);
@@ -340,31 +333,6 @@ mod tests {
         assert_eq!(r.ticks.iter().filter(|t| t.flags & AFTER_GAP != 0).count(), 2);
         let events = std::fs::read_to_string(r.events_path()).unwrap();
         assert!(!events.contains("\"e\""), "a key outside the profile was written down");
-        let _ = std::fs::remove_dir_all(&data);
-    }
-
-    #[test]
-    fn the_storage_limit_ends_a_recording() {
-        let data = std::env::temp_dir().join(format!("tools-record-full-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&data);
-        let mut profile = crate::live::profile::range_profile();
-        profile.capture.fps = 60;
-        let fake = Fake::default();
-        *fake.front.lock().unwrap() = true;
-        let (_tx, rx) = mpsc::channel();
-        let stop = AtomicBool::new(false);
-        let mut desk = fake.clone();
-        let setup = Setup {
-            data: &data,
-            profile: &profile,
-            window: 1,
-            split: Split::Train,
-            notes: String::new(),
-            room: 2000,
-        };
-        let info = record(setup, &mut desk, rx, &stop, |_| {}).unwrap();
-        assert!(info.ended.contains("storage limit"), "{}", info.ended);
-        assert!(info.complete);
         let _ = std::fs::remove_dir_all(&data);
     }
 }

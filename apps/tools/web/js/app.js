@@ -344,7 +344,7 @@ function blankProfile() {
   return {
     id: "", name: "", windowTitle: "", windowProcess: "", keys: ["w", "a", "s", "d"], buttons: ["left"], mouse: true,
     mouseScale: 1, capture: { width: 128, height: 72, gray: false, fps: 20 },
-    limits: { maxHoldMs: 5000, maxActionsPerSecond: 60, maxMouseStep: 400 }, storageMb: 4096, notes: "",
+    limits: { maxHoldMs: 5000, maxActionsPerSecond: 60, maxMouseStep: 400 }, notes: "",
   };
 }
 
@@ -404,7 +404,6 @@ function fillForm(p) {
   $("pfHold").value = p.limits.maxHoldMs;
   $("pfRate").value = p.limits.maxActionsPerSecond;
   $("pfStep").value = p.limits.maxMouseStep;
-  $("pfStorage").value = p.storageMb;
   $("pfSaved").textContent = "";
   sizePreview();
 }
@@ -421,7 +420,6 @@ function readForm() {
   p.mouseScale = num("pfScale");
   p.capture = { width: num("pfWidth"), height: num("pfHeight"), gray: document.querySelector("input[name=pfColour]:checked")?.value === "grey", fps: num("pfFps") };
   p.limits = { maxHoldMs: num("pfHold"), maxActionsPerSecond: num("pfRate"), maxMouseStep: num("pfStep") };
-  p.storageMb = num("pfStorage");
   return p;
 }
 
@@ -623,8 +621,7 @@ async function renderRecord() {
   const [w, list] = await Promise.all([act("live_find_window", { id }), act("recordings", { id })]);
   $("recWindow").textContent = w ? `Window: ${w.title} (${w.process || "?"})` : "The game's window isn't open.";
   if (list) {
-    $("recStorage").textContent = `Recordings of this game: ${mb(list.usedBytes)} of ${mb(list.limitBytes)} (the limit is set in its profile).`;
-    $("recStorageBar").style.width = `${Math.min(100, (100 * list.usedBytes) / list.limitBytes)}%`;
+    $("recStorage").textContent = `Recordings of this game so far: ${mb(list.usedBytes)}. A recording has no length limit: it runs until you stop it (or the disk is full).`;
   }
   $("recStart").disabled = !w || R.recording || L.running;
   $("recStart").hidden = R.recording;
@@ -683,7 +680,7 @@ async function renderRecordings() {
   const list = await act("recordings", { id });
   if (!list) return;
   R.list = list.recordings;
-  $("recsUsage").textContent = `${R.list.length} recording${R.list.length === 1 ? "" : "s"}, ${mb(list.usedBytes)} of ${mb(list.limitBytes)}`;
+  $("recsUsage").textContent = `${R.list.length} recording${R.list.length === 1 ? "" : "s"}, ${mb(list.usedBytes)}`;
   body.replaceChildren(...(R.list.length ? R.list.map(r => el("tr", { class: R.view?.info.id === r.id ? "open-row" : "" },
     el("td", {}, when(r.started)),
     el("td", {}, r.player === "person" ? "you" : r.player),
@@ -858,7 +855,8 @@ async function renderTrain() {
   const d = await act("skills_view", { id });
   if (!d) return;
   T.data = d;
-  T.training = d.trainingNow || T.training;
+  G.running = d.generationsNow || G.running;
+  T.training = (d.trainingNow && !G.running) || T.training;
   const rec = r => `${r.count} recording${r.count === 1 ? "" : "s"}, ${clock(r.seconds * 1000)}`;
   $("trainRecs").textContent = `Your play: ${rec(d.training)} for training, ${rec(d.testing)} held out for testing.` + (d.testing.count ? "" : " Mark one for testing (2.4) to measure what is learned.");
   const m = d.model;
@@ -924,15 +922,16 @@ function renderTrainPanel() {
   if (!k) return;
   if (!$("trSteps").value) selectSkill(k.game);
   $("trainTitle").textContent = `${T.data.model?.name ?? "The model"} plays ${k.name}: ${fmt(k.steps)} steps so far, accepted at step ${fmt(k.acceptedStep)}`;
-  $("trStart").hidden = T.training;
-  $("trStop").hidden = !T.training;
-  $("trDelete").disabled = T.training;
+  $("trStart").hidden = T.training || G.running;
+  $("trStop").hidden = !T.training || G.running;
+  $("trDelete").disabled = T.training || G.running;
   $("trDelete").textContent = "Remove the skill";
   $("trStart").disabled = !T.data.training.count;
   if (!T.data.training.count) $("trNote").textContent = "Record some of your play on 2.3 (marked for training) first.";
   const best = bestOf(k);
   if (best && !T.training) showMeasure(best);
   drawTrainChart();
+  renderGenerations(k);
 }
 
 async function makeSkill() {
@@ -993,6 +992,73 @@ function trainEnded(spec, error) {
     const r = runsOf(spec).at(-1);
     $("trNote").textContent = `${r.stopped ? "Stopped" : "Done"} after ${fmt(r.stepsDone)} steps; saved in the model.` + (r.best ? ` Accepted: held-out loss ${f3(r.best.loss)} against the baseline's ${f3(r.best.baselineLoss)}.` : r.heldOut.length ? " No measurement beat the accepted weights; they are kept." : " Nothing was held out, so the latest weights were accepted.");
   }
+  if (S.route === "train") renderTrain();
+}
+
+// ---- Real games: generations (learning from its own play) ---------------------------------------
+// The backend: src-tauri/src/live/generations.rs. Only the test range has a score for now.
+const G = { running: false };
+const gensOf = k => (k?.notes?.generations || []);
+const genSettings = () => ({
+  generations: Number($("gnCount").value), candidates: Number($("gnPlayers").value),
+  episodes: Number($("gnEpisodes").value), seconds: Number($("gnSeconds").value),
+  noise: Number($("gnNoise").value) / 100, elite: Number($("gnElite").value) / 100,
+  steps: Number($("gnSteps").value), learningRate: Number($("gnRate").value),
+  demonstrations: Number($("gnDemos").value) / 100, testEpisodes: Number($("gnTest").value),
+});
+
+function renderGenerations(k) {
+  const range = k.game === "yendory-range";
+  $("genWhere").textContent = range
+    ? "On the test range, scored by its count of hits. Start the range on 2.1 first; it must stay open while generations run."
+    : "Generations need the game's score. The test range reports its own; a real game's score will be read from the screen (phase 5), so for now they run only on the test range.";
+  $("genForm").hidden = !range;
+  const s = genSettings();
+  const playMin = ((s.candidates * s.episodes + 2 * s.testEpisodes) * (s.seconds + 0.5)) / 60;
+  $("gnTime").textContent = `Each generation: about ${playMin.toFixed(0)} minutes of play, then ${fmt(s.steps)} learning steps.` + (T.data?.training.count ? "" : " You have no recordings for training, so it learns from its own play alone.");
+  $("gnStart").hidden = G.running;
+  $("gnStart").disabled = T.training;
+  $("gnStop").hidden = !G.running;
+  $("gnMeter").hidden = !G.running;
+  const rows = gensOf(k);
+  $("genTable").hidden = !rows.length;
+  $("genTable").tBodies[0].replaceChildren(...rows.slice().reverse().map(a => el("tr", {},
+    el("td", { class: "num" }, a.attempt + 1),
+    el("td", {}, String(a.generation)),
+    el("td", {}, a.candidates.map(v => v.toFixed(1)).join(" · ") || "—"),
+    el("td", {}, a.elite.length ? `${a.elite.length} episode${a.elite.length === 1 ? "" : "s"} (${a.elite.map(e => e[1]).join(", ")} hits), ${fmt(a.learnedSteps)} steps` : "—"),
+    el("td", { class: "num" }, a.note ? "—" : a.championScore.toFixed(1)),
+    el("td", { class: "num" + (a.note ? "" : a.accepted ? " better" : " worse") }, a.note ? "—" : a.childScore.toFixed(1)),
+    el("td", {}, a.note ? a.note : a.accepted ? "new champion" : "the champion stays"))));
+}
+
+async function startGenerations() {
+  const ok = await act("generations_start", { settings: genSettings() });
+  if (!ok) return;
+  G.running = true;
+  $("gnBar").style.width = "0%";
+  $("gnNote").textContent = "Starting…";
+  $("sideRun").hidden = false;
+  $("sideRunTitle").textContent = "Generations";
+  renderTrainPanel();
+}
+
+function genProgress(p) {
+  G.running = true;
+  const phases = { playing: 0, learning: 1, testing: 2, done: 3 };
+  const w = `${(100 * (p.run - 1 + phases[p.phase] / 3)) / p.of}%`;
+  $("gnBar").style.width = w;
+  $("sideRunBar").style.width = w;
+  $("gnNote").textContent = `Generation ${p.run} of ${p.of}, ${p.phase}: ${p.detail}`;
+  if (p.attempt && S.route === "train") renderTrain();
+}
+
+function genEnded(spec, error) {
+  G.running = false;
+  $("sideRun").hidden = true;
+  $("sideRunTitle").textContent = "Measuring";
+  if (error) $("gnNote").textContent = `Generations stopped: ${error}`;
+  else $("gnNote").textContent = `Done. The champion is generation ${spec.lineage.generation}; it is saved in the model.`;
   if (S.route === "train") renderTrain();
 }
 
@@ -1236,6 +1302,12 @@ function wire() {
   listen("train-progress", e => trainProgress(e.payload));
   listen("train-done", e => trainEnded(e.payload, null));
   listen("train-failed", e => trainEnded(null, String(e.payload)));
+  $("gnStart").addEventListener("click", startGenerations);
+  $("gnStop").addEventListener("click", () => invoke("generations_stop"));
+  for (const id of ["gnCount", "gnPlayers", "gnEpisodes", "gnSeconds", "gnTest", "gnSteps"]) $(id).addEventListener("input", () => { const k = skillNow(); if (k) renderGenerations(k); });
+  listen("gen-progress", e => genProgress(e.payload));
+  listen("gen-done", e => genEnded(e.payload, null));
+  listen("gen-failed", e => genEnded(null, String(e.payload)));
   $("apProfile").addEventListener("change", renderAutoplay);
   $("apStart").addEventListener("click", startPlay);
   $("apStopBtn").addEventListener("click", () => invoke("play_stop"));

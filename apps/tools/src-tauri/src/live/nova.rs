@@ -3,6 +3,7 @@
 //! Hub); Tools reads and saves them through the Network (`skills.rs`).
 use super::autoplay::{self, Brain, Decide};
 use super::evaluate::{self, EvalSetup};
+use super::generations;
 use super::policy::{Size, SkillSpec};
 use super::recording::Split;
 use super::safety::Controller;
@@ -47,6 +48,7 @@ pub struct SkillsView {
     training: Recs,
     testing: Recs,
     training_now: bool,
+    generations_now: bool,
 }
 
 #[tauri::command]
@@ -64,6 +66,7 @@ pub async fn skills_view(app: AppHandle, id: String) -> Res<SkillsView> {
         training: recs(&data, &id, Split::Train),
         testing: recs(&data, &id, Split::Test),
         training_now: app.state::<Live>().training_stop.lock().unwrap().is_some(),
+        generations_now: app.state::<Live>().generations.load(Ordering::Acquire),
     })
 }
 
@@ -353,7 +356,16 @@ pub async fn evaluate_start(app: AppHandle, episodes: usize, seconds: f64, decid
             match alive(&mut slot) {
                 Some(range) => {
                     let a3 = app2.clone();
-                    let setup = EvalSetup { data: &data, profile: &p, window, episodes, seconds, decide };
+                    let setup = EvalSetup {
+                        data: &data,
+                        profile: &p,
+                        window,
+                        episodes,
+                        seconds,
+                        decide,
+                        first_seed: evaluate::SEEDS_FROM,
+                        record: false,
+                    };
                     evaluate::evaluate(setup, range, &mut brains, &stop, move |pr| {
                         let _ = a3.emit("eval-progress", pr);
                     })
@@ -373,4 +385,101 @@ pub async fn evaluate_start(app: AppHandle, episodes: usize, seconds: f64, decid
         }
     });
     Ok(true)
+}
+
+/// Runs generations of the open model's range skill on the test range (it learns from its own
+/// best play; the champion is replaced only by a network that beats it), after the person allows
+/// it. Progress: `gen-progress`; the end: `gen-done` (the skill's description) or `gen-failed`.
+/// The range must have been started from Tools: it reports the score.
+#[tauri::command]
+pub async fn generations_start(app: AppHandle, settings: generations::GenSettings) -> Res<bool> {
+    settings.check()?;
+    let id = "yendory-range".to_string();
+    let data = data_dir(&app)?;
+    let p = profile::load(&data, &id)?;
+    let m = skills::open_model(&app)?;
+    let skill = skills::get(&app, &id)?;
+    skills::fits(&skill.spec, &p)?;
+    let minutes = settings.play_seconds() / 60.0;
+    let msg = format!(
+        "Allow {} to control the test range for {} generation{} (about {:.0} minutes of play each, plus learning)?\n\nIts candidates play in turn, then the new network and the champion. Only the range's permitted controls, only while it is in front. Ctrl+Alt+End stops it at once.",
+        m.name,
+        settings.generations,
+        if settings.generations == 1 { "" } else { "s" },
+        minutes.max(1.0)
+    );
+    if !super::ask(&app, "Run generations", &msg, "Allow") {
+        return Ok(false);
+    }
+    let live = app.state::<Live>();
+    {
+        let mut slot = live.range.lock().unwrap();
+        if alive(&mut slot).is_none() {
+            return Err("Start the test range from Tools first (2.1, Start the test range)".into());
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = live.training_stop.lock().unwrap();
+        if slot.is_some() {
+            return Err("A training is already running".into());
+        }
+        if live.running.swap(true, Ordering::AcqRel) {
+            return Err("Something is already running (actions, a recording, or play)".into());
+        }
+        *slot = Some(stop.clone());
+    }
+    let window = {
+        let pid = live.range.lock().unwrap().as_ref().map(|r| r.pid()).unwrap_or(0);
+        sys::open()
+            .and_then(|mut d| d.windows())
+            .ok()
+            .and_then(|ws| ws.into_iter().find(|w| p.matches(w) && w.pid == pid))
+            .map(|w| w.id)
+    };
+    let Some(window) = window else {
+        live.training_stop.lock().unwrap().take();
+        live.running.store(false, Ordering::Release);
+        return Err("The range's window isn't open".into());
+    };
+    *live.play_stop.lock().unwrap() = Some(stop.clone());
+    live.generations.store(true, Ordering::Release);
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let live = app2.state::<Live>();
+        let arena =
+            generations::Arena { data: &data, profile: &p, window, range: &live.range, name: m.name.clone() };
+        let (a3, a4) = (app2.clone(), app2.clone());
+        let model_id = m.id.clone();
+        let result = generations::run(
+            &arena,
+            skill,
+            settings,
+            &stop,
+            move |pr| {
+                let _ = a3.emit("gen-progress", pr);
+            },
+            move |k| skills::save(&a4, &model_id, k).map(|_| ()),
+        );
+        live.play_stop.lock().unwrap().take();
+        live.training_stop.lock().unwrap().take();
+        live.generations.store(false, Ordering::Release);
+        live.running.store(false, Ordering::Release);
+        match result {
+            Ok(k) => {
+                let _ = app2.emit("gen-done", k.spec);
+            }
+            Err(e) => {
+                let _ = app2.emit("gen-failed", e);
+            }
+        }
+    });
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn generations_stop(live: tauri::State<'_, Live>) {
+    if let Some(s) = live.training_stop.lock().unwrap().as_ref() {
+        s.store(true, Ordering::Release);
+    }
 }

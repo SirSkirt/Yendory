@@ -496,6 +496,8 @@ pub fn run() {
             live::nova::play_start,
             live::nova::play_stop,
             live::nova::evaluate_start,
+            live::nova::generations_start,
+            live::nova::generations_stop,
             live::checks::checks_run,
             live::checks::checks_stop_keys,
         ])

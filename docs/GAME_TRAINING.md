@@ -137,12 +137,13 @@ X11 it comes from XTEST, and both are skipped. Recording sends no input to the g
 
 **Checking a recording** reads every picture and rebuilds every tick's controls from the raw
 events; any disagreement, unreadable picture or time out of order is reported. The recorder ends
-on Stop, the emergency stop keys (the recording is kept), the profile's storage limit, or the
-game's window closing.
+on Stop, the emergency stop keys (the recording is kept), the game's window closing, or the disk
+refusing to take more (what was written is kept). A recording has no length limit.
 
-Size: the range at 128x72 in colour is about 1 MB a minute; a real game compresses less. Each
-profile has a storage limit; recording stops at it and nothing is deleted without the owner
-deleting it.
+Size: the range at 128x72 in colour is about 1 MB a minute; a real game compresses less. There
+is no storage limit (since Tools 0.1.6): recordings take what the disk has, and nothing is
+deleted without the owner deleting it (except the model's own play in generations that it did
+not learn from, below).
 
 ## 4. Generation 0 (imitation)
 
@@ -248,7 +249,7 @@ automatically on Linux in CI. Ravenfield follows with its own profile.
 | Phase | Delivers | Checked by |
 |---|---|---|
 | 2 Input and capture | Window list and choice, profiles with permitted controls, the safety layer, emergency stop, capture at a set size and rate | The test range receives exactly the inputs sent (automatic test on Linux); the owner's check on Windows with the range and Ravenfield |
-| 3 Demonstrations | Recording the person's play in sync, the recordings list, inspection and replay, storage limits | Replay matches what was played; tick times and inputs agree with the raw events |
+| 3 Demonstrations | Recording the person's play in sync, the recordings list, inspection and replay | Replay matches what was played; tick times and inputs agree with the raw events |
 | 4 Generation 0 | The network, gradient checks, imitation training with held-out recordings, stop and resume, live play, saving and reloading | On the test range: a model trained on demonstrations scores clearly above random play |
 | 5 Evaluation | Reward definitions per profile, evaluation episodes, reports, champion acceptance | The range's true score agrees with the screen-based rewards |
 | 6 Generations | Candidates, methods 1-5, selection, history, champions | A later generation beats generation 0 on held-out scenarios of the range |
@@ -303,8 +304,8 @@ recorder) and `live/recording.rs` (the format, reading, checking).
 
 - **2.3 Record**: choose the game and whether the recording is for training or testing (held
   out), add notes, start; Tools brings the game to the front and records until Stop or
-  Ctrl+Alt+End, showing the time, pictures, rate, size and the controls held. The profile's
-  storage limit (2.1) is shown and enforced.
+  Ctrl+Alt+End, showing the time, pictures, rate, size and the controls held. (The profile's
+  storage limit of 0.1.3 was removed in 0.1.6.)
 - **2.4 Recordings**: every recording of a game; open one to replay it (play at ¼× to 4×, step
   picture by picture, scrub), see the controls active at each picture and a timeline of every
   control and the mouse (click to jump), mark it for training or testing, edit its notes, check
@@ -429,3 +430,52 @@ tests, and end to end under Xvfb with the real Network: a Neuro model made throu
 Tools started with `--model` (as the Hub does), the skill added (the model's file becomes format
 2, its meta.json lists the skill), trained 200 steps (saved into the model), played on the range
 with the stop keys, and the phase 4 checks on the model's skill.
+
+## No limits, and generations (Tools 0.1.6)
+
+**No limits on how much is recorded or learned from.** A recording runs until it is stopped (or
+the disk is full), and a game's recordings have no storage limit. Training no longer loads every
+picture into memory (0.1.5 refused more than 3 GB of pictures): the pictures stay in the
+recordings' files and each is read and decompressed when a training step needs it, by any number
+of threads at once (`recording::Frames`, positional reads). Memory no longer grows with the
+recordings; the operating system's file cache keeps the busy ones in memory.
+
+**Generations** (2.5 Train, under the training; `live/generations.rs`): after imitation has
+taught the basics, the model goes on learning from its own play. Each generation:
+
+1. **Candidates**: the champion (the skill's accepted weights) unchanged, and copies of it with
+   random changes to every layer, growing from one candidate to the next up to the largest
+   change (5% of each layer's typical weight by default). 4 players by default.
+2. **Play**: every candidate plays the same new layouts (2 episodes of 30 s by default, layouts
+   from seed 200,000, new ones for every attempt), drawing its decisions from its
+   probabilities; the play is recorded as the model's (never as the person's).
+3. **Selection**: the game's score picks the best quarter of all the episodes (only episodes
+   that scored). The score only chooses what is learned from; it is never a network input.
+4. **Learning**: the best candidate learns from those episodes (what it did after each picture:
+   reward-filtered imitation of its own play, method 3 of section 5), with half of every batch
+   from the person's training recordings so the basics stay (300 steps by default, a new
+   optimizer).
+5. **Test**: the new network and the champion play the same layouts nobody has played (from seed
+   400,000, new ones every attempt), taking their most likely decisions. **Only a higher score
+   replaces the champion**; otherwise nothing changes. The champion's lineage counts the
+   generations it won (`generation`, `parent`, method `…, generations`).
+
+Every attempt is kept in the skill's notes (`generations`: the players' scores, the episodes
+learned from, the test, accepted or not, why it ended early) and the page shows them. The episodes
+learned from are kept as the model's play (2.4); the others are removed. Generations need the
+range started from Tools; they ask first (a native dialog), use the keyboard and mouse only
+through the safety layer, and stop with Stop or Ctrl+Alt+End (also while learning between
+episodes). After generations, imitation (Train) continues from the champion with a new optimizer;
+note that imitation accepts by held-out loss, not by play, so measure on 2.6 afterwards.
+
+**Ravenfield**: generations need the game's score, and only the range reports one. A real game's
+score has to be read from the screen first (phase 5: rewards from screen regions such as a kill
+notice or a death screen, and the owner's rating). Generations will then run on it unchanged:
+the score is the only part that knows the game.
+
+Checked: unit tests (selection, the random changes in proportion to each layer, the settings),
+an X test on the range (CI under Xvfb): one generation with two players playing, choosing,
+learning, testing and keeping the champion unless it was beaten, with only the play learned from
+kept; and `tests/learn_range.rs` now continues the trained network with generations and measures
+the champion against generation 0.
+

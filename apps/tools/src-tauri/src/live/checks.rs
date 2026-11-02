@@ -316,14 +316,11 @@ fn phase4(app: &AppHandle, game: &str) -> Res<Vec<Check>> {
                 for c in clips.iter() {
                     let n = c.targets.len();
                     for start in (0..n.saturating_sub(10)).step_by((n / 4).max(1)).take(4) {
-                        let inputs: Vec<Vec<f32>> = (start..start + 6)
-                            .map(|t| {
-                                super::policy::encode(
-                                    &skill.spec.arch,
-                                    &[&c.pictures[t.saturating_sub(1)], &c.pictures[t]],
-                                )
-                            })
-                            .collect();
+                        let mut inputs: Vec<Vec<f32>> = Vec::new();
+                        for t in start..start + 6 {
+                            let (a, b) = (c.frames.get(t.saturating_sub(1))?, c.frames.get(t)?);
+                            inputs.push(super::policy::encode(&skill.spec.arch, &[&a, &b]));
+                        }
                         let targets = (start..start + 6).map(|t| c.targets[t + 1]).collect::<Vec<_>>();
                         batch.push((inputs, targets));
                     }

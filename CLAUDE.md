@@ -31,7 +31,7 @@ Models are handed between programs through Studio's models folder and `--model <
 
 ## Version numbers
 
-Tools is at **0.1.5**. A push that changes Tools raises its last digit by one, and the last digit
+Tools is at **0.1.6**. A push that changes Tools raises its last digit by one, and the last digit
 carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
 in every place that holds it:
 

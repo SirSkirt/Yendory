@@ -210,14 +210,7 @@ fn a_person_playing_the_range_is_recorded_in_sync() {
         stop2.store(true, Ordering::Release);
     });
     let mut desk = sys::open().unwrap();
-    let setup = Setup {
-        data: &data,
-        profile: &profile,
-        window,
-        split: Split::Train,
-        notes: String::new(),
-        room: u64::MAX,
-    };
+    let setup = Setup { data: &data, profile: &profile, window, split: Split::Train, notes: String::new() };
     let info = record(setup, desk.as_mut(), rx, &stop, |_| {}).unwrap();
     person.join().unwrap();
     drop(listening);
@@ -239,5 +232,72 @@ fn a_person_playing_the_range_is_recorded_in_sync() {
     assert_ne!(first, last, "walking and turning did not change the picture");
     let events = std::fs::read_to_string(r.events_path()).unwrap();
     assert!(!events.contains("\"e\""));
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+#[test]
+fn a_generation_plays_selects_and_keeps_the_champion_unless_beaten() {
+    use std::sync::atomic::AtomicBool;
+    use yendory_tools_lib::live::generations::{self, Arena, GenSettings};
+    use yendory_tools_lib::live::policy::Size;
+    use yendory_tools_lib::live::{recording, skills};
+    if std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipped: no X11 display (run under xvfb-run)");
+        return;
+    }
+    let _one = DISPLAY.lock().unwrap_or_else(|e| e.into_inner());
+    let data = std::env::temp_dir().join(format!("tools-gen-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    let prof = range_profile();
+    let mut range = start_range(9);
+    let window = wait_for_window(&mut range, 9);
+    front(window);
+    let range = Mutex::new(Some(range));
+    let skill = skills::new_skill(&data, &prof, Size::Small, 3).unwrap();
+    let champion = skill.accepted.clone();
+    let arena = Arena { data: &data, profile: &prof, window, range: &range, name: "test".into() };
+    let settings = GenSettings {
+        generations: 1,
+        candidates: 2,
+        episodes: 1,
+        seconds: 5.0,
+        steps: 10,
+        test_episodes: 1,
+        ..GenSettings::default()
+    };
+    let mut saves = 0;
+    let mut phases = Vec::new();
+    let out = generations::run(
+        &arena,
+        skill,
+        settings,
+        &AtomicBool::new(false),
+        |p| phases.push(p.phase.clone()),
+        |_| {
+            saves += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    let tried = generations::attempts(&out);
+    assert_eq!(tried.len(), 1);
+    let a = &tried[0];
+    eprintln!("{a:?}");
+    assert_eq!(a.candidates.len(), 2);
+    assert_eq!(saves, 1);
+    assert_eq!(phases.first().map(String::as_str), Some("playing"));
+    assert_eq!(phases.last().map(String::as_str), Some("done"));
+    // Only the play learned from is kept, as the model's (never a person's).
+    let kept = recording::list(&data, &prof.id);
+    assert_eq!(kept.len(), a.elite.len());
+    assert!(kept.iter().all(|r| r.player != "person" && r.split == recording::Split::Test));
+    if a.accepted {
+        assert_eq!(out.spec.lineage.generation, 1);
+        assert_ne!(out.accepted, champion);
+    } else {
+        assert_eq!(out.spec.lineage.generation, 0);
+        assert_eq!(out.accepted, champion, "a champion that was not beaten must not change");
+    }
+    drop(range);
     let _ = std::fs::remove_dir_all(&data);
 }

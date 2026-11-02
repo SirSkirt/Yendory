@@ -117,10 +117,11 @@ pub struct Run {
     pub best: Option<Measure>,
 }
 
-/// One recording, ready to learn from or measure on.
+/// One recording, ready to learn from or measure on. Its pictures stay on disk and are read as
+/// training needs them, so there is no limit on how much can be learned from at once.
 pub struct Clip {
     pub id: String,
-    pub pictures: Vec<Vec<u8>>,
+    pub frames: recording::Frames,
     pub targets: Vec<Target>,
     /// Where each stretch (between pauses) begins.
     pub starts: Vec<bool>,
@@ -135,50 +136,58 @@ pub fn bin_of(bins: &[f32], v: f32) -> usize {
         .unwrap_or(0)
 }
 
-/// Bytes of pictures held in memory at most while training.
-const MEMORY_LIMIT: usize = 3 << 30;
-
 /// Loads the person's recordings of the game for `split` (and checks they fit the player).
 pub fn load_clips(data: &Path, info: &SkillSpec, split: Split) -> Res<Vec<Clip>> {
     let mut clips = Vec::new();
-    let mut bytes = 0usize;
     for r in
         recording::list(data, &info.game).into_iter().filter(|r| r.player == "person" && r.split == split)
     {
-        let a = &info.arch;
-        if r.width as usize != a.width
-            || r.height as usize != a.height
-            || r.channels as usize != a.channels
-            || r.keys != info.keys
-            || r.buttons.iter().map(|b| b.name()).ne(info.buttons.iter().map(String::as_str))
-        {
-            continue;
+        if let Some(c) = clip_of(data, info, &r)? {
+            clips.push(c);
         }
-        let mut reader = recording::open(data, &info.game, &r.id)?;
-        let mut clip = Clip { id: r.id.clone(), pictures: vec![], targets: vec![], starts: vec![] };
-        for i in 0..reader.ticks.len() {
-            let t = reader.ticks[i];
-            clip.pictures.push(reader.frame(i)?);
-            bytes += a.width * a.height * a.channels;
-            if bytes > MEMORY_LIMIT {
-                return Err("The recordings are too large to learn from at once (more than 3 GB of pictures): mark some as not for training, or use a smaller picture".into());
-            }
-            let bins = &a.mouse_bins;
-            clip.targets.push(Target {
-                keys: t.keys,
-                buttons: t.buttons,
-                mx: if bins.is_empty() { 0 } else { bin_of(bins, t.dx) },
-                my: if bins.is_empty() { 0 } else { bin_of(bins, t.dy) },
-            });
-            clip.starts.push(i == 0 || t.flags & AFTER_GAP != 0);
-        }
-        clips.push(clip);
     }
     Ok(clips)
 }
 
+/// Loads the given recordings (of anyone, the model's own play included) that fit the player.
+pub fn load_recordings(data: &Path, info: &SkillSpec, ids: &[String]) -> Res<Vec<Clip>> {
+    let mut clips = Vec::new();
+    for r in recording::list(data, &info.game).into_iter().filter(|r| ids.contains(&r.id)) {
+        if let Some(c) = clip_of(data, info, &r)? {
+            clips.push(c);
+        }
+    }
+    Ok(clips)
+}
+
+/// A recording as a clip, if its picture and controls fit the player.
+fn clip_of(data: &Path, info: &SkillSpec, r: &recording::Info) -> Res<Option<Clip>> {
+    let a = &info.arch;
+    if r.width as usize != a.width
+        || r.height as usize != a.height
+        || r.channels as usize != a.channels
+        || r.keys != info.keys
+        || r.buttons.iter().map(|b| b.name()).ne(info.buttons.iter().map(String::as_str))
+    {
+        return Ok(None);
+    }
+    let reader = recording::open(data, &info.game, &r.id)?;
+    let mut clip = Clip { id: r.id.clone(), frames: reader.frames()?, targets: vec![], starts: vec![] };
+    let bins = &a.mouse_bins;
+    for (i, t) in reader.ticks.iter().enumerate() {
+        clip.targets.push(Target {
+            keys: t.keys,
+            buttons: t.buttons,
+            mx: if bins.is_empty() { 0 } else { bin_of(bins, t.dx) },
+            my: if bins.is_empty() { 0 } else { bin_of(bins, t.dy) },
+        });
+        clip.starts.push(i == 0 || t.flags & AFTER_GAP != 0);
+    }
+    Ok(Some(clip))
+}
+
 /// The input for the picture at `t`: the last `frames` pictures of its stretch.
-fn input_at(info: &SkillSpec, clip: &Clip, t: usize) -> Vec<f32> {
+pub(crate) fn input_at(info: &SkillSpec, clip: &Clip, t: usize) -> Res<Vec<f32>> {
     let k = info.arch.frames;
     let mut idx = vec![t; k];
     let mut cur = t;
@@ -188,8 +197,16 @@ fn input_at(info: &SkillSpec, clip: &Clip, t: usize) -> Vec<f32> {
             cur -= 1;
         }
     }
-    let pics: Vec<&[u8]> = idx.iter().map(|&i| clip.pictures[i].as_slice()).collect();
-    encode(&info.arch, &pics)
+    let mut pics: Vec<(usize, Vec<u8>)> = Vec::with_capacity(k);
+    for &i in &idx {
+        let pic = match pics.iter().find(|p| p.0 == i) {
+            Some(p) => p.1.clone(),
+            None => clip.frames.get(i)?,
+        };
+        pics.push((i, pic));
+    }
+    let refs: Vec<&[u8]> = pics.iter().map(|p| p.1.as_slice()).collect();
+    Ok(encode(&info.arch, &refs))
 }
 
 /// Positions whose target (`offset` ticks on) is in the same stretch.
@@ -251,7 +268,7 @@ pub fn measure(
     freq: &Frequencies,
     offset: usize,
     step: u64,
-) -> Measure {
+) -> Res<Measure> {
     let a = &p.arch;
     let goal = vec![0f32; a.goal];
     let names: Vec<String> = info.keys.iter().chain(info.buttons.iter()).cloned().collect();
@@ -268,7 +285,7 @@ pub fn measure(
             if clip.starts[t] {
                 m = vec![0f32; a.memory];
             }
-            let cache = p.forward(&input_at(info, clip, t), &m, &goal);
+            let cache = p.forward(&input_at(info, clip, t)?, &m, &goal);
             m = cache.m.clone();
             if !valid(clip, t, offset) {
                 continue;
@@ -329,7 +346,7 @@ pub fn measure(
         }
     }
     let d = n.max(1.0);
-    Measure {
+    Ok(Measure {
         step,
         ticks: n as u64,
         loss: loss / d,
@@ -348,7 +365,7 @@ pub fn measure(
                 f1: if tp[i] == 0.0 { 0.0 } else { 2.0 * tp[i] / (2.0 * tp[i] + fp[i] + fneg[i]) },
             })
             .collect(),
-    }
+    })
 }
 
 /// Progress of a training run.
@@ -361,6 +378,100 @@ pub struct Progress {
     pub measure: Option<Measure>,
     /// Whether this measurement was the best yet (and its weights were kept).
     pub accepted: bool,
+}
+
+/// Where sequences can start: every position with `length` usable positions after it in its
+/// stretch (or, when no stretch is that long, every usable position).
+pub(crate) fn sequence_starts(clips: &[Clip], length: usize, offset: usize) -> Vec<(usize, usize)> {
+    let mut starts: Vec<(usize, usize)> = Vec::new();
+    for (ci, c) in clips.iter().enumerate() {
+        for t in 0..c.targets.len() {
+            let ok = (t..t + length)
+                .all(|u| u < c.targets.len() && valid(c, u, offset) && (u == t || !c.starts[u]));
+            if ok {
+                starts.push((ci, t));
+            }
+        }
+    }
+    if starts.is_empty() {
+        for (ci, c) in clips.iter().enumerate() {
+            for t in 0..c.targets.len() {
+                if valid(c, t, offset) {
+                    starts.push((ci, t));
+                }
+            }
+        }
+    }
+    starts
+}
+
+/// Positions usable for learning in these clips.
+pub(crate) fn usable(clips: &[Clip], offset: usize) -> usize {
+    clips.iter().map(|c| (0..c.targets.len()).filter(|&t| valid(c, t, offset)).count()).sum()
+}
+
+/// One learning step on a batch of sequences (clip, start, offset), shared out over `threads`;
+/// returns the batch's mean loss per sequence.
+pub(crate) fn learn_step(
+    policy: &mut Policy,
+    adam: &mut Adam,
+    info: &SkillSpec,
+    batch: &[(&Clip, usize, usize)],
+    settings: &Settings,
+    threads: usize,
+) -> Res<f64> {
+    let n = policy.parameters();
+    let scale = 1.0 / batch.len().max(1) as f32;
+    let length = settings.length;
+    let parts: Vec<Res<(Vec<f32>, Loss)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = batch
+            .chunks(batch.len().div_ceil(threads.max(1)).max(1))
+            .map(|chunk| {
+                let policy = &*policy;
+                s.spawn(move || -> Res<(Vec<f32>, Loss)> {
+                    let mut g = vec![0f32; n];
+                    let mut total = Loss::default();
+                    for &(c, t0, offset) in chunk {
+                        let mut inputs = Vec::new();
+                        let mut targets = Vec::new();
+                        for t in t0..t0 + length {
+                            if t >= c.targets.len() || !valid(c, t, offset) || (t > t0 && c.starts[t]) {
+                                break;
+                            }
+                            inputs.push(input_at(info, c, t)?);
+                            targets.push(c.targets[t + offset]);
+                        }
+                        total += policy.sequence_loss(&inputs, &targets, &mut g, scale);
+                    }
+                    Ok((g, total))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("A training thread failed".into())))
+            .collect()
+    });
+    let mut g = vec![0f32; n];
+    let mut loss = Loss::default();
+    for part in parts {
+        let (pg, pl) = part?;
+        for (a, b) in g.iter_mut().zip(&pg) {
+            *a += b;
+        }
+        loss += pl;
+    }
+    // Clip the gradient's length at 1.
+    let norm = g.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>().sqrt();
+    if !norm.is_finite() {
+        return Err("Training went wrong (the gradient is not a number); try a lower learning rate".into());
+    }
+    if norm > 1.0 {
+        let k = (1.0 / norm) as f32;
+        g.iter_mut().for_each(|v| *v *= k);
+    }
+    adam.step(policy, &g, settings.learning_rate, settings.weight_decay);
+    Ok(loss.total / batch.len().max(1) as f64)
 }
 
 /// The training runs recorded in a skill's notes.
@@ -386,9 +497,7 @@ pub fn train(
     super::skills::fits(&skill.spec, profile)?;
     let clips = load_clips(data, &skill.spec, Split::Train)?;
     let held = load_clips(data, &skill.spec, Split::Test)?;
-    let usable: usize =
-        clips.iter().map(|c| (0..c.targets.len()).filter(|&t| valid(c, t, settings.offset)).count()).sum();
-    if usable < settings.length * 4 {
+    if usable(&clips, settings.offset) < settings.length * 4 {
         return Err("There is not enough of your play recorded for training (record some on 2.3, marked for training)".into());
     }
     let freq = frequencies(&skill.spec, &clips);
@@ -415,94 +524,29 @@ pub fn train(
     };
     let fixed = skill.spec.clone();
     let measure_now = |p: &Policy, step: u64| {
-        (!held.is_empty()).then(|| measure(p, &fixed, &held, &freq, settings.offset, step))
+        (!held.is_empty()).then(|| measure(p, &fixed, &held, &freq, settings.offset, step)).transpose()
     };
-    let first = measure_now(&policy, skill.spec.steps);
+    let first = measure_now(&policy, skill.spec.steps)?;
     // The accepted weights stand until a measurement beats them (on this run's held-out set).
     let mut best_loss = first.as_ref().map(|m| m.loss).unwrap_or(f64::INFINITY);
     run.first = first.clone();
     progress(&Progress { step: 0, steps: settings.steps, train_loss: 0.0, measure: first, accepted: false });
 
-    // Sequence starts: every position with `length` valid positions after it in its stretch.
-    let mut starts: Vec<(usize, usize)> = Vec::new();
-    for (ci, c) in clips.iter().enumerate() {
-        for t in 0..c.targets.len() {
-            let ok = (t..t + settings.length)
-                .all(|u| u < c.targets.len() && valid(c, u, settings.offset) && (u == t || !c.starts[u]));
-            if ok {
-                starts.push((ci, t));
-            }
-        }
-    }
-    // Short stretches: sequences as long as they can be.
-    if starts.is_empty() {
-        for (ci, c) in clips.iter().enumerate() {
-            for t in 0..c.targets.len() {
-                if valid(c, t, settings.offset) {
-                    starts.push((ci, t));
-                }
-            }
-        }
-    }
+    let starts = sequence_starts(&clips, settings.length, settings.offset);
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
     let mut rng = Rng::new(settings.seed ^ skill.spec.steps);
     let mut recent = std::collections::VecDeque::new();
     for step in 1..=settings.steps {
-        let batch: Vec<(usize, usize)> =
-            (0..settings.batch).map(|_| starts[rng.below(starts.len())]).collect();
-        let n = policy.parameters();
-        let scale = 1.0 / settings.batch as f32;
-        let parts: Vec<(Vec<f32>, Loss)> = std::thread::scope(|s| {
-            let handles: Vec<_> = batch
-                .chunks(batch.len().div_ceil(threads))
-                .map(|chunk| {
-                    let (policy, clips, info) = (&policy, &clips, &fixed);
-                    let (length, offset) = (settings.length, settings.offset);
-                    s.spawn(move || {
-                        let mut g = vec![0f32; n];
-                        let mut total = Loss::default();
-                        for &(ci, t0) in chunk {
-                            let c = &clips[ci];
-                            let mut inputs = Vec::new();
-                            let mut targets = Vec::new();
-                            for t in t0..t0 + length {
-                                if t >= c.targets.len() || !valid(c, t, offset) || (t > t0 && c.starts[t]) {
-                                    break;
-                                }
-                                inputs.push(input_at(info, c, t));
-                                targets.push(c.targets[t + offset]);
-                            }
-                            total += policy.sequence_loss(&inputs, &targets, &mut g, scale);
-                        }
-                        (g, total)
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-        let mut g = vec![0f32; n];
-        let mut loss = Loss::default();
-        for (pg, pl) in parts {
-            for (a, b) in g.iter_mut().zip(&pg) {
-                *a += b;
-            }
-            loss += pl;
-        }
-        // Clip the gradient's length at 1.
-        let norm = g.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>().sqrt();
-        if !norm.is_finite() {
-            return Err(
-                "Training went wrong (the gradient is not a number); try a lower learning rate".into()
-            );
-        }
-        if norm > 1.0 {
-            let k = (1.0 / norm) as f32;
-            g.iter_mut().for_each(|v| *v *= k);
-        }
-        adam.step(&mut policy, &g, settings.learning_rate, settings.weight_decay);
+        let batch: Vec<(&Clip, usize, usize)> = (0..settings.batch)
+            .map(|_| {
+                let (ci, t) = starts[rng.below(starts.len())];
+                (&clips[ci], t, settings.offset)
+            })
+            .collect();
+        let loss = learn_step(&mut policy, &mut adam, &fixed, &batch, &settings, threads)?;
         skill.spec.steps += 1;
         run.steps_done = step;
-        recent.push_back(loss.total / settings.batch as f64);
+        recent.push_back(loss);
         if recent.len() > 50 {
             recent.pop_front();
         }
@@ -510,7 +554,7 @@ pub fn train(
         let stopping = stop.load(Ordering::Acquire);
         let last = step == settings.steps || stopping;
         if step % settings.measure_every == 0 || last {
-            let m = measure_now(&policy, skill.spec.steps);
+            let m = measure_now(&policy, skill.spec.steps)?;
             let accepted = match &m {
                 Some(m) if m.loss < best_loss => {
                     best_loss = m.loss;

@@ -42,8 +42,6 @@ pub struct Profile {
     pub mouse_scale: f32,
     pub capture: Capture,
     pub limits: Limits,
-    /// The most its recordings may take on disk (megabytes).
-    pub storage_mb: u64,
     pub notes: String,
 }
 
@@ -60,7 +58,6 @@ impl Default for Profile {
             mouse_scale: 1.0,
             capture: Capture::default(),
             limits: Limits::default(),
-            storage_mb: 4096,
             notes: String::new(),
         }
     }
@@ -146,7 +143,6 @@ impl Profile {
         if !(1..=5000).contains(&l.max_mouse_step) {
             return Err("The largest mouse step: 1 to 5,000 units".into());
         }
-        self.storage_mb = self.storage_mb.clamp(16, 1 << 20);
         Ok(self)
     }
 

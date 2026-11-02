@@ -167,7 +167,6 @@
         <div class="field-row"><label for="pfRate">Actions a second</label><input id="pfRate" type="number" min="1" max="200" class="narrow-num"><span class="note">presses and mouse moves; releases are never limited</span></div>
         <div class="field-row"><label for="pfStep">Largest mouse step</label><input id="pfStep" type="number" min="1" max="5000" class="narrow-num"><span class="note">units in one move</span></div>
         <p class="note">Input goes only to the game while it is in front: when another window comes forward, every control is released and input pauses.</p>
-        <div class="field-row"><label for="pfStorage">Storage for recordings</label><input id="pfStorage" type="number" min="16" max="1048576" class="narrow-num"><span class="note">MB; recording stops when the game's recordings reach it</span></div>
         <div class="actions"><button type="submit" class="primary" id="pfSave">Save the profile</button><span class="note" id="pfSaved"></span></div>
       </form>
       <aside class="live-side">
@@ -220,7 +219,6 @@
       <label class="check-inline"><input type="radio" name="recSplit" value="test"> Testing: held out, never trained on</label>
     </div>
     <div class="field-row"><label for="recNotes">Notes</label><input id="recNotes" maxlength="200" placeholder="what you did, e.g. walking to targets and shooting"></div>
-    <div class="meter" id="recStorageMeter"><div id="recStorageBar"></div></div>
     <p class="note" id="recStorage">—</p>
     <div class="actions"><button type="button" class="primary" id="recStart">Start recording</button><button type="button" id="recStopBtn" hidden>Stop recording</button></div>
     <p class="note">Tools brings the game to the front and records until you press <span class="mono">Ctrl+Alt+End</span> (the recording is kept) or come back here and press Stop. Recording never sends any input to the game.</p>
@@ -329,6 +327,27 @@
       <canvas id="trChart" class="timeline" height="160"></canvas>
       <p class="note">Blue: loss on your training play. Dark: loss on held-out recordings (the accepted weights are the lowest). Dashed: the frequency baseline on the same held-out recordings. Lower is better.</p>
       <div id="trMeasure"></div>
+
+      <div id="genPanel">
+        <h3>Generations: learning from its own play</h3>
+        <p class="note">Imitation teaches the basics from your play. Generations go on from there: each generation, the champion (the accepted weights) and copies of it with small random changes play the same new layouts; the game's score picks the best episodes; the best player learns from them, mixed with your recordings so the basics stay; then the new network and the champion play layouts nobody has played. Only a better score makes the new network the champion; a generation that does worse changes nothing. The score only picks which play to learn from: the network never sees it.</p>
+        <p class="note" id="genWhere"></p>
+        <div id="genForm">
+          <div class="field-row"><label for="gnCount">Generations</label><input id="gnCount" type="number" min="1" max="1000" value="10" class="narrow-num"><label for="gnPlayers">Players</label><input id="gnPlayers" type="number" min="1" max="8" value="4" class="narrow-num"><span class="note">the champion unchanged, and copies with growing changes</span></div>
+          <div class="field-row"><label for="gnEpisodes">Episodes each</label><input id="gnEpisodes" type="number" min="1" max="10" value="2" class="narrow-num"><label for="gnSeconds">Seconds</label><input id="gnSeconds" type="number" min="5" max="55" value="30" class="narrow-num"><label for="gnTest">Test episodes</label><input id="gnTest" type="number" min="1" max="20" value="4" class="narrow-num"></div>
+          <div class="field-row"><label for="gnNoise">Largest change</label><input id="gnNoise" type="number" min="0" max="100" step="0.5" value="5" class="narrow-num"><span class="note">% of each layer's typical weight</span><label for="gnElite">Learn from the best</label><input id="gnElite" type="number" min="1" max="100" value="25" class="narrow-num"><span class="note">% of the episodes (only those that scored)</span></div>
+          <div class="field-row"><label for="gnSteps">Learning steps</label><input id="gnSteps" type="number" min="1" max="100000" value="300" class="narrow-num"><label for="gnRate">Learning rate</label><input id="gnRate" type="number" min="0.000001" max="0.1" step="0.0001" value="0.0003" class="narrow-num"><label for="gnDemos">Your play in each batch</label><input id="gnDemos" type="number" min="0" max="95" value="50" class="narrow-num"><span class="note">%</span></div>
+          <p class="note" id="gnTime"></p>
+          <div class="actions"><button type="button" class="primary" id="gnStart">Run generations</button><button type="button" id="gnStop" hidden>Stop (the champion stays)</button></div>
+          <div class="meter" id="gnMeter" hidden><div id="gnBar"></div></div>
+          <p class="note" id="gnNote"></p>
+        </div>
+        <table class="ledger" id="genTable" hidden>
+          <thead><tr><th class="num">Attempt</th><th>For generation</th><th>Players' hits an episode</th><th>Learned from</th><th class="num">Champion</th><th class="num">New network</th><th>Result</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="note">Champion and new network: hits a minute in the test. Measure on 2.6 to see the champion beside the untrained network and the frequency baseline. The episodes learned from are kept as its play (2.4); the rest are removed.</p>
+      </div>
     </div>
   </section>
 

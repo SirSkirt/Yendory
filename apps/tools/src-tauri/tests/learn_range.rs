@@ -6,9 +6,11 @@
 //! ordinary recorder (listening to XTEST, which only tests may). The network then learns from
 //! those recordings alone (pictures and controls), and is measured on layouts it never saw
 //! against the untrained network and the frequency baseline. The teacher never plays during the
-//! measurement and nothing of it exists outside this test.
+//! measurement and nothing of it exists outside this test. Then generations: the network goes on
+//! learning from its own best play on the range (the teacher takes no part), and the champion
+//! that results is measured against generation 0.
 //!
-//! Long (about twelve minutes, in real time): run it on purpose, under an X display:
+//! Long (about forty minutes, in real time): run it on purpose, under an X display:
 //! `xvfb-run -a -s "-screen 0 1920x1080x24" cargo test --release --test learn_range -- --ignored --nocapture`
 #![cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +19,7 @@ use std::time::{Duration, Instant};
 use yendory_tools_lib::live::autoplay::{Brain, Decide};
 use yendory_tools_lib::live::controls::{Button, Control};
 use yendory_tools_lib::live::evaluate::{evaluate, EvalSetup};
+use yendory_tools_lib::live::generations::{self, Arena, GenSettings};
 use yendory_tools_lib::live::policy::{Policy, Size};
 use yendory_tools_lib::live::profile::{self, range_profile};
 use yendory_tools_lib::live::record::{record, Setup};
@@ -91,7 +94,7 @@ fn teach(range: &Mutex<RangeProcess>, window: u64, seconds: f64, stop: &AtomicBo
 }
 
 #[test]
-#[ignore = "about twelve minutes in real time; run on purpose (see the top of the file)"]
+#[ignore = "about forty minutes in real time; run on purpose (see the top of the file)"]
 fn a_network_learns_to_hit_targets_from_recorded_play() {
     assert!(std::env::var_os("DISPLAY").is_some(), "needs an X display");
     let data = std::env::temp_dir().join(format!("tools-learn-{}", std::process::id()));
@@ -127,14 +130,8 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
             s2.store(true, Ordering::Release);
         });
         let mut desk = sys::open().unwrap();
-        let setup = Setup {
-            data: &data,
-            profile: &prof,
-            window,
-            split,
-            notes: format!("teacher, seed {seed}"),
-            room: u64::MAX,
-        };
+        let setup =
+            Setup { data: &data, profile: &prof, window, split, notes: format!("teacher, seed {seed}") };
         let info = record(setup, desk.as_mut(), rx, &stop, |_| {}).unwrap();
         teacher.join().unwrap();
         drop(listening);
@@ -195,8 +192,16 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
         ("untrained".to_string(), Brain::net(untrained)),
         ("frequencies".to_string(), Brain::Frequencies { freq, bins: trained.spec.arch.mouse_bins.clone() }),
     ];
-    let setup =
-        EvalSetup { data: &data, profile: &prof, window, episodes: 4, seconds: 20.0, decide: Decide::Likely };
+    let setup = EvalSetup {
+        data: &data,
+        profile: &prof,
+        window,
+        episodes: 4,
+        seconds: 20.0,
+        decide: Decide::Likely,
+        first_seed: yendory_tools_lib::live::evaluate::SEEDS_FROM,
+        record: false,
+    };
     let rows = {
         let mut r = range.lock().unwrap();
         evaluate(setup, &mut r, &mut brains, &AtomicBool::new(false), |p| eprintln!("{p:?}")).unwrap()
@@ -212,5 +217,60 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
     }
     assert!(rows[0].hits_per_minute > rows[1].hits_per_minute, "trained vs untrained");
     assert!(rows[0].hits_per_minute > rows[2].hits_per_minute, "trained vs frequencies");
+
+    // Generations: it goes on learning from its own best play (the teacher takes no part).
+    let gen0 = trained.policy().unwrap();
+    let range = Mutex::new(Some(Arc::try_unwrap(range).ok().unwrap().into_inner().unwrap()));
+    let arena = Arena { data: &data, profile: &prof, window, range: &range, name: "nova".into() };
+    let settings = GenSettings { generations: 4, episodes: 2, seconds: 20.0, ..GenSettings::default() };
+    let t0 = Instant::now();
+    let champion = generations::run(
+        &arena,
+        trained,
+        settings,
+        &AtomicBool::new(false),
+        |p| {
+            if p.phase == "done" {
+                eprintln!("generation {} of {}: {}", p.run, p.of, p.detail);
+            }
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    eprintln!("generations took {:.0} s", t0.elapsed().as_secs_f64());
+    for a in generations::attempts(&champion) {
+        eprintln!(
+            "attempt {}: players {:?}, learned from {:?}, champion {:.1} vs new {:.1}, accepted {} {}",
+            a.attempt, a.candidates, a.elite, a.champion_score, a.child_score, a.accepted, a.note
+        );
+    }
+    // The champion after generations against generation 0, on the measuring layouts.
+    let mut pair = vec![
+        (format!("generation {}", champion.spec.lineage.generation), Brain::net(champion.policy().unwrap())),
+        ("generation 0".to_string(), Brain::net(gen0)),
+    ];
+    let setup = EvalSetup {
+        data: &data,
+        profile: &prof,
+        window,
+        episodes: 8,
+        seconds: 20.0,
+        decide: Decide::Likely,
+        first_seed: yendory_tools_lib::live::evaluate::SEEDS_FROM,
+        record: false,
+    };
+    let rows = {
+        let mut slot = range.lock().unwrap();
+        evaluate(setup, slot.as_mut().unwrap(), &mut pair, &AtomicBool::new(false), |_| {}).unwrap()
+    };
+    for r in &rows {
+        eprintln!(
+            "{}: {:.1} hits a minute, {:.1} shots a minute, episodes {:?}",
+            r.who,
+            r.hits_per_minute,
+            r.shots_per_minute,
+            r.episodes.iter().map(|e| e.hits).collect::<Vec<_>>()
+        );
+    }
     let _ = std::fs::remove_dir_all(&data);
 }

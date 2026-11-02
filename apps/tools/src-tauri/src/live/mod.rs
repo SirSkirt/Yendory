@@ -4,6 +4,7 @@ pub mod autoplay;
 pub mod checks;
 pub mod controls;
 pub mod evaluate;
+pub mod generations;
 pub mod nova;
 pub mod player;
 pub mod policy;
@@ -146,8 +147,10 @@ pub struct Live {
     recording_stop: Mutex<Option<Arc<AtomicBool>>>,
     /// Ends the training running (one at a time).
     training_stop: Mutex<Option<Arc<AtomicBool>>>,
-    /// Ends a network's play or an evaluation.
+    /// Ends a network's play, an evaluation, or generations.
     play_stop: Mutex<Option<Arc<AtomicBool>>>,
+    /// Whether generations are running (they hold both stops above).
+    generations: AtomicBool,
 }
 
 impl Live {
@@ -160,6 +163,10 @@ impl Live {
     /// The emergency stop: everything held is released and everything running ends.
     pub fn emergency_stop(&self) {
         STOPS.fetch_add(1, Ordering::AcqRel);
+        // Play that is between episodes (generations learning) must not start again.
+        if let Some(s) = self.play_stop.lock().unwrap().as_ref() {
+            s.store(true, Ordering::Release);
+        }
         let active = self.active.lock().unwrap().clone();
         if let Some(c) = active {
             c.lock().unwrap().release_all("the emergency stop was pressed");
@@ -430,11 +437,6 @@ type Prepared = (Box<dyn sys::Desktop>, u64, std::sync::mpsc::Receiver<sys::Hear
 pub async fn record_start(app: AppHandle, id: String, split: recording::Split, notes: String) -> Res<()> {
     let data = data_dir(&app)?;
     let p = profile::load(&data, &id)?;
-    let used = recording::usage(&data, &p.id);
-    let limit = p.storage_mb * 1024 * 1024;
-    if used >= limit {
-        return Err(format!("The game's recordings already use its storage limit ({} MB): delete some, or raise the limit in its profile", p.storage_mb));
-    }
     let live = app.state::<Live>();
     if live.running.swap(true, Ordering::AcqRel) {
         return Err("Something is already running (actions or a recording)".into());
@@ -465,7 +467,6 @@ pub async fn record_start(app: AppHandle, id: String, split: recording::Split, n
             window,
             split,
             notes: notes.chars().take(2000).collect(),
-            room: limit.saturating_sub(used),
         };
         let a3 = app2.clone();
         let result = record::record(setup, desk.as_mut(), rx, &stop, move |s| {
@@ -499,18 +500,13 @@ pub fn record_stop(live: tauri::State<'_, Live>) {
 pub struct RecordingList {
     recordings: Vec<recording::Info>,
     used_bytes: u64,
-    limit_bytes: u64,
 }
 
 #[tauri::command]
 pub async fn recordings(app: AppHandle, id: String) -> Res<RecordingList> {
     let data = data_dir(&app)?;
-    let p = profile::load(&data, &id)?;
-    Ok(RecordingList {
-        recordings: recording::list(&data, &id),
-        used_bytes: recording::usage(&data, &id),
-        limit_bytes: p.storage_mb * 1024 * 1024,
-    })
+    profile::load(&data, &id)?;
+    Ok(RecordingList { recordings: recording::list(&data, &id), used_bytes: recording::usage(&data, &id) })
 }
 
 /// A recording's ticks, as parallel arrays for the timeline (keys split in two 32-bit halves).

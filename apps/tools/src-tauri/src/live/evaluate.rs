@@ -30,6 +30,9 @@ pub struct Episode {
     pub mouse_x: f64,
     /// Straight-line distance from the start (cells).
     pub moved: f64,
+    /// The recording of this episode, if it was recorded (as the decider's play).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +67,10 @@ pub struct EvalSetup<'a> {
     pub episodes: usize,
     pub seconds: f64,
     pub decide: Decide,
+    /// The first episode's layout (the others follow it).
+    pub first_seed: u64,
+    /// Record every episode as the decider's play (never as a person's).
+    pub record: bool,
 }
 
 /// Plays every episode with every decider (episode by episode, so all meet the same layouts in
@@ -86,7 +93,7 @@ pub fn evaluate(
         })
         .collect();
     'all: for e in 0..s.episodes {
-        let seed = SEEDS_FROM + e as u64;
+        let seed = s.first_seed + e as u64;
         for (bi, (who, brain)) in brains.iter_mut().enumerate() {
             if stop.load(Ordering::Acquire) {
                 break 'all;
@@ -114,7 +121,7 @@ pub fn evaluate(
                 profile: s.profile,
                 window: s.window,
                 decide: s.decide,
-                record_as: None,
+                record_as: s.record.then(|| who.clone()),
                 seconds: Some(s.seconds),
                 seed: seed ^ bi as u64,
             };
@@ -132,6 +139,7 @@ pub fn evaluate(
                 presses: (num(&after, "presses") - num(&before, "presses")).max(0.0) as u64,
                 mouse_x: num(&after, "mouseX") - num(&before, "mouseX"),
                 moved: (num(&after, "x") - num(&before, "x")).hypot(num(&after, "y") - num(&before, "y")),
+                recording: played.recording.clone(),
             };
             progress(&EvalProgress {
                 who: who.clone(),

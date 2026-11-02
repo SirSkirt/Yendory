@@ -323,6 +323,69 @@ impl Reader {
     pub fn events_path(&self) -> PathBuf {
         self.dir.join("events.jsonl")
     }
+
+    /// The recording's pictures, read from disk as they are needed (any number of threads at
+    /// once), so training holds no more of them in memory than it is using.
+    pub fn frames(&self) -> Res<Frames> {
+        Ok(Frames {
+            file: self.frames.try_clone().map_err(|e| e.to_string())?,
+            spans: self.ticks.iter().map(|t| (t.offset, t.len)).collect(),
+            size: (self.info.width * self.info.height * self.info.channels as u32) as usize,
+        })
+    }
+}
+
+/// A recording's pictures on disk: each read at its own position, so threads can share it.
+pub struct Frames {
+    file: File,
+    spans: Vec<(u64, u32)>,
+    size: usize,
+}
+
+impl Frames {
+    pub fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+
+    /// Picture `i`, uncompressed.
+    pub fn get(&self, i: usize) -> Res<Vec<u8>> {
+        let (offset, len) = *self.spans.get(i).ok_or("No such picture")?;
+        let mut packed = vec![0u8; len as usize];
+        read_at(&self.file, &mut packed, offset).map_err(|_| "The picture is cut short".to_string())?;
+        let mut out = Vec::with_capacity(self.size);
+        DeflateDecoder::new(&packed[..])
+            .read_to_end(&mut out)
+            .map_err(|_| "The picture is damaged".to_string())?;
+        if out.len() != self.size {
+            return Err(format!("Picture {i} has {} bytes, not {}", out.len(), self.size));
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(unix)]
+fn read_at(f: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, offset)
+}
+
+#[cfg(windows)]
+fn read_at(f: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        match std::os::windows::fs::FileExt::seek_read(f, buf, offset) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// What checking a recording found.
