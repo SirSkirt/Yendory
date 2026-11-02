@@ -89,6 +89,8 @@ pub fn record(
     let mut active: BTreeSet<String> = BTreeSet::new();
     let (mut dx, mut dy) = (0f64, 0f64);
     let mut pending: VecDeque<Heard> = VecDeque::new();
+    // The time of the last tick written: an input heard after it but from before it is late.
+    let mut written_us: Option<u64> = None;
     let mut was_in_front = false;
     let mut paused_since: Option<Instant> = Some(start);
     let mut paused = Duration::ZERO;
@@ -128,23 +130,34 @@ pub fn record(
         // also written down and counts for this tick.
         while pending.front().is_some_and(|(t, _)| *t <= now) {
             let (t, input) = pending.pop_front().unwrap();
+            // Heard only after its tick was written (the system was slow to pass it on): it
+            // counts in this tick, and its line says so: the time it counts at, and when it
+            // happened (`late`), so checking rebuilds every tick as recorded.
+            let happened = us(t);
+            let at = match written_us {
+                Some(w) if happened <= w => w + 1,
+                _ => happened,
+            };
             let line = match input {
                 Input::Key { key, down } if p.keys.iter().any(|k| k == key) => {
                     update(&mut held, &mut active, key, down);
-                    Some(control_line(us(t), "k", key, down))
+                    Some(control_line(at, "k", key, down))
                 }
                 Input::Button { button, down } if p.buttons.contains(&button) => {
                     update(&mut held, &mut active, button.name(), down);
-                    Some(control_line(us(t), "b", button.name(), down))
+                    Some(control_line(at, "b", button.name(), down))
                 }
                 Input::Motion { dx: x, dy: y } if p.mouse => {
                     dx += x;
                     dy += y;
-                    Some(motion_line(us(t), x, y))
+                    Some(motion_line(at, x, y))
                 }
                 _ => None,
             };
-            if let (Some(line), true) = (line, in_front && was_in_front) {
+            if let (Some(mut line), true) = (line, in_front && was_in_front) {
+                if at != happened {
+                    line["late"] = happened.into();
+                }
                 w.event(&line)?;
             }
         }
@@ -216,6 +229,7 @@ pub fn record(
             // Usually a full disk: what was written so far is kept.
             break format!("the recording could not be written any further ({e})");
         }
+        written_us = Some(us(now));
         active = held.clone();
         dx = 0.0;
         dy = 0.0;
@@ -333,6 +347,55 @@ mod tests {
         assert_eq!(r.ticks.iter().filter(|t| t.flags & AFTER_GAP != 0).count(), 2);
         let events = std::fs::read_to_string(r.events_path()).unwrap();
         assert!(!events.contains("\"e\""), "a key outside the profile was written down");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn an_input_heard_after_its_tick_counts_in_the_next_and_checks_out() {
+        let data = std::env::temp_dir().join(format!("tools-record-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let mut profile = crate::live::profile::range_profile();
+        profile.capture.width = 16;
+        profile.capture.height = 9;
+        profile.capture.fps = 50;
+        let fake = Fake::default();
+        *fake.front.lock().unwrap() = true;
+        let (tx, rx) = mpsc::channel();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        // Inputs that happened 100 ms (five ticks) before they are passed on: a mouse movement,
+        // then a click (down and up), as a slow system delivers them.
+        let person = std::thread::spawn(move || {
+            let at = |ms| std::thread::sleep(Duration::from_millis(ms));
+            let late = |i: Input| tx.send((Instant::now() - Duration::from_millis(100), i)).unwrap();
+            at(200);
+            late(Input::Motion { dx: 30.0, dy: 0.0 });
+            at(100);
+            late(Input::Button { button: Button::Left, down: true });
+            late(Input::Button { button: Button::Left, down: false });
+            at(100);
+            stop2.store(true, Ordering::Release);
+        });
+        let mut desk = fake.clone();
+        let setup =
+            Setup { data: &data, profile: &profile, window: 1, split: Split::Train, notes: "t".into() };
+        let info = record(setup, &mut desk, rx, &stop, |_| {}).unwrap();
+        person.join().unwrap();
+        let v = validate(&data, &profile.id, &info.id).unwrap();
+        assert!(v.ok, "{v:?}");
+        // Nothing is lost: the movement and the click are each in exactly one tick.
+        assert!((v.mouse_x - 30.0).abs() < 1e-9, "{v:?}");
+        assert_eq!(v.active_ticks.iter().find(|x| x.0 == "left").unwrap().1, 1, "{v:?}");
+        // Their lines keep when they happened.
+        let r = open(&data, &profile.id, &info.id).unwrap();
+        let events = std::fs::read_to_string(r.events_path()).unwrap();
+        let lines: Vec<serde_json::Value> =
+            events.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let late: Vec<&serde_json::Value> = lines.iter().filter(|l| l.get("late").is_some()).collect();
+        assert_eq!(late.len(), 3, "{events}");
+        for l in late {
+            assert!(l["late"].as_u64().unwrap() < l["t"].as_u64().unwrap(), "{l}");
+        }
         let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -135,6 +135,11 @@ front: switching away pauses the recording and those moments are left out. Virtu
 Tools or any other program) is never recorded as the person's: on Windows it has no device, on
 X11 it comes from XTEST, and both are skipped. Recording sends no input to the game.
 
+**Late input.** The system can pass an input on a little after it happened (under load, by
+more than a tick). One that arrives after its tick was already written counts in the next tick
+(nothing is lost or counted twice); its event line carries the time it counts at, and `late`
+with the time it happened (Tools 0.1.7; before, checking reported such ticks as disagreeing).
+
 **Checking a recording** reads every picture and rebuilds every tick's controls from the raw
 events; any disagreement, unreadable picture or time out of order is reported. The recorder ends
 on Stop, the emergency stop keys (the recording is kept), the game's window closing, or the disk

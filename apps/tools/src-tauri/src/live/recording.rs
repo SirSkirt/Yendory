@@ -10,7 +10,9 @@
 //!   tick (so a click shorter than a tick still counts) and the mouse movement since then;
 //! - `events.jsonl`: the raw presses, releases and movements with their times (microseconds), and
 //!   the controls held whenever recording (re)starts, from which every tick's controls can be
-//!   rebuilt ([`validate`]).
+//!   rebuilt ([`validate`]). An input the system passes on only after its tick was written
+//!   counts in the next tick: its line's time is the one it counts at (just after that tick),
+//!   and `late` keeps when it happened.
 //!
 //! The picture of tick k is taken at its time, after the controls of tick k; what the player did
 //! after seeing it is in tick k+1 (and later ticks: people react in a few hundred milliseconds).
