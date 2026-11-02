@@ -64,6 +64,10 @@ pub struct State {
     /// Presses received since the episode began.
     pub presses: u32,
     pub focused: bool,
+    /// Where the targets are, and whether each is in line of sight from the player (the truth,
+    /// for checks and tests; never shown to a network).
+    pub targets: Vec<(f32, f32)>,
+    pub visible: Vec<bool>,
 }
 
 pub struct Range {
@@ -350,6 +354,14 @@ impl Range {
             mouse_y: self.mouse_y,
             presses: self.presses,
             focused: self.focused,
+            targets: self.targets.clone(),
+            visible: self
+                .targets
+                .iter()
+                .map(|&(tx, ty)| {
+                    self.ray((ty - self.y).atan2(tx - self.x)) > (tx - self.x).hypot(ty - self.y)
+                })
+                .collect(),
         }
     }
 

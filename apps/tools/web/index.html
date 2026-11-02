@@ -25,6 +25,9 @@
       <button type="button" class="nav-item" data-route="controls" title="Controls check"><span class="nav-num">2.2</span><span class="nav-label">Controls check</span></button>
       <button type="button" class="nav-item" data-route="record" title="Record"><span class="nav-num">2.3</span><span class="nav-label">Record</span></button>
       <button type="button" class="nav-item" data-route="recordings" title="Recordings"><span class="nav-num">2.4</span><span class="nav-label">Recordings</span></button>
+      <button type="button" class="nav-item" data-route="train" title="Train"><span class="nav-num">2.5</span><span class="nav-label">Train</span></button>
+      <button type="button" class="nav-item" data-route="autoplay" title="Play"><span class="nav-num">2.6</span><span class="nav-label">Play</span></button>
+      <button type="button" class="nav-item" data-route="checks" title="Checks"><span class="nav-num">2.7</span><span class="nav-label">Checks</span></button>
     </div>
     <div class="nav-group nav-apps" role="group" aria-labelledby="nav-apps"><div class="nav-head" id="nav-apps" title="Apps"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Apps</span></div>
       <button type="button" class="nav-item" data-route="apps" title="Apps"><span class="nav-num">3.1</span><span class="nav-label">Apps</span></button>
@@ -282,6 +285,105 @@
         <button type="button" id="viewDelete">Delete</button>
       </div>
       <div id="validation"></div>
+    </div>
+  </section>
+
+  <!-- 2.5 Train -->
+  <section class="page lead-section" id="page-train" hidden>
+    <h2>Train</h2>
+    <p class="lede">Generation 0 learns by imitation: from your recordings, the controls you used after each picture. Recordings marked for testing are never trained on; the network is measured on them, beside the <b>frequency baseline</b>, which uses each control as often as you did but never looks at the picture. Only a network that beats that baseline has learned something from what it sees.</p>
+    <div class="line-form">
+      <label for="trainProfile">Game</label><select id="trainProfile"></select>
+      <span class="note" id="trainRecs">—</span>
+    </div>
+    <table class="ledger" id="playersTable">
+      <thead><tr><th>Player</th><th>Size</th><th>Lineage</th><th class="num">Steps</th><th class="num">Held-out loss</th><th class="num">Baseline</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="line-form">
+      <label for="newPlayerName">New player</label><input id="newPlayerName" maxlength="40" placeholder="Gaming Nova">
+      <select id="newPlayerSize"><option value="small" data-note="about 0.3M weights; quick">Small</option><option value="medium" data-note="about 1M weights; slower">Medium</option></select>
+      <button type="button" id="newPlayer">Make it</button>
+    </div>
+    <p class="note">A new player starts untrained (random weights). It takes the game's controls and picture as they are now, and its mouse steps from the sizes of your mouse movements in your training recordings.</p>
+    <div id="trainPanel" hidden>
+      <h3 id="trainTitle">—</h3>
+      <div class="field-row"><label for="trSteps">Steps</label><input id="trSteps" type="number" min="1" max="1000000" class="narrow-num"><span class="note">each step learns from a batch of short stretches of your play</span></div>
+      <div class="field-row"><label for="trRate">Learning rate</label><input id="trRate" type="number" min="0.000001" max="0.1" step="0.0001" class="narrow-num"></div>
+      <div class="field-row"><label for="trOffset">Reaction</label><input id="trOffset" type="number" min="0" max="20" class="narrow-num"><span class="note">ticks between a picture and the controls learned for it (1: the very next tick; people react in a few hundred milliseconds)</span></div>
+      <div class="field-row"><label for="trBatch">Batch</label><input id="trBatch" type="number" min="1" max="256" class="narrow-num"><span class="note">stretches a step</span><label for="trLength">Stretch</label><input id="trLength" type="number" min="1" max="64" class="narrow-num"><span class="note">ticks, the memory carried through</span></div>
+      <div class="field-row checks"><span class="field-label">Start from</span>
+        <label class="check-inline"><input type="radio" name="trFrom" value="continue" checked> where training last stopped</label>
+        <label class="check-inline"><input type="radio" name="trFrom" value="fresh"> the accepted weights, with a new optimizer</label>
+      </div>
+      <div class="actions"><button type="button" class="primary" id="trStart">Train</button><button type="button" id="trStop" hidden>Stop (keeps the best)</button><button type="button" id="trDelete">Delete the player</button></div>
+      <div class="meter" id="trMeter" hidden><div id="trBar"></div></div>
+      <p class="note" id="trNote"></p>
+      <canvas id="trChart" class="timeline" height="160"></canvas>
+      <p class="note">Blue: loss on your training play. Dark: loss on held-out recordings (the accepted weights are the lowest). Dashed: the frequency baseline on the same held-out recordings. Lower is better.</p>
+      <div id="trMeasure"></div>
+    </div>
+  </section>
+
+  <!-- 2.6 Play -->
+  <section class="page lead-section" id="page-autoplay" hidden>
+    <h2>Play</h2>
+    <p class="lede">A player plays the game by itself: every tick it sees the picture and decides every control, and the safety layer turns that into presses, releases and mouse movement. Tools asks you every time before a network may use the keyboard and mouse; <span class="mono">Ctrl+Alt+End</span> stops it at once.</p>
+    <div class="line-form">
+      <label for="apProfile">Game</label><select id="apProfile"></select>
+      <label for="apPlayer">Player</label><select id="apPlayer"></select>
+    </div>
+    <div class="field-row checks"><span class="field-label">Decisions</span>
+      <label class="check-inline"><input type="radio" name="apDecide" value="likely" checked> Most likely (a control is used when it is more likely than not)</label>
+      <label class="check-inline"><input type="radio" name="apDecide" value="sampled"> Drawn from its probabilities (more varied)</label>
+    </div>
+    <label class="check-inline"><input type="checkbox" id="apRecord" checked> Record its play (shown in 2.4 as the player's, never used as your demonstration)</label>
+    <div class="actions"><button type="button" class="primary" id="apStart">Let it play</button><button type="button" id="apStopBtn" hidden>Stop</button></div>
+    <div class="rec-live" id="apLive" hidden>
+      <p><span class="rec-dot"></span><b>Playing</b> <span class="note" id="apState"></span></p>
+      <div class="key-chips" id="apHeld"></div>
+      <p class="mono" id="apMouse"></p>
+    </div>
+    <p class="note" id="apDone"></p>
+
+    <h3>Measure on the test range</h3>
+    <p class="note">The player, the untrained network and the frequency baseline each play the same episodes on layouts no recording of yours used; the range counts shots and hits. Only for the test range (start it on 2.1 first).</p>
+    <div class="line-form">
+      <label for="evEpisodes">Episodes</label><input id="evEpisodes" type="number" min="1" max="50" value="5" class="narrow-num">
+      <label for="evSeconds">Seconds each</label><input id="evSeconds" type="number" min="5" max="55" value="30" class="narrow-num">
+      <button type="button" id="evStart">Measure</button><button type="button" id="evStop" hidden>Stop</button>
+    </div>
+    <p class="note" id="evNote"></p>
+    <table class="ledger" id="evTable" hidden>
+      <thead><tr><th>Who played</th><th class="num">Hits a minute</th><th class="num">Shots a minute</th><th class="num">Hits per shot</th><th>Hits in each episode</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- 2.7 Checks -->
+  <section class="page lead-section" id="page-checks" hidden>
+    <h2>Checks</h2>
+    <p class="lede">Each phase of game training can be checked on its own, on this computer. The automatic checks use the test range (Tools starts it) and send input only through the safety layer; the steps after them need you.</p>
+
+    <div class="check-card">
+      <h3>Phase 2: the game's picture, virtual input, safety</h3>
+      <div class="actions"><button type="button" class="primary" data-check="2">Run the checks</button><button type="button" id="checkStopKeys">Try the stop keys</button></div>
+      <p class="note">Leave the keyboard and mouse alone while it runs (about 15 seconds). For the stop keys: press the button, then press <span class="mono">Ctrl+Alt+End</span> within 15 seconds.</p>
+      <ul class="check-list" id="checks2"></ul>
+    </div>
+
+    <div class="check-card">
+      <h3>Phase 3: recording your play</h3>
+      <div class="line-form"><label for="check3Game">Game</label><select id="check3Game"></select><button type="button" class="primary" data-check="3">Run the checks</button></div>
+      <p class="note">First record yourself on 2.3 for half a minute (walk, turn, click); the checks look at your latest recording of the game. Then open it on 2.4 and play it back: the controls should follow what you did.</p>
+      <ul class="check-list" id="checks3"></ul>
+    </div>
+
+    <div class="check-card">
+      <h3>Phase 4: the network, training, playing</h3>
+      <div class="line-form"><label for="check4Game">Game</label><select id="check4Game"></select><label for="check4Player">Player</label><select id="check4Player"></select><button type="button" class="primary" data-check="4">Run the checks</button></div>
+      <p class="note">Then by hand: record several minutes on the range (2.3), some marked for testing; make a player and train it (2.5) until its held-out loss is clearly below the baseline; then measure it on the range (2.6). It has learned when it beats both the untrained network and the frequency baseline.</p>
+      <ul class="check-list" id="checks4"></ul>
     </div>
   </section>
 

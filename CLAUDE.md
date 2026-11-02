@@ -16,7 +16,11 @@ change Tools needs in the Network is made on yendory-hub by whoever owns the Net
 Real games (docs/GAME_TRAINING.md) are played from the screen with virtual keyboard and mouse
 input. Every virtual input goes through the safety layer (`live/safety.rs`: permitted controls
 only, no system combinations, only while the game is in front, the emergency stop); never add a
-path that sends input around it.
+path that sends input around it. Gaming Nova's actions come only from its trained weights: no
+code chooses actions for a game, the range's truth is never a network input, scripted actions are
+never recorded as a person's demonstrations, and results are shown beside baselines that can't
+have learned (docs/GAME_TRAINING.md, section 0). The range teacher in `tests/learn_range.rs` is
+test-only; never bring it into the app.
 
 Models are handed between programs through Studio's models folder and `--model <id>`
 (docs/HANDOFF.md on yendory-hub). Yendory Hub installs and updates Tools from its signed package
@@ -24,7 +28,7 @@ Models are handed between programs through Studio's models folder and `--model <
 
 ## Version numbers
 
-Tools is at **0.1.3**. A push that changes Tools raises its last digit by one, and the last digit
+Tools is at **0.1.4**. A push that changes Tools raises its last digit by one, and the last digit
 carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
 in every place that holds it:
 

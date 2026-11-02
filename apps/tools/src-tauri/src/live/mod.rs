@@ -1,12 +1,19 @@
 //! Real games (docs/GAME_TRAINING.md): game profiles, the game's window and picture, virtual
 //! keyboard and mouse input through the safety layer, the emergency stop, and the test range.
+pub mod autoplay;
+pub mod checks;
 pub mod controls;
+pub mod evaluate;
+pub mod nova;
+pub mod player;
+pub mod policy;
 pub mod profile;
 pub mod record;
 pub mod recording;
 pub mod safety;
 pub mod script;
 pub mod sys;
+pub mod train;
 
 use crate::Res;
 use profile::Profile;
@@ -136,6 +143,10 @@ pub struct Live {
     stop_keys: Mutex<Option<Res<()>>>,
     /// Ends the recording being made.
     recording_stop: Mutex<Option<Arc<AtomicBool>>>,
+    /// Ends the training running (one at a time).
+    training_stop: Mutex<Option<Arc<AtomicBool>>>,
+    /// Ends a network's play or an evaluation.
+    play_stop: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl Live {
@@ -157,6 +168,18 @@ pub fn watch_stop_keys(app: &AppHandle) {
         let _ = handle.emit("live-stopped", ());
     }));
     *app.state::<Live>().stop_keys.lock().unwrap() = Some(result);
+}
+
+/// Asks the person in a native dialog (from Rust, so no page script can answer for them).
+/// Must not be called on the main thread.
+pub(crate) fn ask(app: &AppHandle, title: &str, message: &str, ok: &str) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(ok.to_string(), "Cancel".to_string()))
+        .blocking_show()
 }
 
 fn data_dir(app: &AppHandle) -> Res<std::path::PathBuf> {
@@ -216,9 +239,16 @@ pub fn live_save_profile(app: AppHandle, profile: Profile) -> Res<Profile> {
     profile::save(&data_dir(&app)?, profile)
 }
 
+/// Deletes a profile after asking. Ok(false) when the person said no.
 #[tauri::command]
-pub fn live_delete_profile(app: AppHandle, id: String) -> Res<()> {
-    profile::delete(&data_dir(&app)?, &id)
+pub async fn live_delete_profile(app: AppHandle, id: String) -> Res<bool> {
+    let data = data_dir(&app)?;
+    let p = profile::load(&data, &id)?;
+    let msg = format!("Delete the profile “{}”? Its recordings and players are kept.", p.name);
+    if !ask(&app, "Delete the profile", &msg, "Delete") {
+        return Ok(false);
+    }
+    profile::delete(&data, &id).map(|_| true)
 }
 
 /// The profile's window, if it is open now.
@@ -540,7 +570,11 @@ pub fn recording_update(
     recording::update(&data_dir(&app)?, &id, &recording, split, &notes)
 }
 
+/// Deletes a recording after asking. Ok(false) when the person said no.
 #[tauri::command]
-pub fn recording_delete(app: AppHandle, id: String, recording: String) -> Res<()> {
-    recording::delete(&data_dir(&app)?, &id, &recording)
+pub async fn recording_delete(app: AppHandle, id: String, recording: String) -> Res<bool> {
+    if !ask(&app, "Delete the recording", "Delete this recording? It can't be undone.", "Delete") {
+        return Ok(false);
+    }
+    recording::delete(&data_dir(&app)?, &id, &recording).map(|_| true)
 }

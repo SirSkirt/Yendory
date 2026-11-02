@@ -473,6 +473,16 @@ pub fn run() {
             live::recording_validate,
             live::recording_update,
             live::recording_delete,
+            live::nova::players,
+            live::nova::player_create,
+            live::nova::player_delete,
+            live::nova::train_start,
+            live::nova::train_stop,
+            live::nova::play_start,
+            live::nova::play_stop,
+            live::nova::evaluate_start,
+            live::checks::checks_run,
+            live::checks::checks_stop_keys,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yendory Tools");

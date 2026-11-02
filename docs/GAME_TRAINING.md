@@ -1,9 +1,10 @@
 # Game training in Yendory Tools (plan)
 
-Status: **phases 2 and 3 built** (Tools 0.1.2: game profiles, the safety layer, virtual input,
-capture, the emergency stop and the test range; Tools 0.1.3: recording a person's play, and
-inspecting, replaying and checking recordings; see "Built so far" at the end). The rest is the
-plan. The goal
+Status: **phases 2, 3 and 4 built** (Tools 0.1.2: game profiles, the safety layer, virtual
+input, capture, the emergency stop and the test range; 0.1.3: recording a person's play, and
+inspecting, replaying and checking recordings; 0.1.4: Gaming Nova's network, generation 0 by
+imitation, live play and measuring on the range, and a Checks page that verifies each phase on
+its own; see "Built so far" at the end). The rest is the plan. The goal
 (from the owner): Gaming Nova learns to
 play real games from the screen, through virtual keyboard and mouse, first by imitating the
 owner's play, then by its own experience and by generations of candidates, without any
@@ -321,4 +322,80 @@ checking.
 in 2.4 and play it back; the controls should follow what you did, and *Check the recording*
 should pass.
 
-Next: phase 4, the network (built to join Neuro) and Generation 0 trained on these recordings.
+## Built so far (phase 4, Tools 0.1.4)
+
+Code: `live/policy.rs` (the network), `live/player.rs` (players and their files),
+`live/train.rs` (imitation), `live/autoplay.rs` (live play), `live/evaluate.rs` (measuring on
+the range), `live/checks.rs` (the Checks page), `live/nova.rs` (the window's commands).
+
+**The network** (Small: about 0.3M weights at 128×72 in colour; Medium: about 1M): the last two
+pictures stacked, three convolutions (8×8 stride 4, 4×4 stride 2, 3×3; SiLU), a linear encoder
+(SiLU) to 128, Neuro's minGRU working memory (128) carried from tick to tick, and from the memory
+and the encoding together: one yes/no per key and per button, and one class over mouse steps per
+axis. The goal input (32 wide, zero until Command Mode) feeds the encoder. All weights in one
+flat array with named slots and groups (vision, memory, heads: the Engine's modules; goal: its
+interconnect), AdamW, gradient clipping at 1. The backward pass is checked against finite
+differences for every kind of layer (a test, and a check in the window). Training a tick takes
+about 3 ms on one core (the batch is spread over every core); a decision in play about 1 ms.
+
+**Players** (`games/<profile>/players/<id>/`): `player.json` (the architecture with the controls
+in order and the mouse steps, the lineage: generation, parent, method; every training run with
+its settings, the recordings used and held out, the measurement before and the best),
+`weights.bin` (the accepted weights), `last.bin` and `adam.bin` (to continue). The mouse steps are
+chosen from the person's own movements (zero and five sizes each way at the 20/45/70/90/98%
+quantiles of a tick's movement). A player fits the profile it was made from; if the picture or
+the controls change, a new player is needed (the window says so).
+
+**Training (2.5 Train)**: only recordings by a person, marked for training; each picture is
+paired with the controls `reaction` ticks later (1 by default), in stretches of 8 ticks with the
+memory carried through, 16 stretches a step. Every 100 steps it is measured on the held-out
+(testing) recordings, the memory carried through each one as in play, beside the frequency
+baseline (each control's training frequency, no picture): loss a tick (keys and buttons, mouse),
+the mouse step right, and for each control how often it was used, how often the network would,
+and F1. The accepted weights are the best held-out measurement (they are replaced only by a
+better one); with nothing held out the latest are accepted and the window says so. Training can
+stop and continue.
+
+**Play (2.6)**: the player plays by itself at the profile's rate, through the safety layer,
+after the person allows it each time; decisions are the most likely or drawn from the
+probabilities. Its play can be recorded (as the player's, never as a person's demonstration).
+**Measuring on the range**: the player, the untrained network (same architecture) and the
+frequency baseline play the same episodes on layouts from seed 100,000 (never reached by playing),
+episode by episode; the range counts shots and hits.
+
+**Checks (2.7)**: each phase verified on its own, on the owner's computer. Phase 2 (automatic,
+on the range): the picture, presses and mouse units arriving exactly, a click firing, nothing
+left held, a key outside the profile refused, the picture changing, another window coming
+forward releasing everything and pausing, the stop keys watched; and an interactive check of the
+stop keys. Phase 3: Tools' own input never heard by the recorder (automatic), and the person's
+latest recording read back, matching its raw input, at the right rate, with controls and mouse
+movement in it. Phase 4: the gradients, saving and loading, a short training on a copy lowering
+the loss on the person's recordings, and a network playing the range through the safety layer.
+
+**Does it learn?** `tests/learn_range.rs` (run on purpose; about twelve minutes): a test-only
+teacher plays the range from the range's truth, through the safety layer, and is recorded by the
+ordinary recorder; a new network learns from those recordings alone and is measured on layouts it
+never saw against the untrained network and the frequency baseline. The teacher exists only in
+that test. Result (on this
+sandbox's virtual display, CPU only): the teacher recorded 9 training layouts and 1 held-out
+layout, 30 s each (5 minutes of play; it hits about 12 targets a minute). Training 1,200 steps took
+163 s; the held-out loss fell from 7.40 (untrained) to 0.256 at step 600, against the frequency
+baseline's 0.926, and then rose again (over-fitting five minutes of play; the accepted weights
+are the best held-out measurement, step 600). On 4 unseen layouts of 20 s each:
+
+| Who played | Hits a minute | Shots a minute | Hits in each episode |
+|---|---|---|---|
+| The trained network | 4.5 | 8.2 | 1, 1, 1, 3 |
+| The untrained network | 0.8 | 18.8 | 0, 1, 0, 0 |
+| The frequency baseline | 1.5 | 21.0 | 0, 2, 0, 0 |
+
+So the network learned from pixels to aim before firing (fewer shots, more hits), on layouts it
+never saw; but it is far from the teacher (about 12 a minute), and 4 short episodes are few:
+the numbers are small and noisy. Much more play, and later practice (phases 5 to 7), are needed
+for good play.
+
+**Not yet checked on Windows** (compiled and linted only): run the checks on 2.7, then record a
+few minutes on the range (some marked for testing), train a player on 2.5 and measure it on 2.6.
+
+Next: phase 5, evaluation beyond the range (rewards from the screen, evaluation episodes,
+champions), then generations.

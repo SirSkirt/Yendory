@@ -452,3 +452,14 @@ main { max-width: 1112px; }
 .scrub { width: 100%; margin: 8px 0; }
 .timeline { width: 100%; background: var(--sheet); border: 1px solid var(--rule); cursor: pointer; margin-top: 8px; }
 .ledger tr.open-row td { background: var(--accent-soft); }
+
+/* ---- Training, play, checks ------------------------------------------------------------------ */
+.check-card { margin: 18px 0; padding: 4px 18px 10px; background: var(--sheet); border-left: 3px solid var(--rule-strong); }
+.check-list { list-style: none; padding: 0; margin: 8px 0; }
+.check-list li { padding: 6px 0; border-bottom: 1px dotted var(--rule); font-size: 14px; }
+.check-list li b { margin-right: 8px; }
+.check-list li.pass b { color: var(--good); }
+.check-list li.fail b { color: var(--bad); }
+.check-list li .note { display: block; margin-top: 2px; }
+.ledger td.better { color: var(--good); font-weight: 600; }
+.ledger td.worse { color: var(--bad); }

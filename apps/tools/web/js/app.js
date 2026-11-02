@@ -27,6 +27,7 @@ const ROUTES = {
   games: ["Games", "Games"], play: ["Games", "Play"], lessons: ["Games", "Lessons"], scoreboard: ["Games", "Scoreboard"],
   profiles: ["Real games", "Game profiles"], controls: ["Real games", "Controls check"],
   record: ["Real games", "Record"], recordings: ["Real games", "Recordings"],
+  train: ["Real games", "Train"], autoplay: ["Real games", "Play"], checks: ["Real games", "Checks"],
   apps: ["Apps", "Apps"], settings: ["Tools", "Settings"],
 };
 
@@ -84,6 +85,9 @@ function render() {
   if (S.route === "record") renderRecord();
   if (S.route === "recordings") renderRecordings();
   if (S.route !== "recordings") stopReplay();
+  if (S.route === "train") renderTrain();
+  if (S.route === "autoplay") renderAutoplay();
+  if (S.route === "checks") renderChecks();
   if (S.route !== "profiles") L.watching = false;
   renderWatch();
 }
@@ -462,8 +466,9 @@ async function saveProfile(e) {
 }
 
 async function deleteProfile() {
-  if (!L.editing.id || !confirm(`Delete the profile “${L.editing.name}”? Its recordings and players (later) are kept.`)) return;
-  if ((await act("live_delete_profile", { id: L.editing.id })) === undefined) return;
+  if (!L.editing.id) return;
+  // Tools asks in its own dialog.
+  if (!(await act("live_delete_profile", { id: L.editing.id }))) return;
   L.editing = null;
   await loadLive();
   renderProfiles();
@@ -826,11 +831,272 @@ async function checkRecording() {
 }
 
 async function deleteRecording() {
-  if (!R.view || !confirm("Delete this recording? It can't be undone.")) return;
-  if ((await act("recording_delete", { id: R.profile, recording: R.view.info.id })) === undefined) return;
+  if (!R.view) return;
+  if (!(await act("recording_delete", { id: R.profile, recording: R.view.info.id }))) return;
   R.view = null;
   $("viewer").hidden = true;
   renderRecordings();
+}
+
+// ---- Real games: training (generation 0) --------------------------------------------------------
+const T = { profile: null, data: null, selected: null, training: false, history: [] };
+const f3 = v => (v == null || !isFinite(v) ? "—" : v.toFixed(3));
+
+async function renderTrain() {
+  if (!L.info) return;
+  profileOptions($("trainProfile"), T.profile ?? R.profile ?? L.editing?.id, false);
+  const id = $("trainProfile").value;
+  T.profile = id || null;
+  const body = $("playersTable").tBodies[0];
+  if (!id) { body.replaceChildren(el("tr", {}, el("td", { colspan: 7, class: "empty" }, "Make a game profile first (2.1)."))); $("trainPanel").hidden = true; return; }
+  const d = await act("players", { id });
+  if (!d) return;
+  T.data = d;
+  T.training = d.trainingNow != null || T.training;
+  const rec = r => `${r.count} recording${r.count === 1 ? "" : "s"}, ${clock(r.seconds * 1000)}`;
+  $("trainRecs").textContent = `Your play: ${rec(d.training)} for training, ${rec(d.testing)} held out for testing.` + (d.testing.count ? "" : " Mark one for testing (2.4) to measure what is learned.");
+  body.replaceChildren(...(d.players.length ? d.players.map(p => {
+    const best = p.runs.map(r => r.best).filter(Boolean).at(-1);
+    return el("tr", { class: T.selected === p.id ? "open-row" : "" },
+      el("td", {}, p.name),
+      el("td", {}, p.size),
+      el("td", {}, `generation ${p.lineage.generation}, ${p.lineage.method}`),
+      el("td", { class: "num" }, fmt(p.steps)),
+      el("td", { class: "num" + (best && best.loss < best.baselineLoss ? " better" : "") }, best ? f3(best.loss) : "—"),
+      el("td", { class: "num" }, best ? f3(best.baselineLoss) : "—"),
+      el("td", {}, el("button", { type: "button", onclick: () => selectPlayer(p.id) }, "Open")));
+  }) : [el("tr", {}, el("td", { colspan: 7, class: "empty" }, "No players for this game yet."))]));
+  if (T.selected && !d.players.some(p => p.id === T.selected)) T.selected = null;
+  renderTrainPanel();
+}
+
+function selectPlayer(id) {
+  T.selected = id;
+  T.history = [];
+  const p = T.data?.players.find(x => x.id === id);
+  const last = p?.runs.at(-1)?.settings;
+  $("trSteps").value = last?.steps ?? 1500;
+  $("trRate").value = last?.learningRate ?? 0.0005;
+  $("trOffset").value = last?.offset ?? 1;
+  $("trBatch").value = last?.batch ?? 16;
+  $("trLength").value = last?.length ?? 8;
+  if (p) for (const r of p.runs) {
+    if (r.first) T.history.push({ step: r.first.step, held: r.first.loss, base: r.first.baselineLoss });
+    if (r.best) T.history.push({ step: r.best.step, held: r.best.loss, base: r.best.baselineLoss });
+  }
+  renderTrain();
+}
+
+function renderTrainPanel() {
+  const p = T.data?.players.find(x => x.id === T.selected);
+  $("trainPanel").hidden = !p;
+  if (!p) return;
+  $("trainTitle").textContent = `${p.name}: ${fmt(p.steps)} steps so far, accepted at step ${fmt(p.acceptedStep)}`;
+  $("trStart").hidden = T.training;
+  $("trStop").hidden = !T.training;
+  $("trDelete").disabled = T.training;
+  $("trStart").disabled = !T.data.training.count;
+  if (!T.data.training.count) $("trNote").textContent = "Record some of your play on 2.3 (marked for training) first.";
+  const best = p.runs.map(r => r.best).filter(Boolean).at(-1);
+  if (best && !T.training) showMeasure(best);
+  drawTrainChart();
+}
+
+async function makePlayer() {
+  const name = $("newPlayerName").value.trim() || "Gaming Nova";
+  const p = await act("player_create", { id: T.profile, name, size: $("newPlayerSize").value });
+  if (!p) return;
+  $("newPlayerName").value = "";
+  T.selected = p.id;
+  await renderTrain();
+  selectPlayer(p.id);
+}
+
+async function startTraining() {
+  const settings = {
+    steps: Number($("trSteps").value), batch: Number($("trBatch").value), length: Number($("trLength").value),
+    learningRate: Number($("trRate").value), weightDecay: 0.0001, offset: Number($("trOffset").value), measureEvery: 100, seed: Date.now() % 100000,
+  };
+  const fresh = document.querySelector("input[name=trFrom]:checked")?.value === "fresh";
+  const ok = await act("train_start", { id: T.profile, player: T.selected, settings, fresh });
+  if (ok === undefined) return;
+  T.training = true;
+  $("trMeter").hidden = false;
+  $("trBar").style.width = "0%";
+  $("trNote").textContent = "Loading your recordings…";
+  $("sideRun").hidden = false;
+  $("sideRunTitle").textContent = "Training";
+  renderTrainPanel();
+}
+
+function trainProgress(pl) {
+  if (pl.player !== T.selected) return;
+  const g = pl.progress;
+  const w = `${(100 * g.step) / g.steps}%`;
+  $("trBar").style.width = w;
+  $("sideRunBar").style.width = w;
+  $("trNote").textContent = `Step ${fmt(g.step)} of ${fmt(g.steps)}; loss on your training play ${f3(g.trainLoss)}` +
+    (g.measure ? `; held out ${f3(g.measure.loss)} (baseline ${f3(g.measure.baselineLoss)})${g.accepted ? ", accepted" : ""}` : "");
+  T.history.push({ step: g.step, train: g.step ? g.trainLoss : null, held: g.measure?.loss, base: g.measure?.baselineLoss });
+  if (g.measure) showMeasure(g.measure);
+  drawTrainChart();
+}
+
+function trainEnded(info, error) {
+  T.training = false;
+  $("trMeter").hidden = true;
+  $("sideRun").hidden = true;
+  $("sideRunTitle").textContent = "Measuring";
+  if (error) $("trNote").textContent = `Training stopped: ${error}`;
+  else {
+    const r = info.runs.at(-1);
+    $("trNote").textContent = `${r.stopped ? "Stopped" : "Done"} after ${fmt(r.stepsDone)} steps.` + (r.best ? ` Accepted: held-out loss ${f3(r.best.loss)} against the baseline's ${f3(r.best.baselineLoss)}.` : r.heldOut.length ? " No measurement beat the accepted weights; they are kept." : " Nothing was held out, so the latest weights were accepted.");
+  }
+  if (S.route === "train") renderTrain();
+}
+
+function showMeasure(m) {
+  const row = (k, a, b, lowerBetter = true) => el("tr", {}, el("th", {}, k), el("td", { class: (lowerBetter ? a < b : a > b) ? "better" : "worse" }, a), el("td", {}, b));
+  $("trMeasure").replaceChildren(el("h3", {}, `Held out, at step ${fmt(m.step)} (${fmt(m.ticks)} ticks)`),
+    el("table", { class: "ledger compact" },
+      el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "The network"), el("th", {}, "Frequency baseline"))),
+      el("tbody", {},
+        row("Loss a tick (all controls)", f3(m.loss), f3(m.baselineLoss)),
+        row("Keys and buttons", f3(m.keysLoss), f3(m.baselineKeysLoss)),
+        row("Mouse", f3(m.mouseLoss), f3(m.baselineMouseLoss)),
+        row("Mouse step right", pct(Math.round(m.mouseAccuracy * 1000), 1000), pct(Math.round(m.baselineMouseAccuracy * 1000), 1000), false))),
+    el("table", { class: "ledger compact" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Control"), el("th", { class: "num" }, "You used it"), el("th", { class: "num" }, "It would"), el("th", { class: "num" }, "F1 (0 for the baseline)"))),
+      el("tbody", {}, m.controls.map(c => el("tr", {}, el("td", {}, keyLabel(c.name)), el("td", { class: "num" }, pct(Math.round(c.used * 1000), 1000)), el("td", { class: "num" }, pct(Math.round(c.predicted * 1000), 1000)), el("td", { class: "num" }, c.f1.toFixed(2)))))));
+}
+
+function drawTrainChart() {
+  const c = $("trChart"), w = c.clientWidth || 600, h = 160;
+  if (c.width !== w) c.width = w;
+  const g = c.getContext("2d"), css = getComputedStyle(document.body);
+  g.clearRect(0, 0, w, h);
+  const pts = T.history;
+  if (!pts.length) return;
+  const vals = pts.flatMap(p => [p.train, p.held, p.base]).filter(v => v != null && isFinite(v));
+  if (!vals.length) return;
+  const maxStep = Math.max(1, ...pts.map(p => p.step)), top = Math.max(...vals) * 1.05, low = Math.min(...vals) * 0.95;
+  const X = s => 8 + (s / maxStep) * (w - 16), Y = v => 8 + (1 - (v - low) / Math.max(1e-9, top - low)) * (h - 16);
+  const line = (key, color, dash) => {
+    const p = pts.filter(q => q[key] != null && isFinite(q[key]));
+    if (!p.length) return;
+    g.strokeStyle = color; g.setLineDash(dash); g.lineWidth = 1.5; g.beginPath();
+    p.forEach((q, i) => (i ? g.lineTo(X(q.step), Y(q[key])) : g.moveTo(X(q.step), Y(q[key]))));
+    g.stroke(); g.setLineDash([]);
+  };
+  line("train", css.getPropertyValue("--accent").trim() || "#284a7e", []);
+  line("held", css.getPropertyValue("--ink").trim() || "#222", []);
+  line("base", css.getPropertyValue("--ink-soft").trim() || "#777", [5, 4]);
+}
+
+async function deletePlayer() {
+  const p = T.data?.players.find(x => x.id === T.selected);
+  if (!p) return;
+  if (!(await act("player_delete", { id: T.profile, player: p.id }))) return;
+  T.selected = null;
+  renderTrain();
+}
+
+// ---- Real games: play and measure ---------------------------------------------------------------
+const P = { playing: false, measuring: false };
+
+async function playerOptions(select, game, chosen) {
+  const d = game ? await act("players", { id: game }) : null;
+  const list = d?.players || [];
+  select.replaceChildren(...(list.length ? list.map(p => el("option", { value: p.id, "data-note": `${fmt(p.steps)} steps` }, p.name)) : [el("option", { value: "" }, "No players yet (2.5)")]));
+  if (list.some(p => p.id === chosen)) select.value = chosen;
+  return list;
+}
+
+async function renderAutoplay() {
+  if (!L.info) return;
+  profileOptions($("apProfile"), T.profile ?? L.editing?.id, false);
+  const list = await playerOptions($("apPlayer"), $("apProfile").value, T.selected);
+  $("apStart").disabled = !list.length || P.playing || P.measuring;
+  $("apStart").hidden = P.playing;
+  $("apStopBtn").hidden = !P.playing;
+  const range = $("apProfile").value === RANGE_ID;
+  $("evStart").disabled = !range || !list.length || P.playing || P.measuring;
+  $("evStart").hidden = P.measuring;
+  $("evStop").hidden = !P.measuring;
+  if (!range) $("evNote").textContent = "Choose the Yendory Range game to measure on it.";
+}
+
+async function startPlay() {
+  // Tools asks for permission in its own dialog, every time.
+  const decide = document.querySelector("input[name=apDecide]:checked")?.value || "likely";
+  const ok = await act("play_start", { id: $("apProfile").value, player: $("apPlayer").value, decide, record: $("apRecord").checked });
+  if (!ok) return;
+  P.playing = true;
+  $("apLive").hidden = false;
+  $("apDone").textContent = "";
+  $("liveStop").hidden = false;
+  renderAutoplay();
+}
+
+function playStatus(st) {
+  const p = L.profiles.find(x => x.id === $("apProfile").value);
+  $("apState").textContent = `${clock(st.ms)}, ${trim1(st.fps)} decisions a second` + (st.refused ? `, ${fmt(st.refused)} refused by the safety layer` : "");
+  if (p) $("apHeld").replaceChildren(...chips([...p.keys, ...p.buttons], st.held));
+  $("apMouse").textContent = `Mouse: ${trim1(st.mouse[0])} across, ${trim1(st.mouse[1])} down`;
+}
+
+function playEnded(r, error) {
+  P.playing = false;
+  $("apLive").hidden = true;
+  $("liveStop").hidden = true;
+  $("apDone").textContent = error ? `Play stopped: ${error}` : `Played ${clock(r.ms)} (${fmt(r.ticks)} decisions); ${r.ended}.` + (r.recording ? " Its play is on 2.4." : "");
+  renderAutoplay();
+}
+
+async function startMeasure() {
+  const decide = document.querySelector("input[name=apDecide]:checked")?.value || "likely";
+  const ok = await act("evaluate_start", { player: $("apPlayer").value, episodes: Number($("evEpisodes").value), seconds: Number($("evSeconds").value), decide });
+  if (!ok) return;
+  P.measuring = true;
+  $("evTable").hidden = true;
+  $("evNote").textContent = "Starting…";
+  $("liveStop").hidden = false;
+  renderAutoplay();
+}
+
+function measureEnded(rows, error) {
+  P.measuring = false;
+  $("liveStop").hidden = true;
+  if (error) { $("evNote").textContent = `Measuring stopped: ${error}`; renderAutoplay(); return; }
+  const best = Math.max(...rows.map(r => r.hitsPerMinute));
+  $("evNote").textContent = rows[0] && rows[0].hitsPerMinute > Math.max(...rows.slice(1).map(r => r.hitsPerMinute))
+    ? `${rows[0].who} beat both baselines on layouts it never saw.` : `${rows[0]?.who ?? "The player"} did not beat both baselines.`;
+  $("evTable").hidden = false;
+  $("evTable").tBodies[0].replaceChildren(...rows.map(r => el("tr", {},
+    el("td", {}, r.who), el("td", { class: "num" + (r.hitsPerMinute === best && best > 0 ? " better" : "") }, trim1(r.hitsPerMinute)),
+    el("td", { class: "num" }, trim1(r.shotsPerMinute)), el("td", { class: "num" }, r.accuracy.toFixed(2)),
+    el("td", { class: "mono" }, r.episodes.map(e => e.hits).join(" · ")))));
+  renderAutoplay();
+}
+
+// ---- Real games: checks -------------------------------------------------------------------------
+async function renderChecks() {
+  if (!L.info) return;
+  profileOptions($("check3Game"), $("check3Game").value || RANGE_ID, false);
+  profileOptions($("check4Game"), $("check4Game").value || RANGE_ID, false);
+  await playerOptions($("check4Player"), $("check4Game").value, $("check4Player").value || T.selected);
+}
+
+function showChecks(list, results) {
+  list.replaceChildren(...results.map(c => el("li", { class: c.ok ? "pass" : "fail" }, el("b", {}, c.ok ? "✓" : "✗"), c.name, el("span", { class: "note" }, c.detail))));
+}
+
+async function runChecks(phase) {
+  const list = $("checks" + phase);
+  list.replaceChildren(el("li", { class: "note" }, "Running… leave the keyboard and mouse alone."));
+  const args = { phase, game: phase === 3 ? $("check3Game").value : phase === 4 ? $("check4Game").value : null, player: phase === 4 ? $("check4Player").value || null : null };
+  try { showChecks(list, await invoke("checks_run", args)); }
+  catch (e) { list.replaceChildren(el("li", { class: "fail" }, el("b", {}, "✗"), "The checks could not run", el("span", { class: "note" }, String(e)))); }
 }
 
 // ---- Settings -----------------------------------------------------------------------------------
@@ -895,7 +1161,7 @@ function wire() {
   $("checkProfile").addEventListener("change", () => { L.profile = $("checkProfile").value; renderCheck(); });
   for (const b of document.querySelectorAll("#presets button")) b.addEventListener("click", () => ($("checkActions").value = b.dataset.actions));
   $("checkRun").addEventListener("click", runCheck);
-  $("liveStop").addEventListener("click", () => invoke("live_stop"));
+  $("liveStop").addEventListener("click", () => { invoke("live_stop"); invoke("play_stop"); });
   listen("live-log", e => logRows(e.payload));
   listen("live-done", e => checkDone(e.payload.stopped));
   listen("live-stopped", () => toast(R.recording ? "Recording ended with the emergency stop keys; it is kept." : "Emergency stop: every control was released."));
@@ -919,7 +1185,32 @@ function wire() {
   $("viewSave").addEventListener("click", saveRecording);
   $("viewCheck").addEventListener("click", checkRecording);
   $("viewDelete").addEventListener("click", deleteRecording);
-  window.addEventListener("resize", () => { if (S.route === "recordings") drawTimeline(); });
+  window.addEventListener("resize", () => { if (S.route === "recordings") drawTimeline(); if (S.route === "train") drawTrainChart(); });
+  $("trainProfile").addEventListener("change", () => { T.profile = $("trainProfile").value; T.selected = null; renderTrain(); });
+  $("newPlayer").addEventListener("click", makePlayer);
+  $("trStart").addEventListener("click", startTraining);
+  $("trStop").addEventListener("click", () => invoke("train_stop"));
+  $("trDelete").addEventListener("click", deletePlayer);
+  listen("train-progress", e => trainProgress(e.payload));
+  listen("train-done", e => trainEnded(e.payload, null));
+  listen("train-failed", e => trainEnded(null, String(e.payload)));
+  $("apProfile").addEventListener("change", renderAutoplay);
+  $("apStart").addEventListener("click", startPlay);
+  $("apStopBtn").addEventListener("click", () => invoke("play_stop"));
+  listen("play-status", e => playStatus(e.payload));
+  listen("play-done", e => playEnded(e.payload, null));
+  listen("play-failed", e => playEnded(null, String(e.payload)));
+  $("evStart").addEventListener("click", startMeasure);
+  $("evStop").addEventListener("click", () => invoke("play_stop"));
+  listen("eval-progress", e => { const p = e.payload; $("evNote").textContent = `Episode ${p.episode} of ${p.episodes}: ${p.who} hit ${p.hits} of ${p.shots} shots.`; });
+  listen("eval-done", e => measureEnded(e.payload, null));
+  listen("eval-failed", e => measureEnded(null, String(e.payload)));
+  for (const b of document.querySelectorAll("[data-check]")) b.addEventListener("click", () => runChecks(Number(b.dataset.check)));
+  $("check4Game").addEventListener("change", renderChecks);
+  $("checkStopKeys").addEventListener("click", async () => {
+    $("checks2").replaceChildren(el("li", { class: "note" }, "Press Ctrl+Alt+End now (15 seconds)…"));
+    showChecks($("checks2"), [await invoke("checks_stop_keys")]);
+  });
 }
 
 async function start() {
