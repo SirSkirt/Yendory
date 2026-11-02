@@ -11,6 +11,8 @@ Same layout as Studio: numbered sections in a sidebar, the open model in the pag
 | **1.4 Scoreboard** | Measures the open model on a game: wins, draws and losses, legal and best moves, and best moves in held-out positions, kept per model. |
 | **2.1 Game profiles** | Real games, played from the screen with a virtual keyboard and mouse: the game's window, the controls a network may use, the picture it sees, the safety limits, and a live view of that picture. *Start the test range* opens Tools' own small first-person game. |
 | **2.2 Controls check** | Test actions (`hold w+shift 500; move 15 0; click left`) sent to the game through the safety layer, with every action and refusal logged; on the test range, what the range received. |
+| **2.3 Record** | You play; Tools records what you see and the controls you use, in step (only the profile's controls, only while the game is in front), for training or held out for testing. |
+| **2.4 Recordings** | Replay a recording picture by picture with the controls used at each moment and a timeline, check it against the raw input, mark it for training or testing, delete it. |
 | **3.1 Apps** | Later. |
 | **Settings** | The Yendory Network's state, the folders, the versions. |
 

@@ -1,7 +1,9 @@
 # Game training in Yendory Tools (plan)
 
-Status: **phase 2 built** (Tools 0.1.1: game profiles, the safety layer, virtual input, capture, the
-emergency stop and the test range; see "Built so far" at the end). The rest is the plan. The goal
+Status: **phases 2 and 3 built** (Tools 0.1.2: game profiles, the safety layer, virtual input,
+capture, the emergency stop and the test range; Tools 0.1.3: recording a person's play, and
+inspecting, replaying and checking recordings; see "Built so far" at the end). The rest is the
+plan. The goal
 (from the owner): Gaming Nova learns to
 play real games from the screen, through virtual keyboard and mouse, first by imitating the
 owner's play, then by its own experience and by generations of candidates, without any
@@ -103,20 +105,41 @@ keys with a key grab; recording with XInput2), through x11rb; Wayland does not a
 
 ## 3. Recordings (demonstrations and episodes)
 
-A recording is a folder in Tools' data (`games/<profile>/recordings/<id>/`):
+A recording is a folder in Tools' data (`games/<profile>/recordings/<id>/`; the code and the exact
+layout are in `live/recording.rs`):
 
-- `recording.json`: the profile as it was (controls in order, frame size, tick rate), who played
-  (a person or which model), the split (training or evaluation), notes, length, sizes;
-- `frames.bin`: the frames at the profile's size, one after another, compressed in chunks;
-- `ticks.bin`: per tick, the time, the frame index, the held keys and buttons, the mouse movement
-  since the previous tick, and (for model play) the network's choice before the safety layer;
-- `events.jsonl`: the raw input events with their times.
+- `recording.json`: the game, who played (`person`, later the model), training or testing (held
+  out), notes, the picture's size and channels, the rate, the controls in bit order, the length,
+  the time paused, missed pictures, the size, and whether it ended cleanly (a recording cut short by
+  a crash stays readable);
+- `frames.bin`: the pictures one after another, each compressed on its own (deflate), so any
+  picture can be read directly;
+- `ticks.bin`: one 40-byte record per picture: its time (microseconds), where its picture is,
+  the keys (64 bits) and buttons **active at any moment since the previous picture** (so a click
+  shorter than a tick still counts), the mouse movement since the previous picture, and whether
+  it is the first after a pause;
+- `events.jsonl`: the raw presses, releases and movements with their times, and the controls held
+  whenever recording (re)starts.
 
-Size: a 128x72 grey frame is 9 KB, about 11 MB a minute before compression. Each profile has a
-storage limit; recording stops at it and nothing is deleted without the owner deleting it.
+**What a tick means.** The picture of tick k is taken at its time; the controls of tick k are
+those used before it (since tick k-1). What the player did after seeing picture k is in tick k+1
+and later (people react in a few hundred milliseconds); training chooses that offset.
 
-Recordings can be inspected (frames, a timeline of the controls) and replayed in Tools; a replay
-shows exactly what was saved, frame by frame with the inputs drawn beside it.
+**What is recorded, and what never is.** Input is read as the devices report it (Windows Raw
+Input, X11 XInput2 raw events), like a game reads it. Only the profile's controls are written down
+(other keys are never kept, so typing elsewhere is not recorded), and only while the game is in
+front: switching away pauses the recording and those moments are left out. Virtual input (from
+Tools or any other program) is never recorded as the person's: on Windows it has no device, on
+X11 it comes from XTEST, and both are skipped. Recording sends no input to the game.
+
+**Checking a recording** reads every picture and rebuilds every tick's controls from the raw
+events; any disagreement, unreadable picture or time out of order is reported. The recorder ends
+on Stop, the emergency stop keys (the recording is kept), the profile's storage limit, or the
+game's window closing.
+
+Size: the range at 128x72 in colour is about 1 MB a minute; a real game compresses less. Each
+profile has a storage limit; recording stops at it and nothing is deleted without the owner
+deleting it.
 
 ## 4. Generation 0 (imitation)
 
@@ -270,4 +293,32 @@ run there. To check it: start Tools, *Start the test range* (2.1), *Watch*, then
 game*; the range's report should match the actions. Then make a profile for Ravenfield (windowed or
 borderless) and run the same checks on it.
 
-Next: phase 3, recording the person's play in sync with the pictures.
+## Built so far (phase 3, Tools 0.1.3)
+
+Code: `live/sys` (the listeners: Raw Input on Windows, XInput2 on X11), `live/record.rs` (the
+recorder) and `live/recording.rs` (the format, reading, checking).
+
+- **2.3 Record**: choose the game and whether the recording is for training or testing (held
+  out), add notes, start; Tools brings the game to the front and records until Stop or
+  Ctrl+Alt+End, showing the time, pictures, rate, size and the controls held. The profile's
+  storage limit (2.1) is shown and enforced.
+- **2.4 Recordings**: every recording of a game; open one to replay it (play at ¼× to 4×, step
+  picture by picture, scrub), see the controls active at each picture and a timeline of every
+  control and the mouse (click to jump), mark it for training or testing, edit its notes, check
+  it, or delete it.
+
+Checked: unit tests (the tick format, writing, reading, checking, catching a tampered tick, a
+recording cut short, the recorder with a simulated person including a pause and a key outside
+the profile, the storage limit), and on a real X display (CI under Xvfb): a person (played
+through XTEST, which only tests may listen to) walking, running, turning and clicking on the
+range is recorded with W active for the right number of ticks, exactly the mouse movement sent,
+the click, pictures that change, and every tick matching its raw events; and Tools' own
+listener does not hear XTEST input at all. The window was driven by hand under Xvfb: recording
+the range at 20 pictures a second, ending with the stop keys, the list, replay, the timeline and
+checking.
+
+**Not yet checked on Windows** (compiled and linted only): record a minute on the range, open it
+in 2.4 and play it back; the controls should follow what you did, and *Check the recording*
+should pass.
+
+Next: phase 4, the network (built to join Neuro) and Generation 0 trained on these recordings.

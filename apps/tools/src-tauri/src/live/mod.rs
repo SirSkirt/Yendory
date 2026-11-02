@@ -2,6 +2,8 @@
 //! keyboard and mouse input through the safety layer, the emergency stop, and the test range.
 pub mod controls;
 pub mod profile;
+pub mod record;
+pub mod recording;
 pub mod safety;
 pub mod script;
 pub mod sys;
@@ -49,7 +51,11 @@ impl RangeProcess {
             .args(["--range", "--seed", &seed.to_string()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Tests may ask for the range's error output in a file (YENDORY_RANGE_LOG).
+            .stderr(match std::env::var_os("YENDORY_RANGE_LOG").and_then(|p| std::fs::File::create(p).ok()) {
+                Some(f) => Stdio::from(f),
+                None => Stdio::null(),
+            })
             .spawn()
             .map_err(|e| format!("The range did not start: {e}"))?;
         let stdin = child.stdin.take().ok_or("The range has no input")?;
@@ -128,6 +134,8 @@ pub struct Live {
     range: Mutex<Option<RangeProcess>>,
     /// Whether the emergency stop keys are watched (the reason when not).
     stop_keys: Mutex<Option<Res<()>>>,
+    /// Ends the recording being made.
+    recording_stop: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl Live {
@@ -369,4 +377,170 @@ pub async fn range_reset(app: AppHandle, seed: u64) -> Res<()> {
 #[tauri::command]
 pub fn range_stop(live: tauri::State<'_, Live>) {
     live.range.lock().unwrap().take();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recordings
+// ---------------------------------------------------------------------------------------------
+
+/// What a recording needs before it starts: the desktop, the game's window, and the listener.
+type Prepared = (Box<dyn sys::Desktop>, u64, std::sync::mpsc::Receiver<sys::Heard>, sys::Listening);
+
+/// Starts recording the person's play of the profile's game: the game is brought to the front
+/// and recording begins once it is there. Progress arrives as `record-status` events and the end
+/// as `record-done` (the recording's info) or `record-failed`.
+#[tauri::command]
+pub async fn record_start(app: AppHandle, id: String, split: recording::Split, notes: String) -> Res<()> {
+    let data = data_dir(&app)?;
+    let p = profile::load(&data, &id)?;
+    let used = recording::usage(&data, &p.id);
+    let limit = p.storage_mb * 1024 * 1024;
+    if used >= limit {
+        return Err(format!("The game's recordings already use its storage limit ({} MB): delete some, or raise the limit in its profile", p.storage_mb));
+    }
+    let live = app.state::<Live>();
+    if live.running.swap(true, Ordering::AcqRel) {
+        return Err("Something is already running (actions or a recording)".into());
+    }
+    let prepared = (|| -> Res<Prepared> {
+        let mut desk = sys::open()?;
+        let window =
+            desk.windows()?.into_iter().find(|w| p.matches(w)).ok_or("The game's window isn't open")?.id;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let listening = sys::listen(false, tx)?;
+        desk.bring_to_front(window)?;
+        Ok((desk, window, rx, listening))
+    })();
+    let (mut desk, window, rx, listening) = match prepared {
+        Ok(x) => x,
+        Err(e) => {
+            live.running.store(false, Ordering::Release);
+            return Err(e);
+        }
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    *live.recording_stop.lock().unwrap() = Some(stop.clone());
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let setup = record::Setup {
+            data: &data,
+            profile: &p,
+            window,
+            split,
+            notes: notes.chars().take(2000).collect(),
+            room: limit.saturating_sub(used),
+        };
+        let a3 = app2.clone();
+        let result = record::record(setup, desk.as_mut(), rx, &stop, move |s| {
+            let _ = a3.emit("record-status", s);
+        });
+        drop(listening);
+        let live = app2.state::<Live>();
+        live.recording_stop.lock().unwrap().take();
+        live.running.store(false, Ordering::Release);
+        match result {
+            Ok(info) => {
+                let _ = app2.emit("record-done", info);
+            }
+            Err(e) => {
+                let _ = app2.emit("record-failed", e);
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn record_stop(live: tauri::State<'_, Live>) {
+    if let Some(s) = live.recording_stop.lock().unwrap().as_ref() {
+        s.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingList {
+    recordings: Vec<recording::Info>,
+    used_bytes: u64,
+    limit_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn recordings(app: AppHandle, id: String) -> Res<RecordingList> {
+    let data = data_dir(&app)?;
+    let p = profile::load(&data, &id)?;
+    Ok(RecordingList {
+        recordings: recording::list(&data, &id),
+        used_bytes: recording::usage(&data, &id),
+        limit_bytes: p.storage_mb * 1024 * 1024,
+    })
+}
+
+/// A recording's ticks, as parallel arrays for the timeline (keys split in two 32-bit halves).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TickArrays {
+    info: recording::Info,
+    ms: Vec<f64>,
+    keys_lo: Vec<u32>,
+    keys_hi: Vec<u32>,
+    buttons: Vec<u8>,
+    dx: Vec<f32>,
+    dy: Vec<f32>,
+    gap: Vec<u8>,
+}
+
+#[tauri::command]
+pub async fn recording_ticks(app: AppHandle, id: String, recording: String) -> Res<TickArrays> {
+    let r = recording::open(&data_dir(&app)?, &id, &recording)?;
+    let t = &r.ticks;
+    Ok(TickArrays {
+        ms: t.iter().map(|t| t.t_us as f64 / 1000.0).collect(),
+        keys_lo: t.iter().map(|t| t.keys as u32).collect(),
+        keys_hi: t.iter().map(|t| (t.keys >> 32) as u32).collect(),
+        buttons: t.iter().map(|t| t.buttons).collect(),
+        dx: t.iter().map(|t| t.dx).collect(),
+        dy: t.iter().map(|t| t.dy).collect(),
+        gap: t.iter().map(|t| t.flags & recording::AFTER_GAP).collect(),
+        info: r.info,
+    })
+}
+
+/// A recorded picture, in the preview's layout (8 bytes of size and channels, then pixels).
+#[tauri::command]
+pub async fn recording_frame(
+    app: AppHandle,
+    id: String,
+    recording: String,
+    index: usize,
+) -> Res<tauri::ipc::Response> {
+    let mut r = recording::open(&data_dir(&app)?, &id, &recording)?;
+    let px = r.frame(index)?;
+    let mut out = Vec::with_capacity(8 + px.len());
+    out.extend_from_slice(&(r.info.width as u16).to_le_bytes());
+    out.extend_from_slice(&(r.info.height as u16).to_le_bytes());
+    out.extend_from_slice(&[r.info.channels, 0, 0, 0]);
+    out.extend_from_slice(&px);
+    Ok(tauri::ipc::Response::new(out))
+}
+
+#[tauri::command]
+pub async fn recording_validate(app: AppHandle, id: String, recording: String) -> Res<recording::Validation> {
+    recording::validate(&data_dir(&app)?, &id, &recording)
+}
+
+#[tauri::command]
+pub fn recording_update(
+    app: AppHandle,
+    id: String,
+    recording: String,
+    split: recording::Split,
+    notes: String,
+) -> Res<recording::Info> {
+    recording::update(&data_dir(&app)?, &id, &recording, split, &notes)
+}
+
+#[tauri::command]
+pub fn recording_delete(app: AppHandle, id: String, recording: String) -> Res<()> {
+    recording::delete(&data_dir(&app)?, &id, &recording)
 }

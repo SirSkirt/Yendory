@@ -117,6 +117,9 @@ impl Profile {
                 keys.push(info.name.to_string());
             }
         }
+        if keys.len() > 64 {
+            return Err("At most 64 keys (a recording keeps each tick's keys in 64 bits)".into());
+        }
         self.keys = keys;
         self.buttons.sort();
         self.buttons.dedup();

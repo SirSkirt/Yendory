@@ -314,3 +314,168 @@ pub fn stop_key_watch(on_stop: Box<dyn Fn() + Send>) -> Res<()> {
         _ => Err("Windows did not let Tools watch the emergency stop keys".into()),
     }
 }
+
+/// Listens to the keyboard and mouse through Raw Input on a hidden window (what the devices
+/// report, whichever program is in front): keys from the controls table, the three buttons,
+/// and relative movement. Injected input (from programs, Tools included) has no device and is
+/// skipped unless `accept_virtual`, which only tests use.
+///
+/// Raw Input is registered once per process for each kind of device, so this replaces the
+/// registration of Tools' windows while listening (they don't use raw input).
+pub fn listen(accept_virtual: bool, tx: mpsc::Sender<super::Heard>) -> Res<super::Listening> {
+    use super::Input;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Instant;
+    use windows_sys::Win32::UI::Input::MOUSE_MOVE_ABSOLUTE;
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+        RIDEV_INPUTSINK, RIDEV_REMOVE, RID_INPUT, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PostMessageW, RegisterClassW,
+        HWND_MESSAGE, RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP,
+        RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN,
+        RI_MOUSE_RIGHT_BUTTON_UP, WM_INPUT, WM_USER, WNDCLASSW,
+    };
+
+    unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        DefWindowProcW(h, m, w, l)
+    }
+    fn key_name(scan: u16, e0: bool) -> Option<&'static str> {
+        match (scan, e0) {
+            (0x36, false) => return Some("shift"),
+            (0x1D, true) => return Some("ctrl"),
+            (0x38, true) => return Some("alt"),
+            (0x1C, true) => return Some("enter"),
+            // Shift codes Windows adds around some keys, not keys pressed.
+            (0x2A, true) | (0x36, true) => return None,
+            _ => {}
+        }
+        crate::live::controls::KEYS.iter().find(|k| k.scan == scan && k.extended == e0).map(|k| k.name)
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let window = Arc::new(AtomicUsize::new(0));
+    let (ready_tx, ready_rx) = mpsc::channel::<Res<()>>();
+    let (stopping, win) = (stop.clone(), window.clone());
+    const WAKE: u32 = WM_USER + 7;
+    let thread = std::thread::Builder::new()
+        .name("input listener".into())
+        .spawn(move || unsafe {
+            let class: Vec<u16> = "YendoryToolsInput\0".encode_utf16().collect();
+            let instance = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(proc),
+                hInstance: instance,
+                lpszClassName: class.as_ptr(),
+                ..std::mem::zeroed()
+            };
+            RegisterClassW(&wc); // Fails harmlessly when already registered by an earlier recording.
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                null_mut(),
+                instance,
+                std::ptr::null(),
+            );
+            if hwnd.is_null() {
+                let _ =
+                    ready_tx.send(Err("Windows did not let Tools listen to the keyboard and mouse".into()));
+                return;
+            }
+            let devices = [
+                RAWINPUTDEVICE { usUsagePage: 1, usUsage: 6, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+                RAWINPUTDEVICE { usUsagePage: 1, usUsage: 2, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            ];
+            if RegisterRawInputDevices(devices.as_ptr(), 2, std::mem::size_of::<RAWINPUTDEVICE>() as u32) == 0
+            {
+                DestroyWindow(hwnd);
+                let _ =
+                    ready_tx.send(Err("Windows did not let Tools listen to the keyboard and mouse".into()));
+                return;
+            }
+            win.store(hwnd as usize, Ordering::Release);
+            let _ = ready_tx.send(Ok(()));
+            let mut msg: MSG = std::mem::zeroed();
+            // u64s, so the RAWINPUT read from it is aligned.
+            let mut buf = vec![0u64; 128];
+            while !stopping.load(Ordering::Acquire) && GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+                if msg.message == WAKE {
+                    continue;
+                }
+                if msg.message == WM_INPUT {
+                    let now = Instant::now();
+                    let mut size = (buf.len() * 8) as u32;
+                    let got = GetRawInputData(
+                        msg.lParam as HRAWINPUT,
+                        RID_INPUT,
+                        buf.as_mut_ptr() as *mut _,
+                        &mut size,
+                        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+                    );
+                    if got != u32::MAX && got as usize >= std::mem::size_of::<RAWINPUTHEADER>() {
+                        let raw = &*(buf.as_ptr() as *const RAWINPUT);
+                        let injected = raw.header.hDevice.is_null();
+                        let mut heard: Vec<Input> = Vec::new();
+                        if !injected || accept_virtual {
+                            if raw.header.dwType == RIM_TYPEKEYBOARD {
+                                let k = raw.data.keyboard;
+                                let e0 = k.Flags as u32 & RI_KEY_E0 != 0;
+                                if let Some(key) = key_name(k.MakeCode, e0) {
+                                    heard.push(Input::Key { key, down: k.Flags as u32 & RI_KEY_BREAK == 0 });
+                                }
+                            } else if raw.header.dwType == RIM_TYPEMOUSE {
+                                let m = raw.data.mouse;
+                                if m.usFlags & MOUSE_MOVE_ABSOLUTE == 0 && (m.lLastX != 0 || m.lLastY != 0) {
+                                    heard.push(Input::Motion { dx: m.lLastX as f64, dy: m.lLastY as f64 });
+                                }
+                                let flags = m.Anonymous.Anonymous.usButtonFlags as u32;
+                                for (bit, button, down) in [
+                                    (RI_MOUSE_LEFT_BUTTON_DOWN, Button::Left, true),
+                                    (RI_MOUSE_LEFT_BUTTON_UP, Button::Left, false),
+                                    (RI_MOUSE_RIGHT_BUTTON_DOWN, Button::Right, true),
+                                    (RI_MOUSE_RIGHT_BUTTON_UP, Button::Right, false),
+                                    (RI_MOUSE_MIDDLE_BUTTON_DOWN, Button::Middle, true),
+                                    (RI_MOUSE_MIDDLE_BUTTON_UP, Button::Middle, false),
+                                ] {
+                                    if flags & bit != 0 {
+                                        heard.push(Input::Button { button, down });
+                                    }
+                                }
+                            }
+                        }
+                        for h in heard {
+                            if tx.send((now, h)).is_err() {
+                                stopping.store(true, Ordering::Release);
+                            }
+                        }
+                    }
+                }
+                DispatchMessageW(&msg);
+            }
+            let remove = [
+                RAWINPUTDEVICE { usUsagePage: 1, usUsage: 6, dwFlags: RIDEV_REMOVE, hwndTarget: null_mut() },
+                RAWINPUTDEVICE { usUsagePage: 1, usUsage: 2, dwFlags: RIDEV_REMOVE, hwndTarget: null_mut() },
+            ];
+            RegisterRawInputDevices(remove.as_ptr(), 2, std::mem::size_of::<RAWINPUTDEVICE>() as u32);
+            DestroyWindow(hwnd);
+        })
+        .map_err(|e| e.to_string())?;
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("Windows did not let Tools listen to the keyboard and mouse".into()),
+    }
+    let wake: Box<dyn Fn() + Send> = Box::new(move || unsafe {
+        PostMessageW(window.load(Ordering::Acquire) as HWND, WAKE, 0, 0);
+    });
+    Ok(super::Listening::new(stop, Some(wake), thread))
+}

@@ -437,3 +437,18 @@ main { max-width: 1112px; }
 #checkActions { width: 100%; font: 14px var(--mono); padding: 8px; background: var(--sheet); color: var(--ink); border: 1px solid var(--rule-strong); }
 .ledger tr.refused td { color: var(--bad); }
 .range-report { margin: 14px 0; }
+
+/* ---- Recordings ------------------------------------------------------------------------------ */
+.rec-live { margin: 14px 0; padding: 10px 16px; border-left: 3px solid var(--bad); background: var(--sheet); max-width: 60ch; }
+.rec-live.paused { border-left-color: var(--warn); }
+.rec-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--bad); margin-right: 8px; animation: rec-blink 1s steps(2) infinite; }
+.rec-live.paused .rec-dot { background: var(--warn); animation: none; }
+@keyframes rec-blink { 50% { opacity: .25; } }
+.key-chips .chip { display: inline-block; min-width: 2.2em; text-align: center; padding: 3px 7px; font: 13px var(--mono); border: 1px solid var(--rule-strong); border-radius: 4px; background: var(--sheet); color: var(--ink-soft); }
+.key-chips .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.viewer { margin-top: 18px; }
+.viewer-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 1000px) { .viewer-grid { grid-template-columns: 1fr; } }
+.scrub { width: 100%; margin: 8px 0; }
+.timeline { width: 100%; background: var(--sheet); border: 1px solid var(--rule); cursor: pointer; margin-top: 8px; }
+.ledger tr.open-row td { background: var(--accent-soft); }

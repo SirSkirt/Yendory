@@ -26,6 +26,7 @@ const S = { route: store.get("route", "games"), about: null, games: [], model: n
 const ROUTES = {
   games: ["Games", "Games"], play: ["Games", "Play"], lessons: ["Games", "Lessons"], scoreboard: ["Games", "Scoreboard"],
   profiles: ["Real games", "Game profiles"], controls: ["Real games", "Controls check"],
+  record: ["Real games", "Record"], recordings: ["Real games", "Recordings"],
   apps: ["Apps", "Apps"], settings: ["Tools", "Settings"],
 };
 
@@ -80,6 +81,9 @@ function render() {
   if (S.route === "settings") renderSettings();
   if (S.route === "profiles") renderProfiles();
   if (S.route === "controls") renderCheck();
+  if (S.route === "record") renderRecord();
+  if (S.route === "recordings") renderRecordings();
+  if (S.route !== "recordings") stopReplay();
   if (S.route !== "profiles") L.watching = false;
   renderWatch();
 }
@@ -394,6 +398,7 @@ function fillForm(p) {
   $("pfHold").value = p.limits.maxHoldMs;
   $("pfRate").value = p.limits.maxActionsPerSecond;
   $("pfStep").value = p.limits.maxMouseStep;
+  $("pfStorage").value = p.storageMb;
   $("pfSaved").textContent = "";
   sizePreview();
 }
@@ -410,6 +415,7 @@ function readForm() {
   p.mouseScale = num("pfScale");
   p.capture = { width: num("pfWidth"), height: num("pfHeight"), gray: document.querySelector("input[name=pfColour]:checked")?.value === "grey", fps: num("pfFps") };
   p.limits = { maxHoldMs: num("pfHold"), maxActionsPerSecond: num("pfRate"), maxMouseStep: num("pfStep") };
+  p.storageMb = num("pfStorage");
   return p;
 }
 
@@ -511,11 +517,11 @@ async function watchLoop() {
 }
 // Raw bytes from the backend arrive as an ArrayBuffer (or, over some IPC paths, as an array).
 const asBytes = b => (b instanceof ArrayBuffer ? new Uint8Array(b) : b instanceof Uint8Array ? b : Uint8Array.from(b));
-function drawPreview(bytes) {
+function drawPreview(bytes) { drawPreviewTo($("preview"), bytes); }
+function drawPreviewTo(c, bytes) {
   const w = bytes[0] | (bytes[1] << 8), h = bytes[2] | (bytes[3] << 8), ch = bytes[4];
   const px = bytes.subarray(8);
   if (px.length < w * h * ch) throw new Error("The picture arrived incomplete");
-  const c = $("preview");
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   const img = new ImageData(w, h);
   for (let i = 0, j = 0; i < w * h; i++, j += ch) {
@@ -593,6 +599,240 @@ async function checkDone(stopped) {
     el("tr", {}, el("th", {}, "Still held in the game"), el("td", {}, Object.entries(after.held || {}).filter(([, v]) => v).map(([k]) => k).join(", ") || "nothing"))));
 }
 
+// ---- Real games: recording ----------------------------------------------------------------------
+// The person plays; the backend records pictures and controls in step (src-tauri/src/live/record.rs).
+const R = { recording: false, profile: null, list: [], view: null, index: 0, playing: false, fetching: false, playFrom: 0, playAt: 0 };
+const mb = b => `${trim1(b / 1048576)} MB`;
+const clock = ms => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const keyLabel = name => L.info?.keys.find(k => k.name === name)?.label ?? name;
+const chips = (names, on) => names.map(n => el("span", { class: "chip" + (on.includes(n) ? " on" : "") }, keyLabel(n)));
+
+async function renderRecord() {
+  if (!L.info) return;
+  profileOptions($("recProfile"), R.profile ?? L.editing?.id, false);
+  const id = $("recProfile").value;
+  R.profile = id || null;
+  if (!id) { $("recWindow").textContent = "Make a game profile first (2.1)."; $("recStart").disabled = true; return; }
+  const [w, list] = await Promise.all([act("live_find_window", { id }), act("recordings", { id })]);
+  $("recWindow").textContent = w ? `Window: ${w.title} (${w.process || "?"})` : "The game's window isn't open.";
+  if (list) {
+    $("recStorage").textContent = `Recordings of this game: ${mb(list.usedBytes)} of ${mb(list.limitBytes)} (the limit is set in its profile).`;
+    $("recStorageBar").style.width = `${Math.min(100, (100 * list.usedBytes) / list.limitBytes)}%`;
+  }
+  $("recStart").disabled = !w || R.recording || L.running;
+  $("recStart").hidden = R.recording;
+  $("recStopBtn").hidden = !R.recording;
+}
+
+async function startRecording() {
+  const split = document.querySelector("input[name=recSplit]:checked")?.value || "train";
+  const ok = await act("record_start", { id: $("recProfile").value, split, notes: $("recNotes").value.trim() });
+  if (ok === undefined) return;
+  R.recording = true;
+  $("recDone").hidden = true;
+  $("recLive").hidden = false;
+  $("recState").textContent = "Starting…";
+  for (const id of ["recTime", "recTicks", "recFps", "recBytes"]) $(id).textContent = "—";
+  $("recHeld").replaceChildren();
+  renderRecord();
+}
+
+function recordStatus(st) {
+  if (!R.recording) return;
+  $("recLive").classList.toggle("paused", !st.inFront);
+  $("recState").textContent = st.inFront ? "Recording" : "Paused: the game is not in front";
+  $("recTime").textContent = clock(st.ms);
+  $("recTicks").textContent = fmt(st.ticks);
+  $("recFps").textContent = st.inFront ? trim1(st.fps) : "—";
+  $("recBytes").textContent = mb(st.bytes);
+  const p = L.profiles.find(x => x.id === R.profile);
+  if (p) $("recHeld").replaceChildren(...chips([...p.keys, ...p.buttons], st.held));
+}
+
+function recordEnded(info, error) {
+  R.recording = false;
+  $("recLive").hidden = true;
+  const d = $("recDone");
+  d.hidden = false;
+  if (error) {
+    d.replaceChildren(el("p", { class: "warn" }, `The recording failed: ${error}`));
+  } else {
+    d.replaceChildren(el("h3", {}, "Recorded"),
+      el("p", {}, `${clock(info.durationMs - info.pausedMs)} of play, ${fmt(info.ticks)} pictures, ${mb(info.bytes)}. It ${info.ended === "stopped" ? "was stopped" : info.ended.startsWith("ended") ? info.ended : `ended because ${info.ended}`}.` +
+        (info.droppedTicks ? ` ${fmt(info.droppedTicks)} pictures were missed (the computer was busy).` : "")),
+      el("button", { type: "button", onclick: () => { R.profile = info.profile; show("recordings"); openRecording(info.id); } }, "Watch it"));
+  }
+  if (S.route === "record") renderRecord();
+  if (S.route === "recordings") renderRecordings();
+}
+
+async function renderRecordings() {
+  if (!L.info) return;
+  profileOptions($("recsProfile"), R.profile ?? L.editing?.id, false);
+  const id = $("recsProfile").value;
+  R.profile = id || null;
+  const body = $("recsTable").tBodies[0];
+  if (!id) { body.replaceChildren(el("tr", {}, el("td", { colspan: 8, class: "empty" }, "Make a game profile first (2.1)."))); return; }
+  const list = await act("recordings", { id });
+  if (!list) return;
+  R.list = list.recordings;
+  $("recsUsage").textContent = `${R.list.length} recording${R.list.length === 1 ? "" : "s"}, ${mb(list.usedBytes)} of ${mb(list.limitBytes)}`;
+  body.replaceChildren(...(R.list.length ? R.list.map(r => el("tr", { class: R.view?.info.id === r.id ? "open-row" : "" },
+    el("td", {}, when(r.started)),
+    el("td", {}, r.player === "person" ? "you" : r.player),
+    el("td", {}, r.split === "test" ? "testing" : "training"),
+    el("td", { class: "num" }, clock(r.durationMs - r.pausedMs)),
+    el("td", { class: "num" }, fmt(r.ticks)),
+    el("td", { class: "num" }, mb(r.bytes)),
+    el("td", {}, r.notes + (r.complete ? "" : ` (${r.ended})`)),
+    el("td", {}, el("button", { type: "button", onclick: () => openRecording(r.id) }, "Open"))))
+    : [el("tr", {}, el("td", { colspan: 8, class: "empty" }, "No recordings of this game yet (2.3 Record)."))]));
+}
+
+async function openRecording(rec) {
+  stopReplay();
+  const t = await act("recording_ticks", { id: R.profile, recording: rec });
+  if (!t) return;
+  R.view = t;
+  R.index = 0;
+  $("viewer").hidden = false;
+  $("validation").replaceChildren();
+  $("viewerTitle").textContent = `${t.info.game}, ${when(t.info.started)}`;
+  $("replayPos").max = String(Math.max(0, t.ms.length - 1));
+  for (const r of document.querySelectorAll("input[name=viewSplit]")) r.checked = r.value === t.info.split;
+  $("viewNotes").value = t.info.notes;
+  const c = $("replay");
+  c.width = t.info.width; c.height = t.info.height;
+  await renderRecordings();
+  await showTick(0);
+  $("viewer").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function tickControls(i) {
+  const v = R.view, on = [];
+  v.info.keys.forEach((k, b) => { if ((b < 32 ? v.keysLo[i] >>> b : v.keysHi[i] >>> (b - 32)) & 1) on.push(k); });
+  v.info.buttons.forEach((k, b) => { if ((v.buttons[i] >> b) & 1) on.push(k); });
+  return on;
+}
+
+async function showTick(i) {
+  const v = R.view;
+  if (!v || !v.ms.length) return;
+  R.index = Math.max(0, Math.min(v.ms.length - 1, i));
+  $("replayPos").value = String(R.index);
+  const first = v.ms[0], ms = v.ms[R.index];
+  $("replayTime").textContent = `${clock(ms - first)} · picture ${fmt(R.index + 1)} of ${fmt(v.ms.length)}`;
+  $("replayControls").replaceChildren(...chips([...v.info.keys, ...v.info.buttons], tickControls(R.index)));
+  $("replayMouse").textContent = v.info.mouse ? `Mouse: ${trim1(v.dx[R.index])} across, ${trim1(v.dy[R.index])} down` + (v.gap[R.index] ? " · starts after a pause" : "") : "";
+  drawTimeline();
+  if (R.fetching) return;
+  R.fetching = true;
+  try {
+    const bytes = asBytes(await invoke("recording_frame", { id: R.profile, recording: v.info.id, index: R.index }));
+    drawPreviewTo($("replay"), bytes);
+  } catch (e) { toast(String(e), true); } finally { R.fetching = false; }
+}
+
+function drawTimeline() {
+  const v = R.view, c = $("timeline");
+  if (!v) return;
+  const names = [...v.info.keys, ...v.info.buttons];
+  const rows = names.length + (v.info.mouse ? 1 : 0);
+  const w = c.clientWidth || 600, rowH = 12, h = Math.max(24, rows * rowH + 4);
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  const g = c.getContext("2d"), n = v.ms.length, css = getComputedStyle(document.body);
+  g.clearRect(0, 0, w, h);
+  g.font = "10px monospace";
+  const accent = css.getPropertyValue("--accent").trim() || "#284a7e";
+  const soft = css.getPropertyValue("--ink-soft").trim() || "#666";
+  const label = 46, plot = w - label;
+  names.forEach((name, r) => {
+    g.fillStyle = soft; g.fillText(keyLabel(name).slice(0, 7), 2, r * rowH + 10);
+    g.fillStyle = accent;
+    let start = -1;
+    for (let i = 0; i <= n; i++) {
+      const on = i < n && tickControls(i).includes(name);
+      if (on && start < 0) start = i;
+      if (!on && start >= 0) { g.fillRect(label + (start / n) * plot, r * rowH + 2, Math.max(1, ((i - start) / n) * plot), rowH - 4); start = -1; }
+    }
+  });
+  if (v.info.mouse) {
+    const r = names.length, mid = r * rowH + rowH / 2;
+    g.fillStyle = soft; g.fillText("mouse", 2, r * rowH + 10);
+    const most = Math.max(1, ...v.dx.map(Math.abs));
+    g.fillStyle = accent;
+    for (let i = 0; i < n; i++) {
+      const hgt = (v.dx[i] / most) * (rowH / 2 - 1);
+      if (hgt) g.fillRect(label + (i / n) * plot, Math.min(mid, mid - hgt), Math.max(1, plot / n), Math.abs(hgt));
+    }
+  }
+  g.fillStyle = css.getPropertyValue("--bad").trim() || "#9a2e28";
+  g.fillRect(label + (R.index / Math.max(1, n)) * plot, 0, 2, h);
+}
+
+function stopReplay() {
+  R.playing = false;
+  if ($("replayPlay")) $("replayPlay").textContent = "Play";
+}
+function togglePlay() {
+  if (!R.view) return;
+  R.playing = !R.playing;
+  $("replayPlay").textContent = R.playing ? "Pause" : "Play";
+  if (!R.playing) return;
+  if (R.index >= R.view.ms.length - 1) R.index = 0;
+  R.playFrom = R.view.ms[R.index];
+  R.playAt = performance.now();
+  requestAnimationFrame(playStep);
+}
+function playStep() {
+  if (!R.playing || !R.view) return;
+  const v = R.view, speed = Number($("replaySpeed").value) || 1;
+  const target = R.playFrom + (performance.now() - R.playAt) * speed;
+  let i = R.index;
+  while (i < v.ms.length - 1 && v.ms[i + 1] <= target) i++;
+  if (i !== R.index && !R.fetching) showTick(i);
+  if (i >= v.ms.length - 1) { stopReplay(); return; }
+  requestAnimationFrame(playStep);
+}
+
+async function saveRecording() {
+  if (!R.view) return;
+  const split = document.querySelector("input[name=viewSplit]:checked")?.value || "train";
+  const info = await act("recording_update", { id: R.profile, recording: R.view.info.id, split, notes: $("viewNotes").value.trim() });
+  if (!info) return;
+  R.view.info = info;
+  toast("Saved.");
+  renderRecordings();
+}
+
+async function checkRecording() {
+  if (!R.view) return;
+  $("validation").replaceChildren(el("p", { class: "note" }, "Reading every picture and rebuilding every step's controls from the raw input…"));
+  const v = await act("recording_validate", { id: R.profile, recording: R.view.info.id });
+  if (!v) { $("validation").replaceChildren(); return; }
+  const row = (k, val) => el("tr", {}, el("th", {}, k), el("td", {}, val));
+  $("validation").replaceChildren(
+    el("p", { class: v.ok ? "ok" : "bad" }, v.ok ? "The recording checks out: every picture reads, and every step's controls match the raw input." : "The recording has problems:"),
+    el("table", { class: "figures narrow" },
+      row("Pictures", fmt(v.ticks)),
+      row("Played", `${trim1(v.seconds)} s at ${trim1(v.fps)} pictures a second`),
+      row("Longest gap between pictures", `${trim1(v.longestGapMs)} ms`),
+      row("Pictures that can't be read", fmt(v.picturesBad)),
+      row("Steps whose controls don't match the raw input", fmt(v.ticksDisagreeing) + (v.firstDisagreement ? ` (${v.firstDisagreement})` : "")),
+      row("Times out of order", fmt(v.timesOutOfOrder)),
+      row("Mouse movement in all", `${fmt(Math.round(v.mouseX))} across, ${fmt(Math.round(v.mouseY))} down`),
+      ...v.activeTicks.map(([name, n]) => row(`${keyLabel(name)} active`, `${fmt(n)} steps (${pct(n, v.ticks)})`))));
+}
+
+async function deleteRecording() {
+  if (!R.view || !confirm("Delete this recording? It can't be undone.")) return;
+  if ((await act("recording_delete", { id: R.profile, recording: R.view.info.id })) === undefined) return;
+  R.view = null;
+  $("viewer").hidden = true;
+  renderRecordings();
+}
+
 // ---- Settings -----------------------------------------------------------------------------------
 function renderSettings() {
   const a = S.about;
@@ -658,7 +898,28 @@ function wire() {
   $("liveStop").addEventListener("click", () => invoke("live_stop"));
   listen("live-log", e => logRows(e.payload));
   listen("live-done", e => checkDone(e.payload.stopped));
-  listen("live-stopped", () => toast("Emergency stop: every control was released."));
+  listen("live-stopped", () => toast(R.recording ? "Recording ended with the emergency stop keys; it is kept." : "Emergency stop: every control was released."));
+  $("recProfile").addEventListener("change", () => { R.profile = $("recProfile").value; renderRecord(); });
+  $("recStart").addEventListener("click", startRecording);
+  $("recStopBtn").addEventListener("click", () => invoke("record_stop"));
+  listen("record-status", e => recordStatus(e.payload));
+  listen("record-done", e => recordEnded(e.payload, null));
+  listen("record-failed", e => recordEnded(null, String(e.payload)));
+  $("recsProfile").addEventListener("change", () => { R.profile = $("recsProfile").value; R.view = null; $("viewer").hidden = true; stopReplay(); renderRecordings(); });
+  $("replayPos").addEventListener("input", () => { stopReplay(); showTick(Number($("replayPos").value)); });
+  $("replayPlay").addEventListener("click", togglePlay);
+  $("replayBack").addEventListener("click", () => { stopReplay(); showTick(R.index - 1); });
+  $("replayFwd").addEventListener("click", () => { stopReplay(); showTick(R.index + 1); });
+  $("timeline").addEventListener("click", e => {
+    if (!R.view) return;
+    const c = $("timeline"), x = e.offsetX * (c.width / c.clientWidth), label = 46;
+    stopReplay();
+    showTick(Math.round(((x - label) / (c.width - label)) * R.view.ms.length));
+  });
+  $("viewSave").addEventListener("click", saveRecording);
+  $("viewCheck").addEventListener("click", checkRecording);
+  $("viewDelete").addEventListener("click", deleteRecording);
+  window.addEventListener("resize", () => { if (S.route === "recordings") drawTimeline(); });
 }
 
 async function start() {

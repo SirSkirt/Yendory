@@ -8,12 +8,12 @@ use serde::Serialize;
 #[cfg(target_os = "linux")]
 mod x11;
 #[cfg(target_os = "linux")]
-pub use x11::{open, stop_key_watch};
+pub use x11::{listen, open, stop_key_watch};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{open, stop_key_watch};
+pub use windows::{listen, open, stop_key_watch};
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn open() -> Res<Box<dyn Desktop>> {
@@ -22,6 +22,61 @@ pub fn open() -> Res<Box<dyn Desktop>> {
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn stop_key_watch(_on_stop: Box<dyn Fn() + Send>) -> Res<()> {
     Err("Real games need Windows or Linux (X11)".into())
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn listen(_accept_virtual: bool, _tx: std::sync::mpsc::Sender<Heard>) -> Res<Listening> {
+    Err("Real games need Windows or Linux (X11)".into())
+}
+
+/// A person's input, as the keyboard and mouse report it (before any program sees it).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    /// A key from the controls table (others are not reported).
+    Key {
+        key: &'static str,
+        down: bool,
+    },
+    Button {
+        button: Button,
+        down: bool,
+    },
+    /// Relative mouse movement, in the mouse's own units.
+    Motion {
+        dx: f64,
+        dy: f64,
+    },
+}
+
+/// An input and when it arrived.
+pub type Heard = (std::time::Instant, Input);
+
+/// Listening to the keyboard and mouse; stops when dropped.
+pub struct Listening {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    wake: Option<Box<dyn Fn() + Send>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Listening {
+    pub(crate) fn new(
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        wake: Option<Box<dyn Fn() + Send>>,
+        thread: std::thread::JoinHandle<()>,
+    ) -> Listening {
+        Listening { stop, wake, thread: Some(thread) }
+    }
+}
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(w) = &self.wake {
+            w();
+        }
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -54,8 +54,12 @@ jobs:
         working-directory: apps/tools/src-tauri
       # Under a virtual X display, so the test range is played with real input and capture
       # (tests/live_range.rs).
-      - run: xvfb-run -a cargo test --release
+      # (A 24-bit screen like a desktop's; NO_AT_BRIDGE: GTK windows don't wait for an
+      # accessibility bus that CI doesn't have.)
+      - run: xvfb-run -a -s "-screen 0 1920x1080x24" cargo test --release
         working-directory: apps/tools/src-tauri
+        env:
+          NO_AT_BRIDGE: "1"
 
   desktop:
     name: ${{ matrix.name }}

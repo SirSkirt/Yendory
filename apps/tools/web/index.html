@@ -23,6 +23,8 @@
     <div class="nav-group nav-live" role="group" aria-labelledby="nav-live"><div class="nav-head" id="nav-live" title="Real games"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/><circle cx="12" cy="10.5" r="2.5"/><path d="M12 6.5v1.5M12 13v1.5M8 10.5h1.5M14.5 10.5H16"/></svg><span class="nav-label">Real games</span></div>
       <button type="button" class="nav-item" data-route="profiles" title="Game profiles"><span class="nav-num">2.1</span><span class="nav-label">Game profiles</span></button>
       <button type="button" class="nav-item" data-route="controls" title="Controls check"><span class="nav-num">2.2</span><span class="nav-label">Controls check</span></button>
+      <button type="button" class="nav-item" data-route="record" title="Record"><span class="nav-num">2.3</span><span class="nav-label">Record</span></button>
+      <button type="button" class="nav-item" data-route="recordings" title="Recordings"><span class="nav-num">2.4</span><span class="nav-label">Recordings</span></button>
     </div>
     <div class="nav-group nav-apps" role="group" aria-labelledby="nav-apps"><div class="nav-head" id="nav-apps" title="Apps"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Apps</span></div>
       <button type="button" class="nav-item" data-route="apps" title="Apps"><span class="nav-num">3.1</span><span class="nav-label">Apps</span></button>
@@ -162,6 +164,7 @@
         <div class="field-row"><label for="pfRate">Actions a second</label><input id="pfRate" type="number" min="1" max="200" class="narrow-num"><span class="note">presses and mouse moves; releases are never limited</span></div>
         <div class="field-row"><label for="pfStep">Largest mouse step</label><input id="pfStep" type="number" min="1" max="5000" class="narrow-num"><span class="note">units in one move</span></div>
         <p class="note">Input goes only to the game while it is in front: when another window comes forward, every control is released and input pauses.</p>
+        <div class="field-row"><label for="pfStorage">Storage for recordings</label><input id="pfStorage" type="number" min="16" max="1048576" class="narrow-num"><span class="note">MB; recording stops when the game's recordings reach it</span></div>
         <div class="actions"><button type="submit" class="primary" id="pfSave">Save the profile</button><span class="note" id="pfSaved"></span></div>
       </form>
       <aside class="live-side">
@@ -199,6 +202,87 @@
       <thead><tr><th class="num">ms</th><th>Action</th><th>What happened</th></tr></thead>
       <tbody></tbody>
     </table>
+  </section>
+
+  <!-- 2.3 Record -->
+  <section class="page lead-section" id="page-record" hidden>
+    <h2>Record</h2>
+    <p class="lede">Play the game yourself while Tools records what you see and every control you use, in step. These recordings are what Generation 0 learns from. Only the profile's controls are kept, and only while the game is in front: switching away pauses the recording and those moments are left out.</p>
+    <div class="line-form">
+      <label for="recProfile">Game</label><select id="recProfile"></select>
+      <span class="note" id="recWindow">—</span>
+    </div>
+    <div class="field-row checks"><span class="field-label">Use it for</span>
+      <label class="check-inline"><input type="radio" name="recSplit" value="train" checked> Training</label>
+      <label class="check-inline"><input type="radio" name="recSplit" value="test"> Testing: held out, never trained on</label>
+    </div>
+    <div class="field-row"><label for="recNotes">Notes</label><input id="recNotes" maxlength="200" placeholder="what you did, e.g. walking to targets and shooting"></div>
+    <div class="meter" id="recStorageMeter"><div id="recStorageBar"></div></div>
+    <p class="note" id="recStorage">—</p>
+    <div class="actions"><button type="button" class="primary" id="recStart">Start recording</button><button type="button" id="recStopBtn" hidden>Stop recording</button></div>
+    <p class="note">Tools brings the game to the front and records until you press <span class="mono">Ctrl+Alt+End</span> (the recording is kept) or come back here and press Stop. Recording never sends any input to the game.</p>
+    <div class="rec-live" id="recLive" hidden>
+      <p><span class="rec-dot" id="recDot"></span><b id="recState">Recording</b></p>
+      <table class="figures narrow">
+        <tr><th>Time</th><td id="recTime">—</td></tr>
+        <tr><th>Pictures</th><td id="recTicks">—</td></tr>
+        <tr><th>Pictures a second</th><td id="recFps">—</td></tr>
+        <tr><th>Size</th><td id="recBytes">—</td></tr>
+      </table>
+      <p class="field-label">Held now</p>
+      <div class="key-chips" id="recHeld"></div>
+    </div>
+    <div id="recDone" hidden></div>
+  </section>
+
+  <!-- 2.4 Recordings -->
+  <section class="page lead-section" id="page-recordings" hidden>
+    <h2>Recordings</h2>
+    <p class="lede">Every recording of a game: watch it back picture by picture with the controls used at each moment, and check it. Recordings marked for testing are held out: a network is only ever measured on them, never taught with them, so they show what it learned rather than memorised.</p>
+    <div class="line-form">
+      <label for="recsProfile">Game</label><select id="recsProfile"></select>
+      <span class="note" id="recsUsage">—</span>
+    </div>
+    <table class="ledger" id="recsTable">
+      <thead><tr><th>Recorded</th><th>Player</th><th>Use</th><th class="num">Length</th><th class="num">Pictures</th><th class="num">Size</th><th>Notes</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="viewer" id="viewer" hidden>
+      <h3 id="viewerTitle">—</h3>
+      <div class="viewer-grid">
+        <div>
+          <div class="preview-frame"><canvas id="replay" width="128" height="72"></canvas></div>
+          <input type="range" id="replayPos" min="0" max="0" value="0" class="scrub" aria-label="Position">
+          <div class="actions">
+            <button type="button" id="replayPlay">Play</button>
+            <button type="button" id="replayBack" title="One picture back">◀</button>
+            <button type="button" id="replayFwd" title="One picture on">▶</button>
+            <label for="replaySpeed" class="note">Speed</label>
+            <select id="replaySpeed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+            <span class="mono" id="replayTime">—</span>
+          </div>
+        </div>
+        <div>
+          <p class="field-label">Controls active in this picture's step</p>
+          <div class="key-chips" id="replayControls"></div>
+          <p class="mono" id="replayMouse">—</p>
+          <canvas id="timeline" class="timeline" height="120"></canvas>
+          <p class="note">Each row is a control, each column a picture; the line is where you are. Click to jump.</p>
+        </div>
+      </div>
+      <h3>This recording</h3>
+      <div class="field-row checks"><span class="field-label">Use it for</span>
+        <label class="check-inline"><input type="radio" name="viewSplit" value="train"> Training</label>
+        <label class="check-inline"><input type="radio" name="viewSplit" value="test"> Testing (held out)</label>
+      </div>
+      <div class="field-row"><label for="viewNotes">Notes</label><input id="viewNotes" maxlength="200"></div>
+      <div class="actions">
+        <button type="button" id="viewSave">Save</button>
+        <button type="button" id="viewCheck">Check the recording</button>
+        <button type="button" id="viewDelete">Delete</button>
+      </div>
+      <div id="validation"></div>
+    </div>
   </section>
 
   <!-- 3.1 Apps -->

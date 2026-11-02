@@ -465,6 +465,14 @@ pub fn run() {
             live::range_state,
             live::range_reset,
             live::range_stop,
+            live::record_start,
+            live::record_stop,
+            live::recordings,
+            live::recording_ticks,
+            live::recording_frame,
+            live::recording_validate,
+            live::recording_update,
+            live::recording_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yendory Tools");

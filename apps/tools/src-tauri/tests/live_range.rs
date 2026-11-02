@@ -14,16 +14,34 @@ use yendory_tools_lib::live::{script, sys, RangeProcess};
 
 const EXE: &str = env!("CARGO_BIN_EXE_yendory-tools");
 
-fn wait_for_window(pid: u32) -> u64 {
+/// The tests share one display: one at a time.
+static DISPLAY: Mutex<()> = Mutex::new(());
+
+/// Starts the range with its error output kept, for the failure message.
+fn start_range(seed: u64) -> RangeProcess {
+    let log = std::env::temp_dir().join(format!("tools-range-{}-{seed}.log", std::process::id()));
+    std::env::set_var("YENDORY_RANGE_LOG", &log);
+    RangeProcess::start(EXE.as_ref(), seed, |_| {}).unwrap()
+}
+
+fn wait_for_window(range: &mut RangeProcess, seed: u64) -> u64 {
     let profile = range_profile();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let pid = range.pid();
+    let deadline = Instant::now() + Duration::from_secs(40);
     loop {
-        let found =
-            sys::open().unwrap().windows().unwrap().into_iter().find(|w| profile.matches(w) && w.pid == pid);
-        if let Some(w) = found {
+        let all = sys::open().unwrap().windows().unwrap();
+        if let Some(w) = all.iter().find(|w| profile.matches(w) && w.pid == pid) {
             return w.id;
         }
-        assert!(Instant::now() < deadline, "the range's window did not appear");
+        if Instant::now() > deadline || !range.running() {
+            let log = std::env::temp_dir().join(format!("tools-range-{}-{seed}.log", std::process::id()));
+            panic!(
+                "the range's window did not appear (range running: {}; windows seen: {:?}); the range said:\n{}",
+                range.running(),
+                all.iter().map(|w| (&w.title, w.pid, &w.process)).collect::<Vec<_>>(),
+                std::fs::read_to_string(log).unwrap_or_default()
+            );
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -50,8 +68,9 @@ fn the_range_receives_exactly_what_the_safety_layer_sends() {
         eprintln!("skipped: no X11 display (run under xvfb-run)");
         return;
     }
-    let mut range = RangeProcess::start(EXE.as_ref(), 5, |_| {}).unwrap();
-    let window = wait_for_window(range.pid());
+    let _one = DISPLAY.lock().unwrap_or_else(|e| e.into_inner());
+    let mut range = start_range(5);
+    let window = wait_for_window(&mut range, 5);
     front(window);
 
     // The picture: not blank, and it changes when the view turns.
@@ -94,8 +113,8 @@ fn the_range_receives_exactly_what_the_safety_layer_sends() {
 
     // Another window comes to the front: everything is released and input pauses.
     assert!(c.lock().unwrap().press(Control::Key("w")));
-    let mut other = RangeProcess::start(EXE.as_ref(), 6, |_| {}).unwrap();
-    let other_window = wait_for_window(other.pid());
+    let mut other = start_range(6);
+    let other_window = wait_for_window(&mut other, 6);
     front(other_window);
     c.lock().unwrap().tick();
     assert!(c.lock().unwrap().held().is_empty());
@@ -133,4 +152,92 @@ fn the_range_receives_exactly_what_the_safety_layer_sends() {
     assert!(c.lock().unwrap().held().is_empty());
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(range.state().unwrap()["held"]["w"], false);
+}
+
+#[test]
+fn a_person_playing_the_range_is_recorded_in_sync() {
+    use yendory_tools_lib::live::record::{record, Setup};
+    use yendory_tools_lib::live::recording::{open, validate, Split};
+    if std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipped: no X11 display (run under xvfb-run)");
+        return;
+    }
+    let _one = DISPLAY.lock().unwrap_or_else(|e| e.into_inner());
+    let mut range = start_range(9);
+    let window = wait_for_window(&mut range, 9);
+    front(window);
+    let k = |n| yendory_tools_lib::live::controls::key(n).unwrap();
+
+    // Tools' own listener never hears virtual input (XTEST): scripted actions can't become a
+    // person's demonstration.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let listening = sys::listen(false, tx).unwrap();
+    let mut hands = sys::open().unwrap();
+    hands.key(k("w"), true).unwrap();
+    hands.key(k("w"), false).unwrap();
+    hands.motion(10, 0).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    drop(listening);
+    assert_eq!(rx.try_iter().count(), 0, "virtual input was heard as a person's");
+
+    // The person (played through XTEST, which only tests may listen to).
+    let (tx, rx) = std::sync::mpsc::channel();
+    let listening = sys::listen(true, tx).unwrap();
+    let data = std::env::temp_dir().join(format!("tools-live-rec-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    let mut profile = range_profile();
+    profile.capture.fps = 20;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let person = std::thread::spawn(move || {
+        let mut hands = sys::open().unwrap();
+        let k = |n| yendory_tools_lib::live::controls::key(n).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        hands.key(k("w"), true).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        hands.key(k("w"), false).unwrap();
+        for _ in 0..5 {
+            hands.motion(20, 0).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        hands.button(yendory_tools_lib::live::controls::Button::Left, true).unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        hands.button(yendory_tools_lib::live::controls::Button::Left, false).unwrap();
+        // A key outside the profile.
+        hands.key(k("e"), true).unwrap();
+        hands.key(k("e"), false).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        stop2.store(true, Ordering::Release);
+    });
+    let mut desk = sys::open().unwrap();
+    let setup = Setup {
+        data: &data,
+        profile: &profile,
+        window,
+        split: Split::Train,
+        notes: String::new(),
+        room: u64::MAX,
+    };
+    let info = record(setup, desk.as_mut(), rx, &stop, |_| {}).unwrap();
+    person.join().unwrap();
+    drop(listening);
+
+    let v = validate(&data, &profile.id, &info.id).unwrap();
+    assert!(v.ok, "{v:?}");
+    let count = |n: &str| v.active_ticks.iter().find(|x| x.0 == n).map(|x| x.1).unwrap_or(0);
+    // 20 pictures a second: W held 500 ms is about 10 ticks.
+    assert!((9..=12).contains(&count("w")), "{v:?}");
+    assert!((1..=2).contains(&count("left")), "{v:?}");
+    assert_eq!(v.mouse_x, 100.0, "{v:?}");
+    assert!(v.fps > 15.0, "{v:?}");
+    assert!((info.duration_ms as f64 / 1000.0 - info.ticks as f64 / 20.0).abs() < 0.3, "{info:?}");
+    let mut r = open(&data, &profile.id, &info.id).unwrap();
+    let first = r.frame(0).unwrap();
+    let last = r.frame(r.ticks.len() - 1).unwrap();
+    assert_eq!(first.len(), (profile.capture.width * profile.capture.height * 3) as usize);
+    assert!(first.iter().any(|&b| b != first[0]), "the first picture is blank");
+    assert_ne!(first, last, "walking and turning did not change the picture");
+    let events = std::fs::read_to_string(r.events_path()).unwrap();
+    assert!(!events.contains("\"e\""));
+    let _ = std::fs::remove_dir_all(&data);
 }

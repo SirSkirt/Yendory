@@ -320,3 +320,125 @@ pub fn stop_key_watch(on_stop: Box<dyn Fn() + Send>) -> Res<()> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Listens to the keyboard and mouse through XInput2 raw events (what the devices report,
+/// before any window or grab): keys from the controls table, the three buttons, and relative
+/// movement. Input from XTEST (programs, Tools included) is skipped unless `accept_virtual`,
+/// which only tests use (they play the person's part through XTEST).
+pub fn listen(accept_virtual: bool, tx: std::sync::mpsc::Sender<super::Heard>) -> Res<super::Listening> {
+    use super::Input;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use x11rb::protocol::xinput::{self, ConnectionExt as _};
+
+    let x = X::connect()?;
+    x.conn
+        .xinput_xi_query_version(2, 2)
+        .map_err(err)?
+        .reply()
+        .map_err(|_| "The X server has no XInput 2 (needed to record input)".to_string())?;
+    // Which devices are XTEST's (virtual input from programs).
+    let devices = x.conn.xinput_xi_query_device(xinput::Device::ALL).map_err(err)?.reply().map_err(err)?;
+    let virtual_ids: Vec<u16> = devices
+        .infos
+        .iter()
+        .filter(|d| String::from_utf8_lossy(&d.name).contains("XTEST"))
+        .map(|d| d.deviceid)
+        .collect();
+    // keycode -> key name, for the keys in the table (right-hand modifiers count as their key).
+    let mut names: HashMap<u8, &'static str> = HashMap::new();
+    for k in crate::live::controls::KEYS {
+        if let Ok(code) = x.keycode(k.keysym) {
+            names.entry(code).or_insert(k.name);
+        }
+    }
+    for (sym, name) in [(0xFFE2, "shift"), (0xFFE4, "ctrl"), (0xFFEA, "alt"), (0xFE03, "alt")] {
+        if let Ok(code) = x.keycode(sym) {
+            names.entry(code).or_insert(name);
+        }
+    }
+    let mask = xinput::XIEventMask::RAW_KEY_PRESS
+        | xinput::XIEventMask::RAW_KEY_RELEASE
+        | xinput::XIEventMask::RAW_BUTTON_PRESS
+        | xinput::XIEventMask::RAW_BUTTON_RELEASE
+        | xinput::XIEventMask::RAW_MOTION;
+    x.conn
+        .xinput_xi_select_events(
+            x.root,
+            &[xinput::EventMask { deviceid: xinput::Device::ALL_MASTER.into(), mask: vec![mask] }],
+        )
+        .map_err(err)?
+        .check()
+        .map_err(err)?;
+    x.conn.flush().map_err(err)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopping = stop.clone();
+    let thread = std::thread::Builder::new()
+        .name("input listener".into())
+        .spawn(move || {
+            let fp = |v: &xinput::Fp3232| v.integral as f64 + v.frac as f64 / 4_294_967_296.0;
+            while !stopping.load(Ordering::Acquire) {
+                let event = match x.conn.poll_for_event() {
+                    Ok(Some(e)) => e,
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(_) => break,
+                };
+                let now = Instant::now();
+                let heard = match event {
+                    Event::XinputRawKeyPress(e) | Event::XinputRawKeyRelease(e) => {
+                        if !accept_virtual && virtual_ids.contains(&e.sourceid) {
+                            continue;
+                        }
+                        let Some(&key) = names.get(&(e.detail as u8)) else { continue };
+                        Input::Key { key, down: e.event_type == xinput::RAW_KEY_PRESS_EVENT }
+                    }
+                    Event::XinputRawButtonPress(e) | Event::XinputRawButtonRelease(e) => {
+                        if !accept_virtual && virtual_ids.contains(&e.sourceid) {
+                            continue;
+                        }
+                        let button = match e.detail {
+                            1 => Button::Left,
+                            2 => Button::Middle,
+                            3 => Button::Right,
+                            _ => continue,
+                        };
+                        Input::Button { button, down: e.event_type == xinput::RAW_BUTTON_PRESS_EVENT }
+                    }
+                    Event::XinputRawMotion(e) => {
+                        if !accept_virtual && virtual_ids.contains(&e.sourceid) {
+                            continue;
+                        }
+                        // The values present, in axis order; axes 0 and 1 are x and y.
+                        let bits = e.valuator_mask.first().copied().unwrap_or(0);
+                        let mut values = e.axisvalues_raw.iter();
+                        let (mut dx, mut dy) = (0.0, 0.0);
+                        for axis in 0..32 {
+                            if bits & (1 << axis) == 0 {
+                                continue;
+                            }
+                            let Some(v) = values.next() else { break };
+                            match axis {
+                                0 => dx = fp(v),
+                                1 => dy = fp(v),
+                                _ => {}
+                            }
+                        }
+                        if dx == 0.0 && dy == 0.0 {
+                            continue;
+                        }
+                        Input::Motion { dx, dy }
+                    }
+                    _ => continue,
+                };
+                if tx.send((now, heard)).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(super::Listening::new(stop, None, thread))
+}
