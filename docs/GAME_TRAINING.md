@@ -11,6 +11,29 @@ goals.
 This document records what the current suite offers for that, what it does not, and the order of
 work. Each phase ends with something tested on a real window, not just a page.
 
+## 0. Ground rules (from the owner)
+
+1. **Learning is real.** Every action Gaming Nova takes in play comes from its network's weights,
+   and those weights change only through training on demonstrations and experience. No code
+   chooses actions for a game, the test range included. In practice:
+   - the network's only inputs are the captured pictures, its own previous action and the
+     command (section 4); the range's truth report (position, angle, targets) is never one of
+     them; it is used only to check inputs and to score evaluations, as a game's score would be;
+   - demonstrations are recorded from a person playing; scripted test actions (2.2 Controls
+     check) are never recorded as demonstrations, and every recording says who played (a person,
+     or which model);
+   - every result is shown beside baselines that cannot have learned anything: the untrained
+     network and random play, on the same scenarios; and generalization is measured on layouts
+     never seen in training (the range's held-out seeds).
+2. **One family of networks in the end.** Gaming Nova starts in Tools but is built to join the
+   Engine's Neuro design rather than stay a separate architecture (section 4, "Built to join
+   Neuro"), so the two Novas can later share an interface and be trained together.
+3. **Windows first** (the owner's gaming desktop); Linux (X11) stays supported and is where the
+   automatic tests run.
+4. **The range first**, Ravenfield once recording, training, playing and evaluation work there.
+5. **Kept in view**: generations of competing candidates with checkpoint inheritance and a
+   protected champion (section 5), and Conversational Nova working with Gaming Nova (section 6).
+
 ## 1. What exists and what carries over
 
 | Part | What it has | Use for game training |
@@ -107,10 +130,28 @@ stopped and resumed.
 Then the model plays live (same tick loop, same safety layer), and its episodes are saved as
 recordings marked as model play, so they can be watched and reused.
 
+**Built to join Neuro.** Neuro already is a set of specialised networks exchanging information
+over a learned bus; Gaming Nova is designed as more of the same, so that moving it into
+`dependency/engine` is a move, not a rewrite:
+
+- the same container: every weight in one flat array with named parameter slots, the same AdamW,
+  and parameter groups that map onto the Engine's (`Focus`: the vision and control networks as
+  modules, the goal and bus parts as interconnect), so Studio's candidate, acceptance and
+  probation machinery can apply to it later;
+- the same building blocks as the Engine's autodiff (`linear`, `silu`, `norm`, `sigmoid`,
+  `softmax_rows`, and Neuro's minGRU `scan` as working memory across ticks), plus one new block,
+  a convolution for pictures, written so it can be added to the Engine's tape;
+- a bus-shaped interface from the start: the network's state is projected to a fixed-width
+  vector each tick, and its goal input (the command now) has the same width, so Conversational
+  Nova's Neuro bus can later write goals into it and read Gaming Nova's state back (the neural
+  interconnect, with its own training);
+- its file layout follows the Engine's checkpoint conventions, with the lineage (parent, method,
+  generation) in every file from the first one, which generations and inheritance need.
+
 The files: `players/<id>/player.json` (architecture, profile and control order, frame size,
-mouse steps, training history, parent) and `weights.bin` (little-endian f32), documented here once
-built. Players live in Tools' data, not in Studio's models folder (Studio and the Network read
-`.nnova2` models only).
+mouse steps, training history, lineage) and the weights, documented here once built. Players live
+in Tools' data until the Engine can open them; Studio and the Network read `.nnova2` models only
+today.
 
 **A command input from the start.** The network also gets the current command (none, follow me,
 move to the objective, take cover, …) as an input, so Command Mode does not need a new
