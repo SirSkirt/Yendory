@@ -484,3 +484,25 @@ learning, testing and keeping the champion unless it was beaten, with only the p
 kept; and `tests/learn_range.rs` now continues the trained network with generations and measures
 the champion against generation 0.
 
+**Result of `tests/learn_range.rs`** (Tools 0.1.7, this sandbox's virtual display, CPU only;
+about 41 minutes): imitation on 10 teacher recordings (9 for training), 1,200 steps (133 s); on 4
+unseen layouts of 20 s, the trained network 6.0 hits a minute, the untrained one 0.0, the
+frequency baseline 0.8. Then 4 generations (4 players, 2 episodes of 20 s each, 4 test episodes;
+24 minutes):
+
+| Attempt | Players' hits an episode | Learned from (hits) | Champion | New network | Result |
+|---|---|---|---|---|---|
+| 1 | 2.5 · 5.0 · 6.0 · 5.0 | 8, 8 | 5.2 | 7.5 | new champion (generation 1) |
+| 2 | 5.0 · 1.5 · 2.0 · 4.0 | 9, 6 | 6.0 | 4.5 | the champion stays |
+| 3 | 1.5 · 1.0 · 3.0 · 1.5 | 5, 2 | 3.8 | 7.5 | new champion (generation 2) |
+| 4 | 1.5 · 1.5 · 1.5 · 3.0 | 5, 3 | 3.8 | 3.0 | the champion stays |
+
+Then on 8 layouts of 20 s (the measuring layouts): generation 2 made **8.6** hits a minute,
+generation 0 **8.2**. So the machinery works end to end (players, selection, learning, a
+protected champion that a weaker network never replaced), but this run does **not** show that
+generations improved play: 8.6 against 8.2 is well inside the noise (single episodes range from
+0 to 8 hits), and the same champion scored between 3.8 and 6.0 in different tests. With 4 test
+episodes of 20 s, a new network can win its test by luck. More test episodes (or longer ones)
+make each decision more trustworthy at the cost of time; whether the method itself improves play
+needs longer runs than this test makes.
+
