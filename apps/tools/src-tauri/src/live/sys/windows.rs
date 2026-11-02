@@ -241,7 +241,7 @@ impl Desktop for Win {
                 } else {
                     let px = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
                     // Blue, green, red, unused.
-                    Ok(px.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect())
+                    Ok(px.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0]]).collect())
                 };
                 SelectObject(mem, old);
                 DeleteObject(dib);

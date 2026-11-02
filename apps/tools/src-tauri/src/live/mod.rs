@@ -20,7 +20,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// RGB to grey (ITU-R BT.601 weights).
 pub fn to_gray(rgb: &[u8]) -> Vec<u8> {
-    rgb.chunks_exact(3)
+    rgb.as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| ((p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114 + 500) / 1000) as u8)
         .collect()
 }

@@ -1,6 +1,6 @@
 [package]
 name = "yendory-tools"
-version = "0.1.1"
+version = "0.1.2"
 description = "Yendory Tools: games and apps that trained Yendory models play and use, through Nexus"
 edition = "2021"
 publish = false
