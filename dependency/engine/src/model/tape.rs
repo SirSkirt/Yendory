@@ -588,7 +588,23 @@ impl<'a> Tape<'a> {
     /// to accumulate a weighted sum of rows). Parameter gradients are added to the buffer given
     /// to [`Tape::new`].
     pub(crate) fn backward(&mut self, root: usize, seed: f32) {
-        self.nodes[root].grad = vec![seed];
+        self.backward_from(root, vec![seed]);
+    }
+
+    /// The gradient a node received in the backward pass (zeros when nothing reached it): an
+    /// input's gradient stays after the pass.
+    pub(crate) fn grad(&self, id: usize) -> Vec<f32> {
+        let n = &self.nodes[id];
+        if n.grad.is_empty() {
+            vec![0.; n.values.len()]
+        } else {
+            n.grad.clone()
+        }
+    }
+
+    /// The backward pass from `root` with the gradient `seed` (one value per value of `root`).
+    pub(crate) fn backward_from(&mut self, root: usize, seed: Vec<f32>) {
+        self.nodes[root].grad = seed;
         for id in (0..self.nodes.len()).rev() {
             if matches!(self.nodes[id].op, Op::Input) {
                 continue;

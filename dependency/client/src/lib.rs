@@ -418,6 +418,15 @@ impl Client {
         Ok(id)
     }
 
+    /// Asks for something to download (`model.checkpoint`: answers `{download, bytes}`) and
+    /// reads it in parts with `download.read`.
+    pub fn download(&self, method: &str, params: Value) -> Result<Vec<u8>, Error> {
+        let answer = self.call(method, params)?;
+        let id = answer["download"].as_u64().ok_or_else(|| Error::new("failed", "No download id"))?;
+        let total = answer["bytes"].as_u64().unwrap_or(0) as usize;
+        self.read_parts("download.read", serde_json::json!({"download": id}), total)
+    }
+
     /// Reads `total` bytes in parts from a method that takes `offset` and `length` and answers
     /// `data` (base64): `model.skill.read`.
     pub fn read_parts(&self, method: &str, params: Value, total: usize) -> Result<Vec<u8>, Error> {

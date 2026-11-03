@@ -103,6 +103,8 @@ struct Open {
 
 /// An upload: the size announced, and the bytes that have arrived.
 type Upload = (usize, Vec<u8>);
+/// A download: the bytes being read in parts.
+type Download = Arc<Vec<u8>>;
 
 struct State {
     models: PathBuf,
@@ -124,6 +126,8 @@ struct State {
     /// Transfers in parts (`upload.begin`, `upload.part`), by program and upload: the size
     /// announced and what has arrived. Dropped when the program disconnects.
     uploads: Mutex<HashMap<(u64, u64), Upload>>,
+    /// Downloads in parts (`model.checkpoint`, `download.read`), by program and download.
+    downloads: Mutex<HashMap<(u64, u64), Download>>,
     next_upload: AtomicU64,
 }
 
@@ -183,6 +187,7 @@ impl State {
     fn forget_client(&self, id: u64) {
         self.clients.lock().unwrap().remove(&id);
         self.uploads.lock().unwrap().retain(|(c, _), _| *c != id);
+        self.downloads.lock().unwrap().retain(|(c, _), _| *c != id);
         self.streams.lock().unwrap().retain(|(c, _), stop| {
             // Its replies stop at the next token.
             if *c == id {
@@ -269,6 +274,7 @@ pub fn serve(opts: Options) -> Res<()> {
         token,
         streams: Mutex::new(HashMap::new()),
         uploads: Mutex::new(HashMap::new()),
+        downloads: Mutex::new(HashMap::new()),
         next_upload: AtomicU64::new(1),
     });
     {
@@ -684,6 +690,79 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
                 out.extend_from_slice(&arrays[i / n][i % n].to_le_bytes());
             }
             Ok(json!({"data": yendory_client::bytes::encode(&out), "bytes": 16 * n}))
+        }
+        "model.checkpoint" => {
+            // The open model's whole checkpoint (its weights, optimizer, words and skills, as
+            // its file holds them), to be read in parts with `download.read`: a program that
+            // trains the model itself (Yendory Tools: the core playing a game).
+            let id = str_param(p, "id")?;
+            let held = state.held(id, client)?;
+            let bytes = held.lock().unwrap().to_bytes().map_err(refused)?;
+            let n = bytes.len();
+            let d = state.next_upload.fetch_add(1, Ordering::Relaxed);
+            let mut downloads = state.downloads.lock().unwrap();
+            // One download of a checkpoint at a time for each program.
+            downloads.retain(|(c, _), _| *c != client);
+            downloads.insert((client, d), Arc::new(bytes));
+            Ok(json!({"download": d, "bytes": n}))
+        }
+        "download.read" => {
+            let d =
+                p.get("download").and_then(Value::as_u64).ok_or_else(|| invalid("`download` is missing"))?;
+            let offset = p.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let length = p.get("length").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let data = state
+                .downloads
+                .lock()
+                .unwrap()
+                .get(&(client, d))
+                .cloned()
+                .ok_or_else(|| invalid("No such download"))?;
+            if length == 0 || length > MAX_PART || offset + length > data.len() {
+                return Err(invalid(format!("Read 1 to {MAX_PART} bytes within the download")));
+            }
+            if offset + length == data.len() {
+                // Read to its end: let it go.
+                state.downloads.lock().unwrap().remove(&(client, d));
+            }
+            Ok(
+                json!({"data": yendory_client::bytes::encode(&data[offset..offset + length]), "bytes": data.len()}),
+            )
+        }
+        "model.checkpoint.save" => {
+            // Replaces the open model's weights, optimizer and skills with a checkpoint of the
+            // same model (same architecture, sizes and words) sent as an upload, and saves its
+            // file. Refused when another program has the model open.
+            let id = str_param(p, "id")?;
+            state.not_open_elsewhere(id, client, "training").map_err(refused)?;
+            let up = p.get("upload").and_then(Value::as_u64).ok_or_else(|| invalid("`upload` is missing"))?;
+            let (size, data) = state
+                .uploads
+                .lock()
+                .unwrap()
+                .remove(&(client, up))
+                .ok_or_else(|| invalid("No such upload"))?;
+            if data.len() != size {
+                return Err(invalid("The upload did not all arrive"));
+            }
+            let next = Bicameral::from_bytes(&data).map_err(invalid)?;
+            drop(data);
+            let held = state.held(id, client)?;
+            let _w = state.library.lock().unwrap();
+            let mut model = held.lock().unwrap();
+            if next.config != model.config
+                || next.neuro != model.neuro
+                || next.tokenizer.words() != model.tokenizer.words()
+            {
+                return Err(refused(
+                    "The checkpoint is not this model's shape (its sizes, design or words differ)".into(),
+                ));
+            }
+            let entry = library::save_checkpoint(models, id, &next).map_err(refused)?;
+            *model = next;
+            drop(model);
+            state.broadcast("models.changed", json!({"id": id, "change": "trained"}));
+            Ok(entry)
         }
         "upload.begin" => {
             let bytes = p.get("bytes").and_then(Value::as_u64).unwrap_or(0) as usize;

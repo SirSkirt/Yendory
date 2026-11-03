@@ -394,15 +394,18 @@ impl Bicameral {
     pub(crate) fn neuro_hidden<G: Graph>(
         &self,
         t: &mut G,
-        ids: &[usize],
+        first: super::First,
         seq: usize,
         abl: Ablation,
         drops: &mut super::DropSites,
     ) -> usize {
         let c = &self.config;
         let n = self.neuro.as_ref().expect("a Nova Neuro model");
-        let embed = self.nparam(t, "embed");
-        let mut h = t.embed(ids, embed, c.d);
+        let positions = match first {
+            super::First::Tokens(tok) => tok.len(),
+            super::First::Node { positions, .. } => positions,
+        };
+        let mut h = self.first_layer(t, first);
         for i in 0..c.split {
             h = self.block(t, i, h, seq, drops);
         }
@@ -434,7 +437,7 @@ impl Bicameral {
             let gate = t.sigmoid(gate);
             let z = t.outer(addr, gate, r.slots, r.width);
             let value = self.nlin(t, hn, "n.rel.val", None);
-            let ones = t.input(vec![1.; ids.len() * r.slots]);
+            let ones = t.input(vec![1.; positions * r.slots]);
             let cand = t.outer(ones, value, r.slots, r.width);
             t.scan(z, cand, seq, r.slots * r.width)
         });

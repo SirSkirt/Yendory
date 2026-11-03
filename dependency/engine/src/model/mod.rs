@@ -11,6 +11,7 @@ pub mod inspect;
 mod linalg;
 mod measure;
 pub mod neuro;
+pub mod sense;
 mod tape;
 mod think;
 pub use crate::tokenizer::TokenId;
@@ -176,6 +177,14 @@ fn splitmix(mut z: u64) -> u64 {
 
 /// The dropout sites of one forward pass, numbered in the order the pass reaches them (the
 /// same order on every device).
+/// Where a forward pass starts: token ids (embedded), or a node of vectors already of the
+/// model's width, one per position.
+#[derive(Clone, Copy)]
+pub(crate) enum First<'a> {
+    Tokens(&'a [usize]),
+    Node { node: usize, positions: usize },
+}
+
 pub(crate) struct DropSites {
     dropout: Option<Dropout>,
     /// Tokens in this forward pass (rows x positions) and positions per row.
@@ -550,18 +559,47 @@ impl Bicameral {
         seq: usize,
         abl: Ablation,
     ) -> usize {
-        let c = &self.config;
         let tok = ids.iter().map(|&v| v as usize).collect::<Vec<_>>();
-        let mut drops = DropSites::new(abl, tok.len(), seq);
-        if self.neuro.is_some() {
-            return self.neuro_hidden(t, &tok, seq, abl, &mut drops);
+        let feat = if self.neuro.is_some() { None } else { Some(t.input(feats)) };
+        self.hidden_from(t, First::Tokens(&tok), feat, seq, abl)
+    }
+
+    /// The first layer's input: the words' embeddings, or vectors given as a node (the core
+    /// sensing something other than words: `sense.rs`).
+    pub(crate) fn first_layer<G: Graph>(&self, t: &mut G, first: First) -> usize {
+        match first {
+            First::Tokens(tok) => {
+                let embed = self.param(t, "embed");
+                t.embed(tok, embed, self.config.d)
+            }
+            First::Node { node, .. } => node,
         }
-        let embed = self.param(t, "embed");
-        let mut h = t.embed(&tok, embed, c.d);
+    }
+
+    /// [`Bicameral::forward_hidden`] from any first layer; `feat`: the right hemisphere's
+    /// input node (Bicameral only).
+    pub(crate) fn hidden_from<G: Graph>(
+        &self,
+        t: &mut G,
+        first: First,
+        feat: Option<usize>,
+        seq: usize,
+        abl: Ablation,
+    ) -> usize {
+        let c = &self.config;
+        let positions = match first {
+            First::Tokens(tok) => tok.len(),
+            First::Node { positions, .. } => positions,
+        };
+        let mut drops = DropSites::new(abl, positions, seq);
+        if self.neuro.is_some() {
+            return self.neuro_hidden(t, first, seq, abl, &mut drops);
+        }
+        let mut h = self.first_layer(t, first);
         for i in 0..c.split {
             h = self.block(t, i, h, seq, &mut drops);
         }
-        let feat = t.input(feats);
+        let feat = feat.expect("a Bicameral model's right hemisphere needs its input");
         let z1 = self.lin(t, feat, "r.w1", Some("r.b1"));
         let z1 = t.silu(z1);
         let z1 = if abl.no_right { t.zeros_like(z1) } else { z1 };

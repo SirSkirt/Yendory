@@ -19,6 +19,7 @@
     clippy::field_reassign_with_default,
     clippy::excessive_precision
 )]
+pub mod cortex;
 pub mod fingerprint;
 #[cfg(feature = "gpu")]
 pub mod gpu;

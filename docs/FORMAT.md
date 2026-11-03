@@ -56,6 +56,12 @@ trainer's notes). After the learned words:
 No bytes may follow. A Neuro model without skills is written as format 1, byte for byte as
 before.
 
+**A skill linked to its model's core** (Engine 0.9.6, `cortex.rs`): its architecture carries
+`cortex` (`{width, right}`: the core's width and right-hemisphere input), and the link's weights
+(`link.in`, `link.right`, `link.out`) follow the skill's own in its layout, so the `SKILLSET`
+arrays are that much longer. Older Engines compute the shorter layout and refuse the file
+(its weights don't end where they expect) rather than dropping the link.
+
 **A Bicameral model with game skills** (Engine 0.9.5) keeps the `.nnova2` layout above and adds,
 after the learned words: the magic `SKILLHDR`, a u32 length and the skills' descriptions (a JSON
 list of `SkillSpec`, at most 16 MiB), then the same `SKILLSET` section. Without skills nothing

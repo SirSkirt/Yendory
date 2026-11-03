@@ -58,6 +58,24 @@ pub struct Arch {
     pub buttons: usize,
     /// Mouse steps (units): each axis chooses one of these every tick. Empty: no mouse.
     pub mouse_bins: Vec<f32>,
+    /// The link to the model's own core (the "cortex"), if the skill has one: the core reads
+    /// what this network sees and its state comes back as the goal input (Engine 0.9.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cortex: Option<CortexLink>,
+}
+
+/// The link between a skill and its model's core. Every tick the skill's goal-free encoding of
+/// the picture (its "sight") is projected to the core's width (and, for Bicameral, to its right
+/// hemisphere's input); the core reads those vectors as a sequence (`Bicameral::sense`), and its
+/// state is projected back to the goal input. The way back starts at zero, so a skill given a
+/// link plays exactly as before until training opens it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CortexLink {
+    /// The core's width.
+    pub width: usize,
+    /// The core's right hemisphere's input width (Bicameral), 0 for Neuro.
+    pub right: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +127,7 @@ impl Arch {
             keys,
             buttons,
             mouse_bins,
+            cortex: None,
         }
     }
 
@@ -147,6 +166,11 @@ impl Arch {
         }
         if self.keys > 64 || self.buttons > 8 || self.hidden == 0 {
             return Err("The network's sizes are not usable".into());
+        }
+        if let Some(c) = &self.cortex {
+            if !(1..=4096).contains(&c.width) || c.right > 65536 || self.goal == 0 {
+                return Err("The link to the model's core is not usable".into());
+            }
         }
         Ok(())
     }
@@ -206,6 +230,18 @@ pub fn layout(a: &Arch) -> Vec<Slot> {
         add("mx.b".into(), n, 1, Group::Heads);
         add("my.w".into(), n, u, Group::Heads);
         add("my.b".into(), n, 1, Group::Heads);
+    }
+    // The link to the core, after everything else (a skill keeps its weights where they were
+    // when it is given a link).
+    if let Some(c) = &a.cortex {
+        add("link.in.w".into(), c.width, a.hidden, Group::Interconnect);
+        add("link.in.b".into(), c.width, 1, Group::Interconnect);
+        if c.right > 0 {
+            add("link.right.w".into(), c.right, a.hidden, Group::Interconnect);
+            add("link.right.b".into(), c.right, 1, Group::Interconnect);
+        }
+        add("link.out.w".into(), a.goal, c.width, Group::Interconnect);
+        add("link.out.b".into(), a.goal, 1, Group::Interconnect);
     }
     slots
 }
@@ -399,11 +435,19 @@ fn col2im(cols: &[f32], c: usize, h: usize, w: usize, k: usize, s: usize) -> Vec
     x
 }
 
+/// One tick's convolutions: what the network saw (kept for the backward pass).
+pub struct Seen {
+    cols: Vec<Vec<f32>>,
+    pre: Vec<Vec<f32>>,
+    feat: Vec<f32>,
+}
+
 /// What a forward pass keeps for the backward pass, for one tick.
 pub struct StepCache {
     cols: Vec<Vec<f32>>,
     pre: Vec<Vec<f32>>,
     feat: Vec<f32>,
+    goal: Vec<f32>,
     enc_pre: Vec<f32>,
     e: Vec<f32>,
     z: Vec<f32>,
@@ -439,7 +483,8 @@ impl Policy {
         let mut w = vec![0f32; n];
         let mut rng = Rng::new(seed);
         for s in &slots {
-            if s.name.ends_with(".b") {
+            // Biases start at zero, and so does the way back from the core.
+            if s.name.ends_with(".b") || s.name == "link.out.w" {
                 continue;
             }
             let head = s.group == Group::Heads;
@@ -465,6 +510,11 @@ impl Policy {
 
     /// One tick forward. `m_prev` is the memory before it, `goal` the goal input.
     pub fn forward(&self, input: &[f32], m_prev: &[f32], goal: &[f32]) -> StepCache {
+        self.forward_seen(self.see(input), m_prev, goal)
+    }
+
+    /// The convolutions of one tick's input.
+    pub fn see(&self, input: &[f32]) -> Seen {
         let a = &self.arch;
         let shapes = a.shapes();
         let mut x = input.to_vec();
@@ -484,7 +534,23 @@ impl Policy {
             cols_all.push(cols);
             pre_all.push(pre);
         }
-        let feat = x;
+        Seen { cols: cols_all, pre: pre_all, feat: x }
+    }
+
+    /// The goal-free encoding of what was seen: what the core reads through the link.
+    pub fn sight(&self, seen: &Seen) -> Vec<f32> {
+        let feat = &seen.feat;
+        let ew = self.get("enc.w");
+        let eb = self.get("enc.b");
+        (0..self.arch.hidden)
+            .map(|r| silu(eb[r] + dot(&ew[r * feat.len()..(r + 1) * feat.len()], feat)))
+            .collect()
+    }
+
+    /// One tick forward from its convolutions.
+    pub fn forward_seen(&self, seen: Seen, m_prev: &[f32], goal: &[f32]) -> StepCache {
+        let a = &self.arch;
+        let Seen { cols: cols_all, pre: pre_all, feat } = seen;
         let mut enc_pre = self.get("enc.b").to_vec();
         let ew = self.get("enc.w");
         let gw = self.get("goal.w");
@@ -524,6 +590,7 @@ impl Policy {
             cols: cols_all,
             pre: pre_all,
             feat,
+            goal: if a.goal > 0 && goal.len() == a.goal { goal.to_vec() } else { vec![0f32; a.goal] },
             enc_pre,
             e,
             z,
@@ -544,15 +611,31 @@ impl Policy {
         grad: &mut [f32],
         scale: f32,
     ) -> Loss {
+        let seen = inputs.iter().map(|x| self.see(x)).collect();
+        self.sequence_loss_seen(seen, None, targets, grad, scale).0
+    }
+
+    /// [`Policy::sequence_loss`] from each tick's convolutions, with a goal input per tick
+    /// (`None`: zero); also returns the loss's gradient at each tick's goal.
+    pub fn sequence_loss_seen(
+        &self,
+        seen: Vec<Seen>,
+        goals: Option<&[Vec<f32>]>,
+        targets: &[Target],
+        grad: &mut [f32],
+        scale: f32,
+    ) -> (Loss, Vec<Vec<f32>>) {
         let a = &self.arch;
-        let goal = vec![0f32; a.goal];
+        let zero = vec![0f32; a.goal];
         let mut m = vec![0f32; a.memory];
-        let mut caches = Vec::with_capacity(inputs.len());
-        for x in inputs {
-            let cache = self.forward(x, &m, &goal);
+        let mut caches = Vec::with_capacity(seen.len());
+        for (t, s) in seen.into_iter().enumerate() {
+            let goal = goals.and_then(|g| g.get(t)).unwrap_or(&zero);
+            let cache = self.forward_seen(s, &m, goal);
             m = cache.m.clone();
             caches.push(cache);
         }
+        let inputs = &caches;
         let t_n = inputs.len().max(1) as f32;
         let mut loss = Loss::default();
         // Gradient of the loss at each tick's logits.
@@ -589,16 +672,18 @@ impl Policy {
         loss.buttons /= n;
         loss.mouse /= n;
         loss.total = loss.keys + loss.buttons + loss.mouse;
-        self.backward(&caches, &dlogits, grad);
-        loss
+        let dgoals = self.backward(&caches, &dlogits, grad);
+        (loss, dgoals)
     }
 
-    /// Back through the sequence (the memory carries gradient from later ticks to earlier).
-    fn backward(&self, caches: &[StepCache], dlogits: &[Logits], grad: &mut [f32]) {
+    /// Back through the sequence (the memory carries gradient from later ticks to earlier);
+    /// returns the gradient at each tick's goal input.
+    fn backward(&self, caches: &[StepCache], dlogits: &[Logits], grad: &mut [f32]) -> Vec<Vec<f32>> {
         let a = &self.arch;
         let slot = |n: &str| self.slot(n).map(|s| s.range());
         let ulen = a.head_in();
         let mut dm_next = vec![0f32; a.memory];
+        let mut dgoals = vec![vec![0f32; a.goal]; caches.len()];
         for t in (0..caches.len()).rev() {
             let c = &caches[t];
             let d = &dlogits[t];
@@ -643,9 +728,9 @@ impl Policy {
                     axpy(&mut de, dc, &self.w[cw.start + j * a.hidden..cw.start + (j + 1) * a.hidden]);
                 }
             }
-            // Encoder (the goal input is zero here, so goal.w gets no gradient from it).
+            // Encoder, and the goal input (zero unless the core gives one).
             let nf = c.feat.len();
-            let (ew, eb) = (slot("enc.w").unwrap(), slot("enc.b").unwrap());
+            let (ew, eb, gw) = (slot("enc.w").unwrap(), slot("enc.b").unwrap(), slot("goal.w").unwrap());
             let mut dfeat = vec![0f32; nf];
             for r in 0..a.hidden {
                 let g = de[r] * silu_grad(c.enc_pre[r]);
@@ -655,6 +740,10 @@ impl Policy {
                 grad[eb.start + r] += g;
                 axpy(&mut grad[ew.start + r * nf..ew.start + (r + 1) * nf], g, &c.feat);
                 axpy(&mut dfeat, g, &self.w[ew.start + r * nf..ew.start + (r + 1) * nf]);
+                if a.goal > 0 {
+                    axpy(&mut grad[gw.start + r * a.goal..gw.start + (r + 1) * a.goal], g, &c.goal);
+                    axpy(&mut dgoals[t], g, &self.w[gw.start + r * a.goal..gw.start + (r + 1) * a.goal]);
+                }
             }
             // Convolutions, last first.
             let shapes = a.shapes();
@@ -677,6 +766,7 @@ impl Policy {
                 }
             }
         }
+        dgoals
     }
 
     /// The network's weights as bytes (little-endian f32), for `weights.bin`.
@@ -770,6 +860,7 @@ pub fn check_arch() -> Arch {
         keys: 2,
         buttons: 1,
         mouse_bins: vec![-3.0, 0.0, 3.0],
+        cortex: None,
     }
 }
 
@@ -846,6 +937,7 @@ pub(crate) mod tests {
             keys: 2,
             buttons: 1,
             mouse_bins: vec![-3.0, 0.0, 3.0],
+            cortex: None,
         }
     }
 
@@ -1004,6 +1096,32 @@ impl Skill {
         let mut p = Policy::new(self.spec.arch.clone(), 0)?;
         p.w.clone_from(&self.latest);
         Ok((p, self.adam.clone()))
+    }
+
+    /// The same skill with a link to a core (`None`: without one). Its weights stay where they
+    /// are; the link's are new (the way back from the core at zero, so it plays as before) and
+    /// the optimizer starts them from nothing.
+    pub fn with_cortex(&self, link: Option<CortexLink>) -> Result<Skill, String> {
+        let mut spec = self.spec.clone();
+        let base = Arch { cortex: None, ..spec.arch.clone() };
+        let kept = layout_len(&base);
+        spec.arch.cortex = link;
+        let fresh = Policy::new(spec.arch.clone(), spec.seed ^ 0x6c69_6e6b)?;
+        let n = fresh.parameters();
+        let extend = |v: &[f32], tail: &[f32]| -> Vec<f32> {
+            let mut out = v[..kept.min(v.len())].to_vec();
+            out.extend_from_slice(&tail[kept.min(n)..]);
+            out
+        };
+        let zeros = vec![0f32; n];
+        let k = Skill {
+            accepted: extend(&self.accepted, &fresh.w),
+            latest: extend(&self.latest, &fresh.w),
+            adam: Adam { m: extend(&self.adam.m, &zeros), v: extend(&self.adam.v, &zeros), t: self.adam.t },
+            spec,
+        };
+        k.check()?;
+        Ok(k)
     }
 
     /// Checks a skill read from somewhere else (a file, a program) before it is kept.

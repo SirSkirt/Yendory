@@ -382,6 +382,17 @@ pub fn save_skills(models: &Path, id: &str, model: &Bicameral) -> Res<Value> {
     Ok(entry(&dir, meta))
 }
 
+/// Writes a model trained by a program (its weights, optimizer and skills) and refreshes the
+/// fields of its meta.json that follow from them (`step`, `skills`); every other field kept.
+pub fn save_checkpoint(models: &Path, id: &str, model: &Bicameral) -> Res<Value> {
+    save_skills(models, id, model)?;
+    let dir = model_dir(models, id)?;
+    let mut meta = read_meta(&dir)?;
+    meta["step"] = json!(model.step);
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)?;
+    Ok(entry(&dir, meta))
+}
+
 /// Loads a model's checkpoint (the file decides its size and design).
 pub fn load(models: &Path, id: &str) -> Res<(Value, Bicameral)> {
     let dir = model_dir(models, id)?;

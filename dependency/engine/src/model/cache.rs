@@ -259,20 +259,33 @@ impl KvCache {
         Ok(last)
     }
     fn step(&mut self, model: &Bicameral, token: TokenId) -> Vec<f32> {
+        self.feed(model, Feed::Token(token))
+    }
+
+    /// One position: a token (the logits come back) or a sensed vector (the core's state comes
+    /// back, as `Bicameral::sense` gives it).
+    fn feed(&mut self, model: &Bicameral, feed: Feed) -> Vec<f32> {
         if model.neuro.is_some() {
-            return self.neuro_step(model, token);
+            return self.neuro_step(model, feed);
         }
         let c = &model.config;
-        let id = token as usize;
-        let value = token_text(model, token);
-        self.chars.extend_from_slice(&value);
-        if self.chars.len() > c.window_chars {
-            self.chars.drain(..self.chars.len() - c.window_chars);
-        }
-        let f = right_features(&self.chars, c.window_chars);
+        let (mut h, f) = match feed {
+            Feed::Token(token) => {
+                let id = token as usize;
+                let value = token_text(model, token);
+                self.chars.extend_from_slice(&value);
+                if self.chars.len() > c.window_chars {
+                    self.chars.drain(..self.chars.len() - c.window_chars);
+                }
+                (
+                    model.val("embed")[id * c.d..(id + 1) * c.d].to_vec(),
+                    right_features(&self.chars, c.window_chars),
+                )
+            }
+            Feed::Sense(left, right) => (left.to_vec(), right.to_vec()),
+        };
         let tracing = self.trace.is_some();
         let mut trace = Trace::default();
-        let mut h = model.val("embed")[id * c.d..(id + 1) * c.d].to_vec();
         let mut stage = 0;
         for i in 0..c.split {
             let mut heads = Vec::new();
@@ -343,6 +356,10 @@ impl KvCache {
                 trace.readouts.push(readout(model, &h));
             }
         }
+        let Feed::Token(token) = feed else {
+            self.sequence += 1;
+            return norm(&h, model.val("ln_f"));
+        };
         let logits = readout(model, &h);
         if tracing {
             trace.readouts.push(logits.clone());
@@ -358,6 +375,44 @@ impl KvCache {
         }
         logits
     }
+
+    /// The core sensing one more position (Yendory Tools: one game tick): its state at that
+    /// position, as [`Bicameral::sense`] gives it for the positions sensed since the cache was
+    /// made or reset. Positions don't wrap: past the model's context it is refused, and the
+    /// caller starts again (a new cache, or `reset`).
+    pub fn sense_append(
+        &mut self,
+        model: &Bicameral,
+        left: &[f32],
+        right: &[f32],
+    ) -> Result<Vec<f32>, String> {
+        if model.step != self.model_step || signature(model) != self.model_signature {
+            return Err("KV cache is stale; create a new cache after training or loading".into());
+        }
+        let (d, r) = model.sense_widths();
+        if left.len() != d || right.len() != r || left.iter().chain(right).any(|v| !v.is_finite()) {
+            return Err("The core's input does not have its width".into());
+        }
+        if !self.tokens.is_empty() {
+            return Err("This cache has read words; sense with a new one".into());
+        }
+        if self.sequence >= model.config.max_tokens {
+            return Err("The core's context is full: start again".into());
+        }
+        Ok(self.feed(model, Feed::Sense(left, right)))
+    }
+
+    /// Positions in the cache (tokens read or ticks sensed).
+    pub fn positions(&self) -> usize {
+        self.sequence
+    }
+}
+
+/// One position for the cache: a token, or a sensed vector and the right hemisphere's input.
+#[derive(Clone, Copy)]
+enum Feed<'a> {
+    Token(TokenId),
+    Sense(&'a [f32], &'a [f32]),
 }
 /// A block's trace: its attention and how it changed the newest token's state.
 fn stage_trace(
@@ -418,10 +473,9 @@ fn l2(v: &[f32]) -> f32 {
 impl KvCache {
     /// Nova Neuro, one token: the same computation as `Bicameral::neuro_hidden` for the newest
     /// position, with the transformer's keys and values and the working memory's state kept.
-    fn neuro_step(&mut self, model: &Bicameral, token: TokenId) -> Vec<f32> {
+    fn neuro_step(&mut self, model: &Bicameral, feed: Feed) -> Vec<f32> {
         let c = &model.config;
         let n = model.neuro.as_ref().expect("Nova Neuro");
-        let id = token as usize;
         let tracing = self.trace.is_some();
         let line = self.next_line;
         let mut trace = Trace::default();
@@ -430,7 +484,13 @@ impl KvCache {
             line,
             ..NeuroTrace::default()
         };
-        let mut h = model.val("embed")[id * c.d..(id + 1) * c.d].to_vec();
+        let mut h = match feed {
+            Feed::Token(token) => {
+                let id = token as usize;
+                model.val("embed")[id * c.d..(id + 1) * c.d].to_vec()
+            }
+            Feed::Sense(left, _) => left.to_vec(),
+        };
         let mut stage = 0;
         for i in 0..c.split {
             let mut heads = Vec::new();
@@ -551,6 +611,10 @@ impl KvCache {
                 trace.readouts.push(readout(model, &h));
             }
         }
+        let Feed::Token(token) = feed else {
+            self.sequence += 1;
+            return norm(&h, model.val("ln_f"));
+        };
         let logits = readout(model, &h);
         if tracing {
             trace.readouts.push(logits.clone());

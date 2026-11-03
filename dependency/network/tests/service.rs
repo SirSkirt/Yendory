@@ -379,4 +379,33 @@ fn game_skills_are_saved_into_models_in_one_message_or_in_parts() {
         .is_err());
     let theirs = tools.upload(&data[..16]).unwrap();
     assert!(hub.call("upload.part", json!({"upload": theirs, "data": "AAAA"})).is_err());
+
+    // The whole model, downloaded, trained by the program and sent back (Network 0.1.4).
+    let bytes = tools.download("model.checkpoint", json!({"id": bica})).unwrap();
+    let mut model = yendory_engine::Bicameral::from_bytes(&bytes).unwrap();
+    assert_eq!(model.skills.len(), 2, "the skills come with it");
+    model.weights[5] += 0.5;
+    model.step = 77;
+    let up = tools.upload(&model.to_bytes().unwrap()).unwrap();
+    let entry = tools.call("model.checkpoint.save", json!({"id": bica, "upload": up})).unwrap();
+    assert_eq!(entry["meta"]["step"], 77);
+    let file = yendory_engine::Bicameral::load(
+        n.data.join("org.yendory.studio/models").join(&bica).join("model.nnova2"),
+    )
+    .unwrap();
+    assert_eq!(file.weights[5], model.weights[5]);
+    assert_eq!(file.skills.len(), 2);
+    // Not another model's shape; not while another program has it open.
+    let other = yendory_engine::Bicameral::with_config(
+        yendory_engine::model::Config { d: 64, heads: 2, ff: 128, ..Default::default() },
+        1,
+    );
+    let up = tools.upload(&other.to_bytes().unwrap()).unwrap();
+    assert!(tools.call("model.checkpoint.save", json!({"id": bica, "upload": up})).is_err());
+    hub.call("models.open", json!({"id": bica})).unwrap();
+    let up = tools.upload(&model.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        tools.call("model.checkpoint.save", json!({"id": bica, "upload": up})).unwrap_err().code,
+        "refused"
+    );
 }
