@@ -7,9 +7,7 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "icons": "tauri icon app-icon.png",
-    "android:init": "tauri android init",
-    "android:apk": "tauri android build --apk"
+    "icons": "tauri icon app-icon.png"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.3"

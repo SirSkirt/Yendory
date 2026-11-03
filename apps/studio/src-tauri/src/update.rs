@@ -1,10 +1,9 @@
-//! Updates on the desktop: Studio asks the release page for the newest build
+//! Updates: Studio asks the release page for the newest build
 //! (`latest.json` on the `studio-updates` release, written by the release workflow), and can
 //! download and install it in place, then restart. Every update is signed with the project's
 //! updater key and checked against the public key in `tauri.conf.json` before it is installed,
 //! so only builds made by the release workflow are accepted. Installing over the old version
 //! keeps everything in the app's data folder: models, datasets, chats and settings.
-//! On Android, updates are installed from the APK as before.
 use super::*;
 
 /// A newer build than the one running.
@@ -28,7 +27,6 @@ struct UpdateProgress {
 /// The newest build, when it is newer than this one (`None`: up to date).
 #[tauri::command]
 pub async fn check_update(app: AppHandle) -> Res<Option<UpdateInfo>> {
-    #[cfg(desktop)]
     {
         use tauri_plugin_updater::UpdaterExt;
         let update = app
@@ -44,11 +42,6 @@ pub async fn check_update(app: AppHandle) -> Res<Option<UpdateInfo>> {
             date: u.date.map(|d| d.to_string()),
         }))
     }
-    #[cfg(not(desktop))]
-    {
-        let _ = app;
-        Err("On Android, install the new APK from the release page".into())
-    }
 }
 
 /// Downloads the newest build, checks its signature, installs it over this one and restarts.
@@ -59,7 +52,6 @@ pub async fn install_update(app: AppHandle, studio: State<'_, Studio>) -> Res<()
     if studio.downloads.lock().unwrap_or_else(|e| e.into_inner()).current.is_some() {
         return Err("Wait until the downloads have finished".into());
     }
-    #[cfg(desktop)]
     {
         use tauri_plugin_updater::UpdaterExt;
         let Some(update) = app
@@ -85,10 +77,5 @@ pub async fn install_update(app: AppHandle, studio: State<'_, Studio>) -> Res<()
             .map_err(|e| format!("The update could not be installed: {e}"))?;
         // On Windows the installer has taken over by now; elsewhere, start the new version.
         app.restart();
-    }
-    #[cfg(not(desktop))]
-    {
-        let _ = app;
-        Err("On Android, install the new APK from the release page".into())
     }
 }

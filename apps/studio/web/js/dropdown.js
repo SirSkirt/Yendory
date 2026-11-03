@@ -1,6 +1,6 @@
 "use strict";
 // Yendory dropdowns: every <select> in Studio is shown as a dropdown drawn by Studio itself, in
-// the lab-notebook design, instead of the operating system's (Windows and Android draw their
+// the lab-notebook design, instead of the operating system's (Windows and Linux draw their
 // own, each differently). The <select> stays in the page, hidden, and remains the source of
 // truth: choosing an item sets its value and fires its "input" and "change" events, so the code
 // that reads or listens to it is unchanged. Setting `select.value` (or an option's `selected`)

@@ -1153,18 +1153,8 @@ pub async fn import_pick_local(app: AppHandle) -> Res<Option<Inspection>> {
     let mut notes = Vec::new();
     for p in paths {
         let name = crate::display_name(&p);
-        // Desktop paths are read in place; elsewhere (Android) the file is copied to the cache.
-        let path = match p.clone().into_path() {
-            Ok(path) => path,
-            Err(_) => {
-                let bytes = crate::read_picked(&app, &p, MAX_FILE as usize)?;
-                let dest = cache_path(&format!("local/{name}"));
-                std::fs::create_dir_all(dest.parent().unwrap_or(Path::new(".")))
-                    .map_err(|e| e.to_string())?;
-                std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
-                dest
-            }
-        };
+        // Picked files are read in place.
+        let path = p.clone().into_path().map_err(|e| format!("{name}: {e}"))?;
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let (format, gz) = format_of(&name);
         let file = ImportFile {

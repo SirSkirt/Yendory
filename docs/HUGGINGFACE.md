@@ -18,7 +18,7 @@ token shows as not accepted); **Disconnect** removes it.
 | Windows | Windows Credential Manager |
 | Linux | your desktop's keyring (the Secret Service) |
 | macOS | the Keychain |
-| Android, or a Linux session without a keyring | `hf-token.secret` in Studio's data folder, readable only by your user account (the page says so) |
+| A Linux session without a keyring | `hf-token.secret` in Studio's data folder, readable only by your user account (the page says so) |
 
 It is never kept in the settings file. A token saved by an earlier version (in `settings.json`) is
 moved at start-up and removed from the settings file and from every copy of it (the backup, the

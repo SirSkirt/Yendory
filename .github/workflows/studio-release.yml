@@ -4,7 +4,6 @@ name: studio-release
 # repository's Releases page:
 #   Windows  : NSIS setup .exe
 #   Linux    : .deb and .AppImage
-#   Android  : .apk for arm64 + armv7 phones, signed with the committed debug key
 # - A branch push that changes the app or the Engine publishes a development pre-release tagged
 #   `studio-v<version>-dev.<run number>` (the newest 5 are kept; older ones are removed).
 # - A pushed tag like `studio-v0.1.0` publishes a pre-release with that tag.
@@ -149,72 +148,9 @@ jobs:
           path: hubpkg
           if-no-files-found: ignore
 
-  android:
-    name: Android APK
-    needs: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Android SDK and NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
-          yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
-          test -d "${ANDROID_NDK_LATEST_HOME:-}" || { echo "::error::No preinstalled Android NDK"; exit 1; }
-          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
-          echo "BUILD_TOOLS=$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "apps/studio/src-tauri -> target"
-      - name: Tauri CLI
-        working-directory: apps/studio
-        run: npm ci --no-audit --no-fund
-      - name: Generate the Android project and launcher icons
-        working-directory: apps/studio
-        run: |
-          npx tauri android init --ci --skip-targets-install
-          npx tauri icon app-icon.png
-      - name: Build release APK
-        working-directory: apps/studio
-        run: npx tauri android build --apk --ci --target aarch64 --target armv7
-      - name: Sign with the Yendory debug key
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Every build is signed with the one committed debug key (apps/studio/keys/README.md),
-          # so a new APK installs over the previous one and keeps the app's models.
-          KS=apps/studio/keys/yendory-debug.jks
-          UNSIGNED="$(find apps/studio/src-tauri/gen/android -name '*release-unsigned.apk' | head -n 1)"
-          test -n "$UNSIGNED"
-          VERSION="$(node -p "require('./apps/studio/package.json').version")"
-          OUT="Yendory-Studio-$VERSION-android.apk"
-          "$BUILD_TOOLS/zipalign" -f -p 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
-          "$BUILD_TOOLS/apksigner" sign --ks "$KS" --ks-pass pass:yendory-debug --ks-key-alias yendory-debug --key-pass pass:yendory-debug --out "$OUT" "$RUNNER_TEMP/aligned.apk"
-          "$BUILD_TOOLS/apksigner" verify --print-certs "$OUT" | tee "$RUNNER_TEMP/certs.txt"
-          grep -qi "SHA-256 digest: 323c7c506fd8a16012f49660af71cacfa9889a024add1cec8411dc45c69324e1" "$RUNNER_TEMP/certs.txt"
-          for abi in arm64-v8a armeabi-v7a; do unzip -Z1 "$OUT" | grep -q "^lib/$abi/" || { echo "::error::missing $abi"; exit 1; }; done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Android
-          path: Yendory-Studio-*-android.apk
-          if-no-files-found: error
-
   release:
     name: Publish pre-release
-    needs: [desktop, android]
+    needs: [desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -262,14 +198,13 @@ jobs:
             if [[ "$DEV" == true ]]; then
               echo "Development build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA:0:7}. Only the newest 5 development builds are kept."
             else
-              echo "Yendory Studio desktop and Android builds, made by GitHub Actions from ${GITHUB_SHA:0:7}."
+              echo "Yendory Studio for Windows and Linux, made by GitHub Actions from ${GITHUB_SHA:0:7}."
             fi
             cat <<'NOTES'
 
           - **With Yendory Hub (recommended):** the Hub installs and updates Studio itself from the `yendory-studio_*.zip` packages here; there is nothing to download by hand.
           - **Windows:** or run the `-setup.exe`. It is not code-signed, so Windows SmartScreen may warn; choose "More info" → "Run anyway". It installs over an earlier version and keeps your models and settings (do not uninstall first).
           - **Linux:** install the `.deb`, or make the `.AppImage` executable and run it.
-          - **Android:** install the `.apk` (allow installs from this source). Every build is signed with the same debug key, so it installs over the previous one and keeps your models. Keep Studio open while it teaches.
 
           Built by CI only: these installers have not been tested on a physical device for this release. `SHA256SUMS.txt` lists the checksum of every file.
           NOTES

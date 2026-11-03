@@ -1202,10 +1202,7 @@ fn delete_model(app: AppHandle, studio: State<Studio>, id: String) -> Res<()> {
 
 fn display_name(path: &FilePath) -> String {
     let raw = path.to_string();
-    let last = raw.rsplit(['/', '\\']).next().unwrap_or(&raw).to_string();
-    // Android content URIs encode the document path ("primary%3ALessons%2F01.txt").
-    let decoded = last.replace("%2F", "/").replace("%3A", ":").replace("%20", " ");
-    decoded.rsplit(['/', ':']).next().unwrap_or(&decoded).to_string()
+    raw.rsplit(['/', '\\']).next().unwrap_or(&raw).to_string()
 }
 
 fn read_picked(app: &AppHandle, path: &FilePath, limit: usize) -> Res<Vec<u8>> {
@@ -2106,15 +2103,11 @@ fn status(studio: State<Studio>) -> Status {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
-    // Desktop: a second copy of Studio hands its --model to this one and closes, so two copies
-    // never write the same files (registered first, as the plugin asks).
-    #[cfg(desktop)]
-    let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| handoff::second_start(app, argv)));
-    builder
+    tauri::Builder::default()
+        // A second copy of Studio hands its --model to this one and closes, so two copies never
+        // write the same files (registered first, as the plugin asks).
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| handoff::second_start(app, argv)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Studio::default())
@@ -2163,8 +2156,7 @@ pub fn run() {
             }
             // The Yendory Network (installed by Yendory Hub), in the background.
             network::connect(app.handle());
-            // Updates on the desktop (Android installs APKs).
-            #[cfg(desktop)]
+            // Updates from the release page (signed; update.rs).
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })

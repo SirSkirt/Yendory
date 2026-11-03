@@ -37,7 +37,7 @@ raises both; activations grow with width and depth, the model state with the par
 
 ### The GPU backend
 
-wgpu 30 (DirectX 12 on Windows, Vulkan on Linux/Android). A training step records every kernel
+wgpu 30 (DirectX 12 on Windows, Vulkan on Linux). A training step records every kernel
 of the forward pass, the loss, the backward pass and AdamW, then submits them at once; every
 kernel binds the whole weight and gradient buffers. Working buffers come from a pool (size
 classes, released when unused). Hybrid training already exists: the GPU computes part of a

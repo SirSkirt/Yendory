@@ -1,6 +1,6 @@
 //! The Hugging Face access token (0.8.4): kept in the system's credential store (Windows
 //! Credential Manager; on Linux the Secret Service, your desktop's keyring; the Keychain on
-//! macOS). Where there is none (Android, or a Linux session without a keyring) it is kept in a
+//! macOS). Where there is none (a Linux session without a keyring) it is kept in a
 //! file of its own in Studio's data folder that only your user account can read, and the page
 //! says so. It is never kept in the settings file: a token stored there by an earlier version is
 //! moved at start-up, and removed from the settings file and its backup copies.
@@ -10,9 +10,7 @@
 use super::*;
 use std::path::Path;
 
-#[cfg(desktop)]
 const SERVICE: &str = "org.yendory.studio";
-#[cfg(desktop)]
 const ACCOUNT: &str = "huggingface-token";
 /// The fallback file (in Studio's data folder).
 const FILE: &str = "hf-token.secret";
@@ -43,10 +41,8 @@ trait Store {
     fn delete(&self) -> Result<(), String>;
 }
 
-#[cfg(desktop)]
 struct System;
 
-#[cfg(desktop)]
 impl Store for System {
     fn set(&self, token: &str) -> Result<(), String> {
         keyring::Entry::new(SERVICE, ACCOUNT).and_then(|e| e.set_password(token)).map_err(|e| e.to_string())
@@ -63,23 +59,6 @@ impl Store for System {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
-    }
-}
-
-/// No system store on this platform.
-#[cfg(not(desktop))]
-struct System;
-
-#[cfg(not(desktop))]
-impl Store for System {
-    fn set(&self, _: &str) -> Result<(), String> {
-        Err("no system credential store on this platform".into())
-    }
-    fn get(&self) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-    fn delete(&self) -> Result<(), String> {
-        Ok(())
     }
 }
 

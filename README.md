@@ -7,7 +7,7 @@ Bicameral neural architecture first developed for Neural Nova. A model can have 
 is the first student, not the engine.
 
 - **Yendory Engine** — the one shared Rust implementation of the Bicameral brain (`dependency/engine` on the `yendory-hub` branch; Studio builds against it, docs/INTEGRATION.md).
-- **Yendory Studio** — the training app for Windows, Linux and Android (`apps/studio`, Tauri).
+- **Yendory Studio** — the training app for Windows and Linux (`apps/studio`, Tauri).
 - **Yendory Nexus** — tools, apps and games for trained models (later).
 
 *Studio teaches. Engine thinks. Nexus connects.*

@@ -5,7 +5,7 @@
 //! - Studio opens it as if the owner had chosen it, after the start-up questions about unfinished
 //!   training are answered, and never while training runs (the page says why it did not).
 //! - A missing or unreadable model, or a bad argument, starts Studio as usual and says why.
-//! - Started a second time (desktop), the new copy hands its `--model` to the running one and
+//! - Started a second time, the new copy hands its `--model` to the running one and
 //!   closes, so two copies never write the same files.
 use super::*;
 use std::path::Path;
@@ -107,7 +107,6 @@ pub(crate) fn handed_model(app: AppHandle, studio: State<Studio>) -> Res<Option<
 
 /// A second copy of Studio was started: its `--model` goes to this one (as a "model-handed"
 /// event), and this window comes to the front.
-#[cfg(desktop)]
 pub(crate) fn second_start(app: &AppHandle, argv: Vec<String>) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();

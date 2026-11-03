@@ -1,7 +1,7 @@
 # Yendory Studio
 
-The desktop and Android app for creating, teaching and examining Bicameral models. It is a thin
-GUI over the Yendory Engine (`crates/yendory-engine`): every reply, score and measurement is
+The Windows and Linux app for creating, teaching and examining Bicameral models. It is a thin
+GUI over the Yendory Engine (`dependency/engine` on the `yendory-hub` branch): every reply, score and measurement is
 computed by the Engine; the window only displays them.
 
 | Section | What it does |
@@ -33,18 +33,16 @@ Linux needs `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (and `patchelf` fo
 
 ## Releases
 
-`.github/workflows/studio-release.yml` builds a Windows installer, Linux `.deb` / `.AppImage`
-and an Android `.apk` on GitHub's machines and publishes them as a **pre-release** on the
+`.github/workflows/studio-release.yml` builds a Windows installer and Linux `.deb` / `.AppImage`
+on GitHub's machines and publishes them as a **pre-release** on the
 Releases page:
 
 - every push that changes Studio or the Engine → `studio-v<version>-dev.<run>` (the newest 5
   development pre-releases are kept, older ones are deleted);
 - a pushed tag `studio-vX.Y.Z` → a pre-release with that tag;
 - a manual run from the Actions tab → the tag you enter, or a development tag.
-Android builds are all signed with one committed debug key (`keys/README.md`); no secrets needed.
 
 ## Known limits
 
-- Android keeps teaching only while Studio is open in the foreground (no background service yet).
 - Lessons must be ASCII text (the tokenizer is ASCII).
-- Long conversations (over 256 tokens) re-read the whole context window for every token: slow on phones (decision D10).
+- Long conversations (over 256 tokens) re-read the whole context window for every token: slow on small machines (decision D10).

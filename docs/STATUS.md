@@ -268,8 +268,8 @@ Not checked: the Windows installer and Android APK on real devices (CI builds th
 - GPU and hybrid training have not run on a real graphics card here (only the software GPU in
   CI and in this container). Their speed on a real card, and whether DirectX 12 (DXC) or
   Vulkan is faster there, is for the Studio's training benchmark to measure.
-- Nothing here has run on Android or in a Windows app. CI builds and tests the library on
-  Ubuntu and Windows only.
+- Nothing here has run in a Windows app. CI builds and tests the library on Ubuntu and Windows
+  only. (Studio no longer has an Android build.)
 - Training dynamics over many steps (a long Rust run vs a long reference run). One gradient and
   one optimizer step on real weights are checked.
 - A full teaching session on the owner's lessons has not been run end to end (only the
