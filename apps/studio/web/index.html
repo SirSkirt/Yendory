@@ -70,6 +70,7 @@
         <tr><th>Reading</th><td id="activeReading" colspan="3">—</td></tr>
         <tr><th>Vocabulary</th><td id="activeVocab" colspan="3">—</td></tr>
         <tr><th>Context</th><td id="activeContext" colspan="3">—</td></tr>
+        <tr id="activeSkillsRow" hidden><th>Game skills</th><td id="activeSkills" colspan="3">—</td></tr>
       </table>
       <div class="actions">
         <button type="button" id="exportModel">Export .nnova2…</button>
@@ -931,7 +932,7 @@
     <div class="plate-wrap">
       <figure class="plate">
         <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
-        <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-relational"></i> Relational network · slots read</span><span><i class="legend-dot n-experts"></i> Experts · router's choice</span><span><i class="legend-dot n-code"></i> Consolidation · code</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span></div>
+        <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-relational"></i> Relational network · slots read</span><span><i class="legend-dot n-experts"></i> Experts · router's choice</span><span><i class="legend-dot n-code"></i> Consolidation · code</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span><span><i class="legend-dot n-skill"></i> Game skills · saved weights</span></div>
         <div class="brain-stage">
           <svg id="hemisphereBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of two trainable neural pathways joined by a trainable bridge">
             <defs><clipPath id="clipLeft"><path d="M 385 74 C 320 25 250 55 211 90 C 125 74 88 138 116 189 C 62 251 116 337 202 341 C 255 395 328 352 385 337 Z"/></clipPath><clipPath id="clipRight"><path d="M 415 74 C 480 25 550 55 589 90 C 675 74 712 138 684 189 C 738 251 684 337 598 341 C 545 395 472 352 415 337 Z"/></clipPath></defs>
@@ -976,6 +977,12 @@
             <text class="n-label consolidation" x="196" y="345" text-anchor="middle" font-size="14" data-label="consolidation">Consolidation</text>
             <text class="n-label memory" x="380" y="372" text-anchor="middle" font-size="14" data-label="memory">Working memory</text>
             <text class="n-label bus" x="276" y="100" text-anchor="middle" font-size="12">bus</text>
+            <g id="nSkills" class="absent">
+              <path class="n-fiber skill" fill="none" d="M118 62 Q214 50 290 112"><title>Bus → game skills' goal input: not connected. A skill's goal input is all zeros until Yendory Tools' Command Mode gives it a command; text never passes through a skill.</title></path>
+              <ellipse class="n-region skill" cx="66" cy="52" rx="54" ry="30"/>
+              <g id="nSkillDots"></g>
+              <text class="n-label skill" id="nSkillsLabel" x="66" y="99" text-anchor="middle" font-size="13">Game skills (none)</text>
+            </g>
           </svg>
         </div>
         <figcaption id="brainDetail">Inspect a question to display measured activity. Brightness is the size of real attention weights and activations, not intelligence.</figcaption>
@@ -1001,6 +1008,12 @@
     </div>
 
     <div id="neuroActivity" hidden></div>
+
+    <section class="skills-section" id="skillSection" aria-labelledby="skillHeading" hidden>
+      <h3 id="skillHeading">Game skills</h3>
+      <p class="note">Networks this model carries in its own file to play games from their pictures, trained in Yendory Tools. Studio keeps them as they are. Text never passes through a skill, so inspecting a question does not light them: what is drawn here is each skill's network, with every dot measured from its saved weights. A dot's brightness is the size of that unit's weights (their root mean square) in the accepted weights, the ones that play, compared with the largest unit of the same layer (layers differ in how many inputs they weigh, so their sizes are not compared); hover or tap a dot for its figures.</p>
+      <div id="skillList"></div>
+    </section>
 
     <section class="trace-section" id="traceSection" aria-labelledby="traceHeading">
       <h3 id="traceHeading">Per-network trace</h3>
@@ -1329,5 +1342,6 @@
 <script src="js/conversation.js"></script>
 <script src="js/datasets.js"></script>
 <script src="js/trace.js"></script>
+<script src="js/skills.js"></script>
 </body>
 </html>

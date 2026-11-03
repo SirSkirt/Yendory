@@ -2172,6 +2172,7 @@ pub fn run() {
             status,
             handoff::handed_model,
             network::network_status,
+            skills::model_skills,
             network::network_connect,
             settings::settings_notices,
             recovery::unfinished_runs,

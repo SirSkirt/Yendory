@@ -92,6 +92,132 @@ pub(crate) fn on_file(path: &Path, model: &Bicameral) -> Option<Vec<Skill>> {
     Bicameral::load(path).ok().map(|m| m.skills)
 }
 
+/// A skill as the Brain page shows it: what it is, how it is built, and figures measured from its
+/// saved weights (no game is played here, and text never passes through a skill).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct View {
+    game: String,
+    name: String,
+    size: yendory_engine::skill::Size,
+    steps: u64,
+    accepted_step: u64,
+    created: u64,
+    lineage: yendory_engine::skill::Lineage,
+    keys: Vec<String>,
+    buttons: Vec<String>,
+    arch: yendory_engine::skill::Arch,
+    /// (channels, height, width) entering each convolution, and leaving the last.
+    shapes: Vec<(usize, usize, usize)>,
+    parameters: usize,
+    layers: Vec<Layer>,
+    groups: Vec<GroupFigures>,
+    /// The trainer's own record (Yendory Tools), as written.
+    notes: serde_json::Value,
+}
+
+/// One layer's units: the root mean square of each unit's weights (the accepted weights, which
+/// play) and of how far training since then has moved them (latest − accepted).
+#[derive(Serialize)]
+pub(crate) struct Layer {
+    id: String,
+    units: Vec<f32>,
+    changed: Vec<f32>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct GroupFigures {
+    group: yendory_engine::skill::Group,
+    parameters: usize,
+    rms: f32,
+    changed: f32,
+}
+
+fn rms(values: impl Iterator<Item = f32>) -> f32 {
+    let (mut sum, mut n) = (0f64, 0usize);
+    for v in values {
+        sum += (v as f64) * (v as f64);
+        n += 1;
+    }
+    if n == 0 {
+        0.
+    } else {
+        (sum / n as f64).sqrt() as f32
+    }
+}
+
+pub(crate) fn view(k: &Skill) -> View {
+    use yendory_engine::skill::{layout, Group, Slot};
+    let slots = layout(&k.spec.arch);
+    let slot = |name: &str| slots.iter().find(|s| s.name == name);
+    let change: Vec<f32> = k.latest.iter().zip(&k.accepted).map(|(l, a)| l - a).collect();
+    // Each output unit (a row), or each input (a column, for the goal input).
+    let rows = |s: &Slot, w: &[f32]| -> Vec<f32> {
+        (0..s.rows)
+            .map(|r| rms(w[s.offset + r * s.cols..s.offset + (r + 1) * s.cols].iter().copied()))
+            .collect()
+    };
+    let cols = |s: &Slot, w: &[f32]| -> Vec<f32> {
+        (0..s.cols).map(|c| rms((0..s.rows).map(|r| w[s.offset + r * s.cols + c]))).collect()
+    };
+    let mut layers = Vec::new();
+    let mut add = |id: String, weights: &str, by_column: bool| {
+        if let Some(s) = slot(weights) {
+            let f = if by_column { cols } else { rows };
+            layers.push(Layer { id, units: f(s, &k.accepted), changed: f(s, &change) });
+        }
+    };
+    for i in 0..k.spec.arch.convs.len() {
+        add(format!("conv{i}"), &format!("conv{i}.w"), false);
+    }
+    add("encoder".into(), "enc.w", false);
+    add("goal".into(), "goal.w", true);
+    add("memory".into(), "mem.c.w", false);
+    add("memoryGate".into(), "mem.z.w", false);
+    add("keys".into(), "key.w", false);
+    add("buttons".into(), "button.w", false);
+    add("mouseX".into(), "mx.w", false);
+    add("mouseY".into(), "my.w", false);
+    let groups = [Group::Vision, Group::Memory, Group::Heads, Group::Interconnect]
+        .into_iter()
+        .filter_map(|g| {
+            let mine: Vec<&Slot> = slots.iter().filter(|s| s.group == g).collect();
+            let parameters: usize = mine.iter().map(|s| s.rows * s.cols).sum();
+            let of = |w: &[f32]| rms(mine.iter().flat_map(|s| w[s.range()].iter().copied()));
+            (parameters > 0).then(|| GroupFigures {
+                group: g,
+                parameters,
+                rms: of(&k.accepted),
+                changed: of(&change),
+            })
+        })
+        .collect();
+    let s = &k.spec;
+    View {
+        game: s.game.clone(),
+        name: s.name.clone(),
+        size: s.size,
+        steps: s.steps,
+        accepted_step: s.accepted_step,
+        created: s.created,
+        lineage: s.lineage.clone(),
+        keys: s.keys.clone(),
+        buttons: s.buttons.clone(),
+        shapes: s.arch.shapes(),
+        arch: s.arch.clone(),
+        parameters: k.parameters(),
+        layers,
+        groups,
+        notes: s.notes.clone(),
+    }
+}
+
+/// The open model's game skills (Brain page).
+#[tauri::command]
+pub(crate) fn model_skills(studio: State<Studio>) -> Res<Vec<View>> {
+    with_active(&studio, |a| Ok(a.model.skills.iter().map(view).collect()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +345,31 @@ mod tests {
         save_in(&dir, &meta("m2"), &imported, &[]).unwrap();
         assert_eq!(Bicameral::load(dir.join("model.nnova2")).unwrap().skills.len(), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_skill_is_shown_with_figures_from_its_weights() {
+        let mut k = skill("range", 30);
+        let v = view(&k);
+        let a = &k.spec.arch;
+        let layer = |id: &str| v.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer("conv0").units.len(), a.convs[0].out);
+        assert_eq!(layer("encoder").units.len(), a.hidden);
+        assert_eq!(layer("goal").units.len(), a.goal);
+        assert_eq!(layer("memory").units.len(), a.memory);
+        assert_eq!(layer("keys").units.len(), a.keys);
+        assert_eq!(layer("mouseX").units.len(), a.mouse_bins.len());
+        // The first key's figure is its own row's root mean square.
+        let s = yendory_engine::skill::layout(a).into_iter().find(|s| s.name == "key.w").unwrap();
+        let row = &k.accepted[s.offset..s.offset + s.cols];
+        let want = (row.iter().map(|x| x * x).sum::<f32>() / s.cols as f32).sqrt();
+        assert!((layer("keys").units[0] - want).abs() < 1e-6);
+        // Change since the accepted weights: only where training moved them.
+        assert!(layer("keys").changed.iter().all(|&c| c == 0.));
+        let first = yendory_engine::skill::layout(a).into_iter().next().unwrap();
+        assert!(layer(&first.name.replace(".w", "")).changed[0] > 0.);
+        assert_eq!(v.groups.iter().map(|g| g.parameters).sum::<usize>(), k.parameters());
+        k.latest.clone_from(&k.accepted);
+        assert!(view(&k).groups.iter().all(|g| g.changed == 0.));
     }
 }

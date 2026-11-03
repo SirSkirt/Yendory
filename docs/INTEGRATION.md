@@ -49,6 +49,14 @@ file holds (`skills`), with any field other programs wrote kept as written
 (`apps/studio/src-tauri/src/skills.rs`). Studio needs Network 0.1.2 or later, whose Engine reads
 these files.
 
+Studio shows them (0.9.7): the page bar says how many the open model has (a link to them), the
+model card lists them, and the Brain page draws them. On the Nova Neuro plate they are a region
+outside the brain, joined to the bus by a dashed fibre that carries nothing yet (a skill's goal
+input is zeros until Tools' Command Mode gives it a command; text never passes through a skill).
+Below the plate, each skill's network is drawn layer by layer (pictures, convolutions, encoder,
+goal input, working memory, controls), one dot per unit; every figure is measured from the saved
+weights (the size of each unit's accepted weights, and how far training has moved them since).
+
 ## Builds and installing
 
 Every push to `yendory-studio` that changes Studio builds it (`studio-v<version>-dev.<run>`): its

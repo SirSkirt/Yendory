@@ -76,6 +76,7 @@
     --neuro-relational: #e3a07a; --neuro-relational-fill: #2f2017;
     --neuro-experts: #8fbfe0; --neuro-experts-fill: #172531;
     --neuro-code: #d6c46e; --neuro-code-fill: #29250f;
+    --neuro-skill: #e58fc0; --neuro-skill-fill: #2e1824;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -285,6 +286,7 @@ table { border-collapse: collapse; width: 100%; }
   --neuro-relational: #a0522d; --neuro-relational-fill: #f4e4d8;
   --neuro-experts: #3b6e8f; --neuro-experts-fill: #dde9f1;
   --neuro-code: #7a6a1a; --neuro-code-fill: #efe9cc;
+  --neuro-skill: #9c3a6e; --neuro-skill-fill: #f4e1ec;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -297,6 +299,7 @@ table { border-collapse: collapse; width: 100%; }
     --neuro-relational: #e3a07a; --neuro-relational-fill: #2f2017;
     --neuro-experts: #8fbfe0; --neuro-experts-fill: #172531;
     --neuro-code: #d6c46e; --neuro-code-fill: #29250f;
+    --neuro-skill: #e58fc0; --neuro-skill-fill: #2e1824;
   }
 }
 .plate-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 22px; align-items: start; margin-top: 12px; }
@@ -348,6 +351,37 @@ table { border-collapse: collapse; width: 100%; }
 #neuroBrain .n-fiber.memory { stroke: var(--neuro-memory); } #neuroBrain .n-fiber.assoc { stroke: var(--brain-right); }
 #neuroBrain .n-fiber.absent { display: none; }
 #neuroBrain circle { cursor: crosshair; transition: opacity .2s; }
+/* Game skills: outside the brain's outline, joined to the bus by a fibre that carries nothing yet. */
+#neuroBrain .n-region.skill { fill: var(--neuro-skill-fill); stroke: var(--neuro-skill); }
+#neuroBrain .n-label.skill { fill: var(--neuro-skill); }
+#neuroBrain .n-fiber.skill { stroke: var(--neuro-skill); stroke-dasharray: 3 6; opacity: .45; }
+#nSkills.absent .n-region.skill { fill: none; stroke: var(--ink-soft); stroke-dasharray: 5 5; opacity: .45; }
+#nSkills.absent .n-label.skill { fill: var(--ink-soft); opacity: .7; }
+#nSkills.absent .n-fiber.skill { display: none; }
+.legend-dot.n-skill { background: var(--neuro-skill); }
+.skills-section { margin-top: 26px; }
+.skills-section[hidden] { display: none; }
+.skill-card { border: 1px solid var(--rule-strong); background: var(--sheet); padding: 14px 16px; margin: 12px 0; }
+.skill-card h4 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.skill-card .figures { width: 100%; }
+.skill-card .figures td { overflow-wrap: anywhere; }
+.skill-card .table-scroll { overflow-x: auto; }
+.skill-card .table-scroll .figures td, .skill-card .table-scroll .figures th { white-space: nowrap; }
+@media (max-width: 600px) { .skill-card { padding: 10px; } .skill-layer { max-width: 100%; } }
+.skill-card h4 .game { font: 13px var(--mono); color: var(--ink-soft); font-weight: 400; margin-left: 8px; }
+.skill-net { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin: 12px 0; }
+.skill-layer { border: 1px solid var(--rule); border-top: 3px solid var(--neuro-skill); padding: 6px 8px; min-width: 92px; max-width: 220px; background: var(--brain-stage); }
+.skill-layer.goal { border-top-style: dashed; }
+.skill-layer h5 { margin: 0; font-size: 13px; font-weight: 600; }
+.skill-layer .size { font: 11.5px var(--mono); color: var(--ink-soft); margin: 2px 0 6px; }
+.skill-arrow { align-self: center; color: var(--ink-soft); font-size: 18px; }
+.skill-dots { display: flex; flex-wrap: wrap; gap: 3px; }
+.skill-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--neuro-skill); cursor: crosshair; }
+.skill-controls { display: flex; flex-wrap: wrap; gap: 4px; }
+.skill-control { display: inline-flex; align-items: center; gap: 4px; font: 12px var(--mono); padding: 1px 6px 1px 4px; border: 1px solid var(--rule); border-radius: 3px; cursor: crosshair; }
+.skill-detail { font: italic 13.5px var(--serif); color: var(--ink-soft); min-height: 1.4em; margin: 4px 0 8px; }
+.skill-card details pre { max-height: 320px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#currentModel a.skills-link { color: var(--neuro-skill); }
 .readings select { width: 100%; margin-bottom: 8px; }
 .readings label { font-size: 13px; color: var(--ink-soft); }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }

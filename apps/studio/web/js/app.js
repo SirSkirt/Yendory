@@ -204,9 +204,11 @@ let teaching = false;
 
 function showActive(meta) {
   active = meta;
+  const skills = window.skillsLink?.(meta);
   $("currentModel").replaceChildren(meta
-    ? el("span", {}, "Open: ", el("b", {}, meta.name), ` · step ${fmt(meta.step)}`)
+    ? el("span", {}, "Open: ", el("b", {}, meta.name), ` · step ${fmt(meta.step)}`, ...(skills ? [" · ", skills] : []))
     : "No model open");
+  window.showSkills?.(meta);
   $("activeEntry").hidden = !meta;
   $("openModelHere").hidden = !!meta;
   window.showChat?.(meta);

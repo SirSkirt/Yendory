@@ -281,5 +281,41 @@ window.Brain = (() => {
     if (neuro) neuroSchematic(design);
   }
 
-  return { show, clear, stageLabel, headMean, showNeuro, setArchitecture, neuroSchematic };
+  // Game skills (Nova Neuro): drawn from their saved weights, not from a question (text never
+  // passes through them). Each dot is one unit of a skill's network; its brightness is the size
+  // of that unit's accepted weights, relative to the largest unit of its layer.
+  const SKILL_LAYER_NAMES = {
+    encoder: "encoder", goal: "goal input", memory: "working memory", memoryGate: "memory update gate",
+    keys: "key", buttons: "button", mouseX: "mouse x step", mouseY: "mouse y step",
+  };
+  const skillLayerName = id => SKILL_LAYER_NAMES[id] || id.replace(/^conv(\d+)$/, (_, i) => `convolution ${Number(i) + 1}`);
+  function setSkills(skills) {
+    const group = $("nSkills"), dots = $("nSkillDots");
+    dots.replaceChildren();
+    const list = skills || [];
+    group.classList.toggle("absent", !list.length);
+    $("nSkillsLabel").textContent = list.length
+      ? `${list.length} game skill${list.length === 1 ? "" : "s"}`
+      : "Game skills (none)";
+    if (!list.length) return;
+    const R = { cx: 66, cy: 52, rx: 54, ry: 30 };
+    const per = Math.max(4, Math.floor(36 / list.length));
+    const all = [];
+    for (const k of list) {
+      const units = k.layers.flatMap(l => {
+        const peak = Math.max(1e-9, ...l.units);
+        return l.units.map((v, i) => ({ k, l, i, v, level: v / peak }));
+      });
+      sample(units, per).forEach(([, u]) => all.push(u));
+    }
+    all.forEach((u, n) => {
+      const p = regionLocation(n, all.length, R);
+      const label = u.l.id === "keys" ? `key ${u.k.keys[u.i] ?? u.i + 1}` : u.l.id === "buttons" ? `button ${u.k.buttons[u.i] ?? u.i + 1}`
+        : `${skillLayerName(u.l.id)} unit ${u.i + 1}`;
+      dots.append(neuron(p.x, p.y, .15 + .85 * u.level, colour("--neuro-skill"),
+        `Game skill · ${u.k.name} (${u.k.game}) · ${label} · weight size ${u.v.toFixed(5)} (root mean square of its accepted weights, from the model's file; brightness compares it with its layer's largest)`));
+    });
+  }
+
+  return { show, clear, stageLabel, headMean, showNeuro, setArchitecture, neuroSchematic, setSkills, skillLayerName };
 })();
