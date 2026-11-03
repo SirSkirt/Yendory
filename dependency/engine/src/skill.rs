@@ -442,6 +442,14 @@ pub struct Seen {
     feat: Vec<f32>,
 }
 
+/// One tick's convolutions with the gradient at their output: its part of the backward pass
+/// that needs nothing from the other ticks ([`Policy::conv_backward`]).
+pub struct ConvBack {
+    cols: Vec<Vec<f32>>,
+    pre: Vec<Vec<f32>>,
+    dfeat: Vec<f32>,
+}
+
 /// What a forward pass keeps for the backward pass, for one tick.
 pub struct StepCache {
     cols: Vec<Vec<f32>>,
@@ -625,6 +633,24 @@ impl Policy {
         grad: &mut [f32],
         scale: f32,
     ) -> (Loss, Vec<Vec<f32>>) {
+        let (loss, dgoals, convs) = self.sequence_loss_parts(seen, goals, targets, grad, scale);
+        for c in &convs {
+            self.conv_backward(c, grad);
+        }
+        (loss, dgoals)
+    }
+
+    /// [`Policy::sequence_loss_seen`] without the convolutions' backward pass: each tick's is
+    /// returned to be run with [`Policy::conv_backward`] (on any thread: it needs nothing from
+    /// the other ticks), adding to the same gradient.
+    pub fn sequence_loss_parts(
+        &self,
+        seen: Vec<Seen>,
+        goals: Option<&[Vec<f32>]>,
+        targets: &[Target],
+        grad: &mut [f32],
+        scale: f32,
+    ) -> (Loss, Vec<Vec<f32>>, Vec<ConvBack>) {
         let a = &self.arch;
         let zero = vec![0f32; a.goal];
         let mut m = vec![0f32; a.memory];
@@ -672,20 +698,26 @@ impl Policy {
         loss.buttons /= n;
         loss.mouse /= n;
         loss.total = loss.keys + loss.buttons + loss.mouse;
-        let dgoals = self.backward(&caches, &dlogits, grad);
-        (loss, dgoals)
+        let (dgoals, convs) = self.backward(caches, &dlogits, grad);
+        (loss, dgoals, convs)
     }
 
     /// Back through the sequence (the memory carries gradient from later ticks to earlier);
     /// returns the gradient at each tick's goal input.
-    fn backward(&self, caches: &[StepCache], dlogits: &[Logits], grad: &mut [f32]) -> Vec<Vec<f32>> {
+    fn backward(
+        &self,
+        mut caches: Vec<StepCache>,
+        dlogits: &[Logits],
+        grad: &mut [f32],
+    ) -> (Vec<Vec<f32>>, Vec<ConvBack>) {
+        let mut convs = Vec::with_capacity(caches.len());
         let a = &self.arch;
         let slot = |n: &str| self.slot(n).map(|s| s.range());
         let ulen = a.head_in();
         let mut dm_next = vec![0f32; a.memory];
         let mut dgoals = vec![vec![0f32; a.goal]; caches.len()];
         for t in (0..caches.len()).rev() {
-            let c = &caches[t];
+            let c = &mut caches[t];
             let d = &dlogits[t];
             let mut du = vec![0f32; ulen];
             for (wn, bn, dz) in [
@@ -745,28 +777,40 @@ impl Policy {
                     axpy(&mut dgoals[t], g, &self.w[gw.start + r * a.goal..gw.start + (r + 1) * a.goal]);
                 }
             }
-            // Convolutions, last first.
-            let shapes = a.shapes();
-            let mut dout = dfeat;
-            for i in (0..a.convs.len()).rev() {
-                let conv = &a.convs[i];
-                let (cin, h, w) = shapes[i];
-                let p = shapes[i + 1].1 * shapes[i + 1].2;
-                let ck = cin * conv.kernel * conv.kernel;
-                let dpre: Vec<f32> = dout.iter().zip(&c.pre[i]).map(|(g, &x)| g * silu_grad(x)).collect();
-                let (wr, br) = (slot(&format!("conv{i}.w")).unwrap(), slot(&format!("conv{i}.b")).unwrap());
-                for (o, row) in dpre.chunks(p).enumerate() {
-                    grad[br.start + o] += row.iter().sum::<f32>();
-                }
-                mm_bt(&dpre, &c.cols[i], &mut grad[wr.clone()], conv.out, p, ck);
-                if i > 0 {
-                    let mut dcols = vec![0f32; ck * p];
-                    mm_at(&self.w[wr], &dpre, &mut dcols, ck, conv.out, p);
-                    dout = col2im(&dcols, cin, h, w, conv.kernel, conv.stride);
-                }
+            convs.push(ConvBack {
+                cols: std::mem::take(&mut c.cols),
+                pre: std::mem::take(&mut c.pre),
+                dfeat,
+            });
+        }
+        convs.reverse();
+        (dgoals, convs)
+    }
+
+    /// The convolutions' backward pass for one tick, adding to `grad`.
+    pub fn conv_backward(&self, item: &ConvBack, grad: &mut [f32]) {
+        let a = &self.arch;
+        let slot = |n: &str| self.slot(n).map(|s| s.range());
+        let c = item;
+        let shapes = a.shapes();
+        let mut dout = item.dfeat.clone();
+        for i in (0..a.convs.len()).rev() {
+            let conv = &a.convs[i];
+            let (cin, h, w) = shapes[i];
+            let p = shapes[i + 1].1 * shapes[i + 1].2;
+            let ck = cin * conv.kernel * conv.kernel;
+            let dpre: Vec<f32> = dout.iter().zip(&c.pre[i]).map(|(g, &x)| g * silu_grad(x)).collect();
+            let (wr, br) = (slot(&format!("conv{i}.w")).unwrap(), slot(&format!("conv{i}.b")).unwrap());
+            for (o, row) in dpre.chunks(p).enumerate() {
+                grad[br.start + o] += row.iter().sum::<f32>();
+            }
+            mm_bt(&dpre, &c.cols[i], &mut grad[wr.clone()], conv.out, p, ck);
+            if i > 0 {
+                let mut dcols = vec![0f32; ck * p];
+                mm_at(&self.w[wr], &dpre, &mut dcols, ck, conv.out, p);
+                dout = col2im(&dcols, cin, h, w, conv.kernel, conv.stride);
             }
         }
-        dgoals
     }
 
     /// The network's weights as bytes (little-endian f32), for `weights.bin`.
@@ -923,6 +967,30 @@ pub fn gradient_check(seed: u64) -> (usize, f64) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn the_convolutions_backward_pass_can_run_apart() {
+        let p = Policy::new(tiny(), 4).unwrap();
+        let (inputs, targets) = sequence(&p.arch, 7, 6);
+        let mut whole = vec![0f32; p.parameters()];
+        let a = p.sequence_loss(&inputs, &targets, &mut whole, 1.0);
+        let seen = inputs.iter().map(|x| p.see(x)).collect();
+        let mut rest = vec![0f32; p.parameters()];
+        let (b, _, convs) = p.sequence_loss_parts(seen, None, &targets, &mut rest, 1.0);
+        assert_eq!(convs.len(), inputs.len());
+        // Each tick's on its own gradient (as separate threads would), then added up.
+        for c in &convs {
+            let mut g = vec![0f32; p.parameters()];
+            p.conv_backward(c, &mut g);
+            for (r, v) in rest.iter_mut().zip(g) {
+                *r += v;
+            }
+        }
+        assert_eq!(a.total, b.total);
+        for (x, y) in whole.iter().zip(&rest) {
+            assert!((x - y).abs() <= 1e-5 * (1.0 + x.abs()), "{x} {y}");
+        }
+    }
 
     pub fn tiny() -> Arch {
         Arch {

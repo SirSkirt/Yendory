@@ -11,7 +11,7 @@
 //! pass of the core for every tick). With the way back at zero (a new link) the skill plays
 //! exactly as without a core.
 use crate::model::{Ablation, Bicameral};
-use crate::skill::{Loss, Policy, Target};
+use crate::skill::{ConvBack, Loss, Policy, Seen, Target};
 
 /// Why the skill's link does not fit this core, if it doesn't.
 pub fn fits(policy: &Policy, core: &Bicameral) -> Result<(), String> {
@@ -81,19 +81,41 @@ pub fn sequence_loss(
     scale: f32,
     abl: Ablation,
 ) -> Result<Loss, String> {
+    let seen: Vec<_> = inputs.iter().map(|x| policy.see(x)).collect();
+    let (loss, convs) = sequence_loss_parts(policy, core, seen, targets, pgrad, cgrad, scale, abl)?;
+    for c in &convs {
+        policy.conv_backward(c, pgrad);
+    }
+    Ok(loss)
+}
+
+/// [`sequence_loss`] from each tick's convolutions (`Policy::see`), without the convolutions'
+/// backward pass: each tick's is returned to be run with `Policy::conv_backward` on any thread.
+#[allow(clippy::too_many_arguments)]
+pub fn sequence_loss_parts(
+    policy: &Policy,
+    core: &Bicameral,
+    seen: Vec<Seen>,
+    targets: &[Target],
+    pgrad: &mut [f32],
+    cgrad: &mut [f32],
+    scale: f32,
+    abl: Ablation,
+) -> Result<(Loss, Vec<ConvBack>), String> {
     fits(policy, core)?;
     let link = policy.arch.cortex.clone().expect("checked");
     let (d, h, goal) = (link.width, policy.arch.hidden, policy.arch.goal);
-    let seen: Vec<_> = inputs.iter().map(|x| policy.see(x)).collect();
     let sights: Vec<Vec<f32>> = seen.iter().map(|s| policy.sight(s)).collect();
     let (left, right) = policy.link_in(&sights);
     let slot = |n: &str| policy.slot(n).map(|s| s.range()).expect("a linked skill has its link's weights");
     let (ow, ob) = (slot("link.out.w"), slot("link.out.b"));
     let mut loss = Loss::default();
+    let mut convs = Vec::new();
     let (dleft, dright) = core.sense_train(&left, &right, cgrad, abl, |states| {
         let goals: Vec<Vec<f32>> = states.chunks(d).map(|s| policy.link_out(s)).collect();
-        let (l, dgoals) = policy.sequence_loss_seen(seen, Some(&goals), targets, pgrad, scale);
+        let (l, dgoals, c) = policy.sequence_loss_parts(seen, Some(&goals), targets, pgrad, scale);
         loss = l;
+        convs = c;
         // Back through the way out: its weights, and the gradient at each state.
         let mut dstates = vec![0f32; states.len()];
         for (t, (dg, s)) in dgoals.iter().zip(states.chunks(d)).enumerate() {
@@ -131,7 +153,7 @@ pub fn sequence_loss(
     if link.right > 0 {
         back_in("link.right.w", "link.right.b", link.right, &dright);
     }
-    Ok(loss)
+    Ok((loss, convs))
 }
 
 #[cfg(test)]

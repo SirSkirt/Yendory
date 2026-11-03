@@ -1,6 +1,6 @@
 [package]
 name = "yendory-network"
-version = "0.1.4"
+version = "0.1.5"
 description = "Yendory Network: the background service that runs the Yendory Engine for every program of the suite"
 edition.workspace = true
 # File locking (the single running copy) needs Rust 1.89.
