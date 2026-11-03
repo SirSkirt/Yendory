@@ -351,7 +351,7 @@ fn phase4(app: &AppHandle, game: &str) -> Res<Vec<Check>> {
         Err(e) => out.push(check(
             "Training lowers the loss on your recordings",
             false,
-            format!("{e} (open a Neuro model with a skill for this game: 2.5 Train)"),
+            format!("{e} (open a model with a skill for this game: 2.5 Train)"),
         )),
     }
 

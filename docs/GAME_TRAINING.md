@@ -525,5 +525,25 @@ at 640×360 about 12.8 million. 2.5 Train shows each size's weights for the game
 is now and refuses a size that can't be kept, with the reason. Before 0.1.8 such a save was sent
 anyway; the Network could not read it and the call never answered (Teach seemed to do nothing).
 Tools now refuses any Network message over 64 MB with the reason instead of waiting. Carrying
-larger skills needs the Network to take a skill in parts (a change on yendory-hub).
+larger skills needs the Network to take a skill in parts (a change on yendory-hub; done in
+0.1.9, below).
+
+## Both architectures, and skills of any size (Tools 0.1.9, Network 0.1.3, Engine 0.9.5)
+
+- **Nova Bicameral models learn games too.** A game skill is saved inside a Bicameral model's
+  file as it is in a Neuro model's (docs/FORMAT.md on yendory-hub), so the same game can be taught
+  to either architecture and the two compared. A model needs no conversation training first.
+- **One model, one set of weights.** Gaming and conversation use the same models; training in
+  Studio and training in Tools may overwrite each other's work (the Hub says so when a model is
+  made, and so does 2.5 Train).
+- **Skills move in parts.** Tools sends a skill to the Network as an upload in 16 MB parts and
+  reads it back in parts (`model.skill.read`), so the 3.1-million-weight limit of 0.1.8 is gone;
+  a skill can have up to the Engine's 64 million weights. A Small skill at 640×360 (12.8 million
+  weights, 196 MB with its optimizer) is saved into a Bicameral model in about 4 s and read back
+  in about 3 s (checked under Xvfb with the real Network 0.1.3).
+- The Tools release needs Network 0.1.3.
+
+So far the game skill is its own network beside the model's core (the "reflex"). Next (plan
+step 2 and 3): the core itself (Neuro or Bicameral) takes part in play as a "cortex", so the
+architectures can be compared as gaming brains.
 

@@ -59,6 +59,38 @@ pub(crate) fn network_call(app: &AppHandle, method: &str, params: Value) -> Res<
     app.state::<Tools>().call(app, method, params)
 }
 
+/// Sends `data` to the Network in parts; the upload's id, for a method that takes one.
+pub(crate) fn network_upload(app: &AppHandle, data: &[u8]) -> Res<u64> {
+    let started = std::time::Instant::now();
+    let client = app.state::<Tools>().network(app)?;
+    let r = client.upload(data).map_err(|e| e.message);
+    match &r {
+        Ok(_) => debug::info(format!(
+            "Network upload ({}): sent in {:.2} s",
+            debug::size(data.len()),
+            started.elapsed().as_secs_f64()
+        )),
+        Err(e) => debug::warn(format!("Network upload ({}): failed: {e}", debug::size(data.len()))),
+    }
+    r
+}
+
+/// Reads `total` bytes from the Network in parts (`method` takes `offset` and `length`).
+pub(crate) fn network_read_parts(app: &AppHandle, method: &str, params: Value, total: usize) -> Res<Vec<u8>> {
+    let started = std::time::Instant::now();
+    let client = app.state::<Tools>().network(app)?;
+    let r = client.read_parts(method, params, total).map_err(|e| e.message);
+    match &r {
+        Ok(_) => debug::info(format!(
+            "Network {method} ({}): read in parts in {:.2} s",
+            debug::size(total),
+            started.elapsed().as_secs_f64()
+        )),
+        Err(e) => debug::warn(format!("Network {method} ({}): failed: {e}", debug::size(total))),
+    }
+    r
+}
+
 /// The model Tools has open, if any.
 pub(crate) fn open_model_now(app: &AppHandle) -> Option<OpenModel> {
     app.state::<Tools>().open.lock().unwrap().clone()

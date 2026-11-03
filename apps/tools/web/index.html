@@ -295,7 +295,7 @@
       <span class="note" id="trainRecs">—</span>
     </div>
     <div class="model-line" id="trainModelLine"><span id="trainModel">—</span> <button type="button" id="trainOpenModel">Open a model…</button></div>
-    <p class="note">Game skills belong to a model: make a Nova Neuro model in Yendory Hub, take it here with <b>Open in Tools</b> (or Open a model… above), and teach it a game. The skill is saved inside the model, so it goes wherever the model goes.</p>
+    <p class="note">Game skills belong to a model, Nova Neuro or Nova Bicameral: make one in Yendory Hub (no conversation training needed), take it here with <b>Open in Tools</b> (or Open a model… above), and teach it a game. The skill is saved inside the model, so it goes wherever the model goes. Training here and in Studio share the model: one may overwrite the other's training.</p>
     <table class="ledger" id="skillsTable">
       <thead><tr><th>Game</th><th>Size</th><th>Lineage</th><th class="num">Steps</th><th class="num">Held-out loss</th><th class="num">Baseline</th><th></th></tr></thead>
       <tbody></tbody>
@@ -408,7 +408,7 @@
     <div class="check-card">
       <h3>Phase 4: the network, training, playing</h3>
       <div class="line-form"><label for="check4Game">Game</label><select id="check4Game"></select><button type="button" class="primary" data-check="4">Run the checks</button></div>
-      <p class="note">The training check uses the open model's skill for the game. Then by hand: record several minutes on the range (2.3), some marked for testing; open a Neuro model, add the range skill and train it (2.5) until its held-out loss is clearly below the baseline; then measure it on the range (2.6). It has learned when it beats both the untrained network and the frequency baseline.</p>
+      <p class="note">The training check uses the open model's skill for the game. Then by hand: record several minutes on the range (2.3), some marked for testing; open a model, add the range skill and train it (2.5) until its held-out loss is clearly below the baseline; then measure it on the range (2.6). It has learned when it beats both the untrained network and the frequency baseline.</p>
       <ul class="check-list" id="checks4"></ul>
     </div>
   </section>

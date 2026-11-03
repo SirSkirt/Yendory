@@ -1001,7 +1001,7 @@ async function deleteRecording() {
 }
 
 // ---- Real games: training (generation 0) --------------------------------------------------------
-// Game skills belong to the open model (a Nova Neuro model from Yendory Hub); the backend reads
+// Game skills belong to the open model (Nova Neuro or Bicameral, from Yendory Hub); the backend reads
 // and saves them through the Network (src-tauri/src/live/skills.rs).
 const T = { profile: null, data: null, selected: null, training: false, history: [] };
 const f3 = v => (v == null || !isFinite(v) ? "—" : v.toFixed(3));
@@ -1401,7 +1401,7 @@ async function handed(h) {
   else if (h.id) {
     notice("");
     await openModel(h.id);
-    if (S.model?.architecture === "neuro") notice(`${S.model.name} came from Yendory Hub. To teach it a game, record yourself playing (2.3), then add and train its game skill on 2.5 Train.`, false, el("button", { type: "button", onclick: () => { notice(""); show("train"); } }, "Go to 2.5 Train"));
+    if (S.model) notice(`${S.model.name} came from Yendory Hub. To teach it a game, record yourself playing (2.3), then add and train its game skill on 2.5 Train.`, false, el("button", { type: "button", onclick: () => { notice(""); show("train"); } }, "Go to 2.5 Train"));
   }
 }
 

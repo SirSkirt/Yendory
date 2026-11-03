@@ -1,5 +1,5 @@
 //! Players kept in Tools by 0.1.4 (`games/<profile>/players/<id>/`), before game skills moved
-//! into the models themselves (`skills.rs`). They are only listed, moved into a Nova Neuro model
+//! into the models themselves (`skills.rs`). They are only listed, moved into a model
 //! as its skill for the game, or deleted.
 use super::policy::{Adam, Arch, Lineage, Size, Skill, SkillSpec};
 use crate::Res;

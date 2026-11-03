@@ -1,5 +1,5 @@
 //! Commands for Gaming Nova: the open model's game skills, training them (generation 0), play,
-//! and measuring on the range. Skills live inside the model (a Nova Neuro model made in Yendory
+//! and measuring on the range. Skills live inside the model (a Nova Neuro or Bicameral model made in Yendory
 //! Hub); Tools reads and saves them through the Network (`skills.rs`).
 use super::autoplay::{self, Brain, Decide};
 use super::evaluate::{self, EvalSetup};
