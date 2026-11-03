@@ -187,7 +187,7 @@ fn batch(rows: Option<usize>, tokens: Option<usize>) -> (usize, usize) {
 }
 
 fn save_meta(dir: &std::path::Path, meta: &Meta) -> Res<()> {
-    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?)
+    write_meta(dir, meta)
 }
 
 #[tauri::command]
@@ -356,12 +356,21 @@ pub(crate) fn grow_active(
     a.meta.growth.history.push(record.clone());
     a.model = grown;
     refresh_meta(&mut a.meta, &a.model);
-    save_in(dir, &a.meta, &a.model, &a.archive)?;
+    save_active_in(dir, a)?;
     let _ = yendory_engine::learn::append_jsonl(
         &dir.join("history.jsonl"),
         &serde_json::json!({"time": now(), "grown": record.label, "parameters_before": before, "parameters_after": record.parameters_after, "automatic": automatic}),
     );
     Ok(record)
+}
+
+/// Saves `a` into `dir`; it takes the game skills its file carries (`skills.rs`).
+fn save_active_in(dir: &std::path::Path, a: &mut Active) -> Res<()> {
+    if let Some(kept) = save_in(dir, &a.meta, &a.model, &a.archive)? {
+        a.meta.skills = crate::skills::summary(&kept);
+        a.model.skills = kept;
+    }
+    Ok(())
 }
 
 /// Restores the model from before its latest growth (in `dir`, the model's folder). The current
@@ -383,7 +392,7 @@ pub(crate) fn roll_back_active(dir: &std::path::Path, a: &mut Active) -> Res<()>
     a.meta.growth.history[i].rolled_back = true;
     a.model = restored;
     refresh_meta(&mut a.meta, &a.model);
-    save_in(dir, &a.meta, &a.model, &a.archive)?;
+    save_active_in(dir, a)?;
     let _ = yendory_engine::learn::append_jsonl(
         &dir.join("history.jsonl"),
         &serde_json::json!({"time": now(), "growth_rolled_back": backup, "kept": kept}),
@@ -468,6 +477,8 @@ mod tests {
             blocks: None,
             resume: None,
             growth: GrowthInfo { mode: GrowthMode::Manual, ..GrowthInfo::default() },
+            skills: Vec::new(),
+            other: Default::default(),
         };
         refresh_meta(&mut meta, &model);
         Active { meta, model, archive: Vec::new() }

@@ -38,6 +38,17 @@ What goes through the Network so far (step 1 of docs/NETWORK.md, "Studio on the 
 - after Studio saves a model (it still trains on its own), the Network reads it again
   (`models.reload`).
 
+## Game skills
+
+A Nova Neuro model can carry game skills in its own file (Engine 0.9.4, docs/FORMAT.md on the Hub
+branch). Yendory Tools trains them and saves them into the model through the Network; Studio
+opens, trains and saves such models (Studio 0.9.6 and later) and never changes their skills.
+Whenever Studio writes a model, the file's own skills go with it: a skill added or removed in Tools
+while Studio had the model open is kept (or stays removed), and `meta.json` lists the skills the
+file holds (`skills`), with any field other programs wrote kept as written
+(`apps/studio/src-tauri/src/skills.rs`). Studio needs Network 0.1.2 or later, whose Engine reads
+these files.
+
 ## Builds and installing
 
 Every push to `yendory-studio` that changes Studio builds it (`studio-v<version>-dev.<run>`): its

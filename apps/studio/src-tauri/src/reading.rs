@@ -1570,10 +1570,7 @@ fn read_with(
         stopped: r.stopped,
         time: now(),
     });
-    write_atomic(
-        &model_dir(app, &meta.id)?.join("meta.json"),
-        &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?,
-    )?;
+    write_meta(&model_dir(app, &meta.id)?, &meta)?;
     let mut decision = None;
     if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == meta.id) {
         a.meta = meta.clone();

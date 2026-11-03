@@ -27,7 +27,7 @@ Hub branch); keep that contract when changing either side.
 
 ## Version numbers
 
-The current version is **0.9.5**. Every update (each set of changes pushed for the owner) raises
+The current version is **0.9.6**. Every update (each set of changes pushed for the owner) raises
 the last digit by one, and the last digit carries over after 9:
 
 0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → … → 0.9.9 → 1.0.0

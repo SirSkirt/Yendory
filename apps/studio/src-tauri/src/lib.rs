@@ -41,6 +41,7 @@ mod reflection;
 mod review;
 mod rewards;
 mod settings;
+mod skills;
 mod sources;
 mod study;
 mod trace;
@@ -136,6 +137,12 @@ pub struct Meta {
     /// Network growth: the setting, the original size and every growth (docs/GROWTH.md).
     #[serde(default)]
     growth: growth::GrowthInfo,
+    /// Nova Neuro: the game skills its file carries (made in Yendory Tools; `skills.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skills: Vec<skills::Summary>,
+    /// Fields other programs of the suite wrote (the Hub, the Network), kept as they are.
+    #[serde(flatten)]
+    other: serde_json::Map<String, serde_json::Value>,
 }
 fn bicameral() -> String {
     "bicameral".into()
@@ -243,22 +250,61 @@ fn refresh_meta(meta: &mut Meta, model: &Bicameral) {
     meta.architecture = model.architecture().into();
     meta.design = model.neuro.clone();
     meta.blocks = Some(model.config.blocks);
+    meta.skills = skills::summary(&model.skills);
     meta.updated = now();
 }
 
 fn save_all(app: &AppHandle, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
-    save_in(&model_dir(app, &meta.id)?, meta, model, archive)?;
+    if let Some(kept) = save_in(&model_dir(app, &meta.id)?, meta, model, archive)? {
+        // The open model takes the skills its file carries (when it is not busy; else the next
+        // save takes them again).
+        let studio = app.state::<Studio>();
+        if let Ok(mut active) = studio.active.try_lock() {
+            if let Some(a) = active.as_mut().filter(|a| a.meta.id == meta.id && a.model.neuro.is_some()) {
+                a.meta.skills = skills::summary(&kept);
+                a.model.skills = kept;
+            }
+        };
+    }
     // The Network reads it again, so its replies come from the saved weights.
     network::saved(app, &meta.id);
     Ok(())
 }
 
 /// Saves a model, its lesson archive and meta.json into its folder (each file atomically).
-fn save_in(dir: &std::path::Path, meta: &Meta, model: &Bicameral, archive: &[Item]) -> Res<()> {
+///
+/// The model is saved with the game skills its file carries now (Studio never changes them;
+/// `skills.rs`); returns them when they differ from `model`'s.
+fn save_in(
+    dir: &std::path::Path,
+    meta: &Meta,
+    model: &Bicameral,
+    archive: &[Item],
+) -> Res<Option<Vec<skills::Skill>>> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    write_atomic(&dir.join("model.nnova2"), &model.to_bytes()?)?;
+    let path = dir.join("model.nnova2");
+    let kept = skills::on_file(&path, model);
+    let (bytes, written) = match &kept {
+        Some(k) => {
+            let mut m = model.clone();
+            m.skills = k.clone();
+            (m.to_bytes()?, skills::summary(k))
+        }
+        None => (model.to_bytes()?, skills::summary(&model.skills)),
+    };
+    write_atomic(&path, &bytes)?;
     write_atomic(&dir.join("archive.json"), &serde_json::to_vec(archive).map_err(|e| e.to_string())?)?;
-    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?)
+    write_meta(dir, &Meta { skills: written, ..meta.clone() })?;
+    Ok(kept)
+}
+
+/// Writes a model's meta.json (atomically); its skills are the ones its model file lists.
+fn write_meta(dir: &std::path::Path, meta: &Meta) -> Res<()> {
+    let mut meta = std::borrow::Cow::Borrowed(meta);
+    if let Some(skills) = skills::summary_on_file(dir).filter(|s| *s != meta.skills) {
+        meta.to_mut().skills = skills;
+    }
+    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&*meta).map_err(|e| e.to_string())?)
 }
 
 fn load_meta(app: &AppHandle, id: &str) -> Res<Meta> {
@@ -307,6 +353,8 @@ fn install(app: &AppHandle, studio: &Studio, name: &str, model: Bicameral, origi
         blocks: None,
         resume: None,
         growth: Default::default(),
+        skills: Vec::new(),
+        other: Default::default(),
     };
     refresh_meta(&mut meta, &model);
     save_all(app, &meta, &model, &[])?;
@@ -406,11 +454,7 @@ fn set_limit(app: &AppHandle, studio: &Studio, id: &str, limit: Option<usize>) -
         check_word_limit(&active.model.config, l)?;
     }
     active.meta.word_limit = limit;
-    let dir = model_dir(app, id)?;
-    write_atomic(
-        &dir.join("meta.json"),
-        &serde_json::to_vec_pretty(&active.meta).map_err(|e| e.to_string())?,
-    )?;
+    write_meta(&model_dir(app, id)?, &active.meta)?;
     Ok(active.meta.clone())
 }
 
@@ -1024,6 +1068,7 @@ fn open_model_in(app: &AppHandle, studio: &Studio, id: &str) -> Res<Meta> {
     ];
     meta.design = model.neuro.clone();
     meta.blocks = Some(model.config.blocks);
+    meta.skills = skills::summary(&model.skills);
     let archive: Vec<Item> = match std::fs::read(dir.join("archive.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(_) => Vec::new(),
@@ -1038,7 +1083,7 @@ fn rename_model(app: AppHandle, studio: State<Studio>, id: String, name: String)
     let mut meta = load_meta(&app, &id)?;
     meta.name = check_name(&name)?;
     let dir = model_dir(&app, &id)?;
-    write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)?;
+    write_meta(&dir, &meta)?;
     if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == id) {
         a.meta.name = meta.name.clone();
     }
@@ -1662,10 +1707,7 @@ fn teach(app: AppHandle, studio: State<Studio>, options: TeachOptions) -> Res<()
     let meta = if meta.resume.is_some() {
         let mut m = meta;
         m.resume = None;
-        write_atomic(
-            &model_dir(&app, &m.id)?.join("meta.json"),
-            &serde_json::to_vec_pretty(&m).map_err(|e| e.to_string())?,
-        )?;
+        write_meta(&model_dir(&app, &m.id)?, &m)?;
         if let Some(a) = studio.active.lock().unwrap().as_mut().filter(|a| a.meta.id == m.id) {
             a.meta.resume = None;
         }

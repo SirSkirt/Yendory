@@ -6383,7 +6383,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 [[package]]
 name = "yendory-client"
 version = "0.1.0"
-source = "git+https://github.com/SirSkirt/Yendory?rev=3fd04ac93b279a33c6c62a0f218def66a9e3c021#3fd04ac93b279a33c6c62a0f218def66a9e3c021"
+source = "git+https://github.com/SirSkirt/Yendory?rev=f4f03ca49b1e373fb8e420f8f0873fb658dae8ad#f4f03ca49b1e373fb8e420f8f0873fb658dae8ad"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6392,8 +6392,8 @@ dependencies = [
 
 [[package]]
 name = "yendory-engine"
-version = "0.9.3"
-source = "git+https://github.com/SirSkirt/Yendory?rev=3fd04ac93b279a33c6c62a0f218def66a9e3c021#3fd04ac93b279a33c6c62a0f218def66a9e3c021"
+version = "0.9.4"
+source = "git+https://github.com/SirSkirt/Yendory?rev=f4f03ca49b1e373fb8e420f8f0873fb658dae8ad#f4f03ca49b1e373fb8e420f8f0873fb658dae8ad"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -6405,7 +6405,7 @@ dependencies = [
 
 [[package]]
 name = "yendory-studio"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "csv",
  "flate2",
