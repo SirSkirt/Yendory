@@ -1032,7 +1032,7 @@ async function renderTrain() {
     return el("tr", { class: T.selected === k.game ? "open-row" : "" },
       el("td", {}, k.name),
       el("td", {}, k.size),
-      el("td", {}, `generation ${k.lineage.generation}, ${k.lineage.method}`),
+      el("td", {}, `generation ${k.lineage.generation}, ${k.lineage.method}${k.arch.cortex ? "; linked to the core" : ""}`),
       el("td", { class: "num" }, fmt(k.steps)),
       el("td", { class: "num" + (best && best.loss < best.baselineLoss ? " better" : "") }, best ? f3(best.loss) : "—"),
       el("td", { class: "num" }, best ? f3(best.baselineLoss) : "—"),
@@ -1112,7 +1112,37 @@ function renderTrainPanel() {
   const best = bestOf(k);
   if (best && !T.training) showMeasure(best);
   drawTrainChart();
+  renderCore(k);
   renderGenerations(k);
+}
+
+// The model's core: a linked skill plays with it (the core reads what the skill sees, its state
+// comes back as the skill's goal); its weights can learn too.
+function renderCore(k) {
+  const m = T.data?.model;
+  const linked = !!k.arch.cortex;
+  const busy = T.training || G.running;
+  const arch = m ? (m.architecture === "neuro" ? "Nova Neuro" : "Nova Bicameral") : "";
+  $("coreState").textContent = linked
+    ? `Linked to ${m?.name ?? "the model"}'s core (${arch}, width ${k.arch.cortex.width}): every tick the core reads what the skill sees, and its state comes back as the skill's goal. The core starts again every stretch (the Stretch below, at most the model's context). Measuring on 2.6 shows it with its core and with the core cut.`
+    : `The skill plays alone: its own eyes, memory and controls (the reflex). Link it to ${m?.name ?? "the model"}'s own core (${arch}) so the core takes part in play: the link starts closed, so it plays as now until training opens it.`;
+  $("coreLink").hidden = linked;
+  $("coreUnlink").hidden = !linked;
+  $("coreLink").disabled = busy;
+  $("coreUnlink").disabled = busy;
+  $("coreTrain").hidden = !linked;
+  const on = $("coreTrainOn").checked;
+  // The rate only matters when the core learns: disabled otherwise (and said so).
+  $("coreRate").disabled = !on || busy;
+  $("coreTrainOn").disabled = busy;
+  $("coreTrainNote").textContent = on
+    ? "The core is the model's own weights, the same ones Studio trains for conversation: training it here changes them, and training in Studio may change them back. The model is saved only as a pair measured together: the accepted skill with the core it was measured with."
+    : "The core plays its part but its weights stay as they are; only the skill and its link learn. (The learning rate is for when the core trains too.)";
+}
+
+async function linkCore(on) {
+  const done = await act("skill_link", { id: T.profile, on });
+  if (done) { toast(on ? "Linked to the core." : "The link is removed."); renderTrain(); }
 }
 
 async function makeSkill() {
@@ -1139,7 +1169,9 @@ async function startTraining() {
     learningRate: Number($("trRate").value), weightDecay: 0.0001, offset: Number($("trOffset").value), measureEvery: 100, seed: Date.now() % 100000,
   };
   const fresh = document.querySelector("input[name=trFrom]:checked")?.value === "fresh";
-  const ok = await act("train_start", { id: T.profile, settings, fresh });
+  const linked = !!skillNow()?.arch.cortex;
+  const core = linked ? { train: $("coreTrainOn").checked, learningRate: Number($("coreRate").value) } : null;
+  const ok = await act("train_start", { id: T.profile, settings, fresh, core });
   if (ok === undefined) return;
   T.training = true;
   $("trMeter").hidden = false;
@@ -1478,6 +1510,9 @@ function wire() {
   $("newSkill").addEventListener("click", makeSkill);
   $("trainOpenModel").addEventListener("click", chooseModel);
   $("trStart").addEventListener("click", startTraining);
+  $("coreLink").addEventListener("click", () => linkCore(true));
+  $("coreUnlink").addEventListener("click", () => linkCore(false));
+  $("coreTrainOn").addEventListener("change", () => { const k = skillNow(); if (k) renderCore(k); });
   $("trStop").addEventListener("click", () => invoke("train_stop"));
   $("trDelete").addEventListener("click", deleteSkill);
   listen("train-progress", e => trainProgress(e.payload));

@@ -8,9 +8,9 @@ use super::policy::{Size, SkillSpec};
 use super::recording::Split;
 use super::safety::Controller;
 use super::train::{self, Settings};
-use super::{alive, data_dir, player, profile, recording, skills, sys, Live};
+use super::{alive, cortex, data_dir, player, profile, recording, skills, sys, Live};
 use crate::Res;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -166,17 +166,92 @@ pub async fn player_delete(app: AppHandle, id: String, player: String) -> Res<bo
     player::delete(&data, &id, &player).map(|_| true)
 }
 
+/// How a linked skill's core is trained (from the page).
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CoreChoice {
+    /// The core's weights learn too (else it plays its part, frozen).
+    pub train: bool,
+    pub learning_rate: f32,
+}
+
+/// The stretch a linked skill was last trained with (the core starts again every stretch).
+fn stretch_of(spec: &SkillSpec) -> usize {
+    train::runs(spec).last().map(|r| r.settings.length).unwrap_or(Settings::default().length)
+}
+
+/// The open model's core, for a linked skill (None for a skill without a link).
+fn core_for(app: &AppHandle, model_id: &str, spec: &SkillSpec) -> Res<Option<yendory_engine::Bicameral>> {
+    if spec.arch.cortex.is_none() {
+        return Ok(None);
+    }
+    cortex::load(app, model_id).map(Some)
+}
+
+/// Links the open model's skill for the game to the model's own core (`on`), or removes the
+/// link (after the person agrees: the link's training is lost). The skill's own weights stay.
+#[tauri::command]
+pub async fn skill_link(app: AppHandle, id: String, on: bool) -> Res<bool> {
+    let m = skills::open_model(&app)?;
+    let skill = skills::get(&app, &id)?;
+    let next = if on {
+        if skill.spec.arch.cortex.is_some() {
+            return Err("The skill is already linked to the core".into());
+        }
+        let core = cortex::load(&app, &m.id)?;
+        let (width, right) = core.sense_widths();
+        skill.with_cortex(Some(yendory_engine::skill::CortexLink { width, right }))?
+    } else {
+        if skill.spec.arch.cortex.is_none() {
+            return Ok(true);
+        }
+        let msg = format!(
+            "Remove the link between {}'s skill for {} and its core? What the link has learned is lost; the skill's own weights stay.",
+            m.name, skill.spec.name
+        );
+        if !super::ask(&app, "Remove the link to the core", &msg, "Remove") {
+            return Ok(false);
+        }
+        skill.with_cortex(None)?
+    };
+    skills::save(&app, &m.id, &next)?;
+    crate::debug::info(format!(
+        "{} {}'s skill for {}: {} weights",
+        if on { "Linked to the core" } else { "Unlinked from the core" },
+        m.name,
+        next.spec.name,
+        next.accepted.len()
+    ));
+    Ok(true)
+}
+
 /// Trains the open model's skill for the game; every measurement that is kept is saved into the
 /// model through the Network. Progress: `train-progress`; the end: `train-done` (the skill's
 /// description) or `train-failed`.
 #[tauri::command]
-pub async fn train_start(app: AppHandle, id: String, settings: Settings, fresh: bool) -> Res<()> {
+pub async fn train_start(
+    app: AppHandle,
+    id: String,
+    settings: Settings,
+    fresh: bool,
+    core: Option<CoreChoice>,
+) -> Res<()> {
     settings.check()?;
     let data = data_dir(&app)?;
     let p = profile::load(&data, &id)?;
     let m = skills::open_model(&app)?;
     let skill = skills::get(&app, &id)?;
     skills::fits(&skill.spec, &p)?;
+    let choice = core.unwrap_or_default();
+    let core = match core_for(&app, &m.id, &skill.spec)? {
+        Some(model) => {
+            if choice.train && !(1e-7..=1e-2).contains(&choice.learning_rate) {
+                return Err("The core's learning rate: 0.0000001 to 0.01".into());
+            }
+            Some(train::CoreTraining { model, train: choice.train, learning_rate: choice.learning_rate })
+        }
+        None => None,
+    };
     let live = app.state::<Live>();
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -197,11 +272,23 @@ pub async fn train_start(app: AppHandle, id: String, settings: Settings, fresh: 
             skill,
             settings,
             fresh,
+            core,
             &stop,
             move |pr| {
                 let _ = a3.emit("train-progress", serde_json::json!({"game": game, "progress": pr}));
             },
-            move |k| skills::save(&a4, &model_id, k).map(|_| ()),
+            move |k, core| match core {
+                // The core learned too: the whole model, with this skill in it.
+                Some(c) => {
+                    let mut whole = c.clone();
+                    match whole.skills.iter_mut().find(|s| s.spec.game == k.spec.game) {
+                        Some(s) => *s = k.clone(),
+                        None => whole.skills.push(k.clone()),
+                    }
+                    cortex::save(&a4, &model_id, &whole).map(|_| ())
+                }
+                None => skills::save(&a4, &model_id, k).map(|_| ()),
+            },
         );
         app2.state::<Live>().training_stop.lock().unwrap().take();
         match result {
@@ -237,6 +324,8 @@ pub async fn play_start(app: AppHandle, id: String, decide: Decide, record: bool
     let skill = skills::get(&app, &id)?;
     skills::fits(&skill.spec, &p)?;
     let policy = skill.policy()?;
+    let core = core_for(&app, &m.id, &skill.spec)?;
+    let stretch = stretch_of(&skill.spec);
     let msg = format!(
         "Allow {} to control {} with the keyboard and mouse?\n\nOnly the game's permitted controls, only while it is in front. Ctrl+Alt+End stops it at once.",
         m.name, p.name
@@ -277,7 +366,20 @@ pub async fn play_start(app: AppHandle, id: String, decide: Decide, record: bool
     *live.active.lock().unwrap() = Some(controller.clone());
     let app2 = app.clone();
     std::thread::spawn(move || {
-        let mut brain = Brain::net(policy);
+        let mut brain = match core {
+            Some(c) => match cortex::Cortex::new(c, stretch).and_then(|cx| Brain::with_core(policy, cx)) {
+                Ok(b) => b,
+                Err(e) => {
+                    let live = app2.state::<Live>();
+                    live.active.lock().unwrap().take();
+                    live.play_stop.lock().unwrap().take();
+                    live.running.store(false, Ordering::Release);
+                    let _ = app2.emit("play-failed", e);
+                    return;
+                }
+            },
+            None => Brain::net(policy),
+        };
         let setup = autoplay::Setup {
             data: &data,
             profile: &p,
@@ -338,6 +440,11 @@ pub async fn evaluate_start(app: AppHandle, episodes: usize, seconds: f64, decid
         return Ok(false);
     }
     let trained = skill.policy()?;
+    let core = core_for(&app, &m.id, &skill.spec)?;
+    let with_core = match core {
+        Some(c) => Some(Brain::with_core(trained.clone(), cortex::Cortex::new(c, stretch_of(&skill.spec))?)?),
+        None => None,
+    };
     let untrained = super::policy::Policy::new(skill.spec.arch.clone(), skill.spec.seed ^ 0xabcdef)?;
     let freq = train::frequencies(&skill.spec, &train::load_clips(&data, &skill.spec, Split::Train)?);
     let live = app.state::<Live>();
@@ -366,14 +473,21 @@ pub async fn evaluate_start(app: AppHandle, episodes: usize, seconds: f64, decid
     *live.play_stop.lock().unwrap() = Some(stop.clone());
     let app2 = app.clone();
     std::thread::spawn(move || {
-        let mut brains = vec![
-            (m.name.clone(), Brain::net(trained)),
-            ("untrained network".to_string(), Brain::net(untrained)),
-            (
-                "frequency baseline (ignores the picture)".to_string(),
-                Brain::Frequencies { bins: skill.spec.arch.mouse_bins.clone(), freq },
-            ),
-        ];
+        // A linked skill plays with its core, and again with the core cut (the skill alone),
+        // beside the deciders that can't have learned.
+        let mut brains = Vec::new();
+        match with_core {
+            Some(b) => {
+                brains.push((format!("{} (with its core)", m.name), b));
+                brains.push((format!("{} (its core cut)", m.name), Brain::net(trained)));
+            }
+            None => brains.push((m.name.clone(), Brain::net(trained))),
+        }
+        brains.push(("untrained network".to_string(), Brain::net(untrained)));
+        brains.push((
+            "frequency baseline (ignores the picture)".to_string(),
+            Brain::Frequencies { bins: skill.spec.arch.mouse_bins.clone(), freq },
+        ));
         let live = app2.state::<Live>();
         let result = {
             let mut slot = live.range.lock().unwrap();
@@ -424,6 +538,7 @@ pub async fn generations_start(app: AppHandle, settings: generations::GenSetting
     let m = skills::open_model(&app)?;
     let skill = skills::get(&app, &id)?;
     skills::fits(&skill.spec, &p)?;
+    let core = core_for(&app, &m.id, &skill.spec)?;
     let minutes = settings.play_seconds() / 60.0;
     let msg = format!(
         "Allow {} to control the test range for {} generation{} (about {:.0} minutes of play each, plus learning)?\n\nIts candidates play in turn, then the new network and the champion. Only the range's permitted controls, only while it is in front. Ctrl+Alt+End stops it at once.",
@@ -479,6 +594,7 @@ pub async fn generations_start(app: AppHandle, settings: generations::GenSetting
             &arena,
             skill,
             settings,
+            core,
             &stop,
             move |pr| {
                 let _ = a3.emit("gen-progress", pr);

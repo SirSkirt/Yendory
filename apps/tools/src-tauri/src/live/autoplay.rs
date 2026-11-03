@@ -41,20 +41,45 @@ pub struct Action {
 }
 
 pub enum Brain {
-    Net { policy: Policy, memory: Vec<f32>, pictures: VecDeque<Vec<u8>> },
-    Frequencies { freq: Frequencies, bins: Vec<f32> },
+    /// A skill's network; with `cortex`, a linked skill playing with its model's core (the
+    /// core reads what the skill sees every tick and its state is the goal input).
+    Net {
+        policy: Policy,
+        memory: Vec<f32>,
+        pictures: VecDeque<Vec<u8>>,
+        cortex: Option<Box<super::cortex::Cortex>>,
+    },
+    Frequencies {
+        freq: Frequencies,
+        bins: Vec<f32>,
+    },
 }
 
 impl Brain {
+    /// A skill playing alone (a linked skill with its core cut: the goal input stays zero).
     pub fn net(policy: Policy) -> Brain {
-        Brain::Net { memory: vec![0.0; policy.arch.memory], policy, pictures: VecDeque::new() }
+        Brain::Net { memory: vec![0.0; policy.arch.memory], policy, pictures: VecDeque::new(), cortex: None }
+    }
+
+    /// A linked skill playing with its model's core.
+    pub fn with_core(policy: Policy, cortex: super::cortex::Cortex) -> Res<Brain> {
+        yendory_engine::cortex::fits(&policy, &cortex.core)?;
+        Ok(Brain::Net {
+            memory: vec![0.0; policy.arch.memory],
+            policy,
+            pictures: VecDeque::new(),
+            cortex: Some(Box::new(cortex)),
+        })
     }
 
     /// Forgets what was seen (a new episode).
     pub fn reset(&mut self) {
-        if let Brain::Net { policy, memory, pictures } = self {
+        if let Brain::Net { policy, memory, pictures, cortex } = self {
             *memory = vec![0.0; policy.arch.memory];
             pictures.clear();
+            if let Some(c) = cortex {
+                c.reset();
+            }
         }
     }
 
@@ -79,7 +104,7 @@ impl Brain {
             }
         };
         match self {
-            Brain::Net { policy, memory, pictures } => {
+            Brain::Net { policy, memory, pictures, cortex } => {
                 let k = policy.arch.frames;
                 if pictures.is_empty() {
                     for _ in 0..k {
@@ -92,8 +117,15 @@ impl Brain {
                     }
                 }
                 let stack: Vec<&[u8]> = pictures.iter().map(|p| p.as_slice()).collect();
-                let goal = vec![0f32; policy.arch.goal];
-                let cache = policy.forward(&encode(&policy.arch, &stack), memory, &goal);
+                let seen = policy.see(&encode(&policy.arch, &stack));
+                let goal = match cortex {
+                    // If the core fails (it shouldn't), the skill plays on alone.
+                    Some(c) => {
+                        c.goal(policy, policy.sight(&seen)).unwrap_or_else(|_| vec![0f32; policy.arch.goal])
+                    }
+                    None => vec![0f32; policy.arch.goal],
+                };
+                let cache = policy.forward_seen(seen, memory, &goal);
                 *memory = cache.m;
                 let l = cache.logits;
                 let mut a = Action::default();

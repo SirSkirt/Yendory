@@ -3,6 +3,7 @@
 pub mod autoplay;
 pub mod checks;
 pub mod controls;
+pub mod cortex;
 pub mod evaluate;
 pub mod generations;
 pub mod nova;

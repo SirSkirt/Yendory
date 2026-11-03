@@ -491,3 +491,8 @@ body.sidebar-collapsed .debug { left: var(--side-rail); }
 .debug-lines .empty { color: var(--ink-soft); font-style: italic; border: none; }
 body.debug-open main { padding-bottom: calc(32vh + 40px); }
 
+/* ---- 2.5 Train: the model's core ------------------------------------------------------------ */
+.core-box { margin: 14px 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--sheet); max-width: 90ch; }
+.core-box h4 { margin: 2px 0 4px; }
+.core-box .field-row { display: inline-flex; margin-left: 18px; }
+

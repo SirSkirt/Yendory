@@ -545,5 +545,46 @@ larger skills needs the Network to take a skill in parts (a change on yendory-hu
 
 So far the game skill is its own network beside the model's core (the "reflex"). Next (plan
 step 2 and 3): the core itself (Neuro or Bicameral) takes part in play as a "cortex", so the
-architectures can be compared as gaming brains.
+architectures can be compared as gaming brains. Done in 0.2.0, below.
+
+## The model's core plays too (Tools 0.2.0, Engine 0.9.6, Network 0.1.4)
+
+A game skill can be **linked to its model's own core**: the same weights (Nova Bicameral or
+Nova Neuro, any design) that hold the model's conversation. The skill stays the fast "reflex"
+(its eyes, working memory and controls, every tick); the core is the "cortex":
+
+- Every tick, the skill's goal-free encoding of the picture (its *sight*) goes through the
+  link into the core as one position of a sequence, where words' embeddings would go (a
+  Bicameral core's right hemisphere gets a second vector, in place of the characters'
+  features). The core runs as it is: the same blocks, hemispheres or networks.
+- The core's state at that tick comes back through the link as the skill's 32-wide goal input
+  (the input reserved for this since phase 4).
+- The way back starts at zero: a newly linked skill plays exactly as before until training
+  opens it. The link is part of the skill (`link.*` weights, docs/FORMAT.md on yendory-hub).
+- **Training** (2.5) is end to end through the goal input: the controls' loss reaches the link
+  and, with **Train the core too**, every weight of the core (the model's own optimizer, its own
+  learning rate; with it off the core plays its part and stays as it is). The sight is held
+  fixed for the core: the skill's eyes learn from the skill's own path (sending gradient through
+  the core into the eyes would need a pass of the core for every tick). Checked against finite
+  differences through both architectures.
+- **The model is saved as a measured pair**: when the core learns, it is saved (through the
+  Network, the whole model) only together with the accepted skill it was measured with. The core
+  is the model's conversation weights too: training it here changes them, and training in Studio
+  may change them back (the page says so).
+- **Stretches**: the core reads a stretch of ticks from its first, as training reads it, and in
+  play it starts again every stretch (the Stretch setting, at most the model's context), one tick
+  at a time from its cache, so each tick costs one position. A linked skill with a Nova-2-size
+  core (1.2 million weights, Neuro or Bicameral) keeps 20 decisions a second on the range (an X
+  test checks it).
+- **Measuring** (2.6) a linked skill plays it twice: with its core, and with its core cut (the
+  goal input at zero: the skill alone), beside the untrained network and the frequency
+  baseline. **Generations** play and learn with the core (frozen during generations: they change
+  the skill and its link).
+
+**Comparing the architectures**: make models of each kind (and Neuro designs of different
+networks) in the Hub, teach each the same game from the same recordings, link each to its core,
+and measure each on 2.6; the core-cut row shows what the core adds in each.
+
+Not yet: the core learning through generations (they keep it frozen), and the interconnect
+between separate models (after the architectures are compared).
 

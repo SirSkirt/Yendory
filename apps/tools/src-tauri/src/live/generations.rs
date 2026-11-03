@@ -203,10 +203,12 @@ fn now() -> u64 {
 
 /// Runs generations on the skill; every attempt is saved (with `save`) as it ends. Returns the
 /// skill with the champion that stood at the end.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     arena: &Arena,
     mut skill: Skill,
     settings: GenSettings,
+    core: Option<yendory_engine::Bicameral>,
     stop: &AtomicBool,
     mut progress: impl FnMut(&GenProgress),
     mut save: impl FnMut(&Skill) -> Res<()>,
@@ -217,8 +219,23 @@ pub fn run(
     // The person's offset (from their last training run), so their recordings mean the same.
     let demo_offset = train::runs(&skill.spec).last().map(|r| r.settings.offset).unwrap_or(1);
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
-    let learn_settings =
-        train::Settings { learning_rate: settings.learning_rate, ..train::Settings::default() };
+    // A linked skill plays and learns with its model's core (frozen here: generations change
+    // the skill and its link), in the stretches it was trained with.
+    let stretch = train::runs(&skill.spec).last().map(|r| r.settings.length).unwrap_or(8);
+    let learn_settings = train::Settings {
+        learning_rate: settings.learning_rate,
+        length: if core.is_some() { stretch } else { train::Settings::default().length },
+        ..train::Settings::default()
+    };
+    if let Some(c) = &core {
+        yendory_engine::cortex::fits(&skill.policy()?, c)?;
+    }
+    let brain = |p: Policy| -> Res<Brain> {
+        match &core {
+            Some(c) => Brain::with_core(p, super::cortex::Cortex::new(c.clone(), stretch)?),
+            None => Ok(Brain::net(p)),
+        }
+    };
     let mut history = attempts(&skill);
     for g in 1..=settings.generations {
         if stop.load(Ordering::Acquire) {
@@ -255,9 +272,9 @@ pub fn run(
             .enumerate()
             .map(|(i, c)| {
                 let who = format!("{} (generation {}, candidate {})", arena.name, attempt.generation, i + 1);
-                (who, Brain::net(c.clone()))
+                brain(c.clone()).map(|b| (who, b))
             })
-            .collect();
+            .collect::<Res<_>>()?;
         progress(&say("playing", format!("{k} players, {} episodes each", settings.episodes), None));
         let setup = EvalSetup {
             data: arena.data,
@@ -326,6 +343,7 @@ pub fn run(
             &learn_settings,
             threads,
             &mut rng,
+            core.as_ref(),
             stop,
             |step| progress(&say("learning", format!("step {step} of {}", settings.steps), None)),
         )?;
@@ -338,8 +356,8 @@ pub fn run(
         // 5. The test against the champion, on layouts nobody has played.
         progress(&say("testing", "the new network against the champion".into(), None));
         let mut pair = vec![
-            ("champion".to_string(), Brain::net(champion)),
-            ("new network".to_string(), Brain::net(child.clone())),
+            ("champion".to_string(), brain(champion)?),
+            ("new network".to_string(), brain(child.clone())?),
         ];
         let setup = EvalSetup {
             data: arena.data,
@@ -432,9 +450,11 @@ fn learn(
     ls: &train::Settings,
     threads: usize,
     rng: &mut Rng,
+    core: Option<&yendory_engine::Bicameral>,
     stop: &AtomicBool,
     mut step_done: impl FnMut(u32),
 ) -> Res<u32> {
+    let mut frozen = core.map(|c| train::CoreTraining { model: c.clone(), train: false, learning_rate: 0.0 });
     // The model's own decision after a picture is in the next tick: offset 1.
     let own_starts = train::sequence_starts(own, ls.length, 1);
     let demo_starts = train::sequence_starts(demos, ls.length, demo_offset);
@@ -455,7 +475,7 @@ fn learn(
                 }
             })
             .collect();
-        train::learn_step(policy, &mut adam, &skill.spec, &batch, ls, threads)?;
+        train::learn_step(policy, &mut adam, &skill.spec, &batch, ls, threads, frozen.as_mut())?;
         if step % 25 == 0 {
             step_done(step);
         }

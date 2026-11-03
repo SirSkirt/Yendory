@@ -18,6 +18,8 @@ use crate::Res;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use yendory_engine::model::{Ablation, Focus};
+use yendory_engine::Bicameral;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -115,6 +117,24 @@ pub struct Run {
     /// The measurement before training (the untrained network) and the best one.
     pub first: Option<Measure>,
     pub best: Option<Measure>,
+    /// With the model's core (a linked skill): whether the core learned too, and how fast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core: Option<CoreRun>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CoreRun {
+    pub trained: bool,
+    pub learning_rate: f32,
+}
+
+/// The model's core in a linked skill's training: it plays its part every tick; with `train`
+/// its weights learn too (the model's own optimizer), at `learning_rate`.
+pub struct CoreTraining {
+    pub model: Bicameral,
+    pub train: bool,
+    pub learning_rate: f32,
 }
 
 /// One recording, ready to learn from or measure on. Its pictures stay on disk and are read as
@@ -261,6 +281,7 @@ pub fn frequencies(info: &SkillSpec, clips: &[Clip]) -> Frequencies {
 }
 
 /// Measures the network on held-out clips, the memory carried through each stretch as in play.
+#[allow(clippy::too_many_arguments)]
 pub fn measure(
     p: &Policy,
     info: &SkillSpec,
@@ -268,9 +289,10 @@ pub fn measure(
     freq: &Frequencies,
     offset: usize,
     step: u64,
+    mut cortex: Option<&mut super::cortex::Cortex>,
 ) -> Res<Measure> {
     let a = &p.arch;
-    let goal = vec![0f32; a.goal];
+    let zero = vec![0f32; a.goal];
     let names: Vec<String> = info.keys.iter().chain(info.buttons.iter()).cloned().collect();
     let nc = names.len();
     let (mut tp, mut fp, mut fneg, mut used, mut pred) =
@@ -284,8 +306,16 @@ pub fn measure(
         for t in 0..clip.targets.len() {
             if clip.starts[t] {
                 m = vec![0f32; a.memory];
+                if let Some(c) = cortex.as_deref_mut() {
+                    c.reset();
+                }
             }
-            let cache = p.forward(&input_at(info, clip, t)?, &m, &goal);
+            let seen = p.see(&input_at(info, clip, t)?);
+            let goal = match cortex.as_deref_mut() {
+                Some(c) => c.goal(p, p.sight(&seen))?,
+                None => zero.clone(),
+            };
+            let cache = p.forward_seen(seen, &m, &goal);
             m = cache.m.clone();
             if !valid(clip, t, offset) {
                 continue;
@@ -412,6 +442,7 @@ pub(crate) fn usable(clips: &[Clip], offset: usize) -> usize {
 
 /// One learning step on a batch of sequences (clip, start, offset), shared out over `threads`;
 /// returns the batch's mean loss per sequence.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn learn_step(
     policy: &mut Policy,
     adam: &mut Adam,
@@ -419,17 +450,22 @@ pub(crate) fn learn_step(
     batch: &[(&Clip, usize, usize)],
     settings: &Settings,
     threads: usize,
+    core: Option<&mut CoreTraining>,
 ) -> Res<f64> {
     let n = policy.parameters();
     let scale = 1.0 / batch.len().max(1) as f32;
     let length = settings.length;
-    let parts: Vec<Res<(Vec<f32>, Loss)>> = std::thread::scope(|s| {
+    let core_ref = core.as_deref().map(|c| &c.model);
+    let cn = core_ref.map(|c| c.weights.len()).unwrap_or(0);
+    type Part = (Vec<f32>, Vec<f32>, Loss);
+    let parts: Vec<Res<Part>> = std::thread::scope(|s| {
         let handles: Vec<_> = batch
             .chunks(batch.len().div_ceil(threads.max(1)).max(1))
             .map(|chunk| {
                 let policy = &*policy;
-                s.spawn(move || -> Res<(Vec<f32>, Loss)> {
+                s.spawn(move || -> Res<Part> {
                     let mut g = vec![0f32; n];
+                    let mut cg = vec![0f32; cn];
                     let mut total = Loss::default();
                     for &(c, t0, offset) in chunk {
                         let mut inputs = Vec::new();
@@ -441,9 +477,21 @@ pub(crate) fn learn_step(
                             inputs.push(input_at(info, c, t)?);
                             targets.push(c.targets[t + offset]);
                         }
-                        total += policy.sequence_loss(&inputs, &targets, &mut g, scale);
+                        total += match core_ref {
+                            Some(c) => yendory_engine::cortex::sequence_loss(
+                                policy,
+                                c,
+                                &inputs,
+                                &targets,
+                                &mut g,
+                                &mut cg,
+                                scale,
+                                Ablation::default(),
+                            )?,
+                            None => policy.sequence_loss(&inputs, &targets, &mut g, scale),
+                        };
                     }
-                    Ok((g, total))
+                    Ok((g, cg, total))
                 })
             })
             .collect();
@@ -453,13 +501,24 @@ pub(crate) fn learn_step(
             .collect()
     });
     let mut g = vec![0f32; n];
+    let mut cg = vec![0f32; cn];
     let mut loss = Loss::default();
     for part in parts {
-        let (pg, pl) = part?;
+        let (pg, pcg, pl) = part?;
         for (a, b) in g.iter_mut().zip(&pg) {
             *a += b;
         }
+        for (a, b) in cg.iter_mut().zip(&pcg) {
+            *a += b;
+        }
         loss += pl;
+    }
+    // The core learns at its own rate with the model's own optimizer (its gradient clipped
+    // on its own).
+    if let Some(c) = core {
+        if c.train {
+            c.model.adam_step(&cg, c.learning_rate, Focus::Joint)?;
+        }
     }
     // Clip the gradient's length at 1.
     let norm = g.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>().sqrt();
@@ -489,12 +548,29 @@ pub fn train(
     mut skill: Skill,
     settings: Settings,
     fresh: bool,
+    mut core: Option<CoreTraining>,
     stop: &AtomicBool,
     mut progress: impl FnMut(&Progress),
-    mut save: impl FnMut(&Skill) -> Res<()>,
+    mut save: impl FnMut(&Skill, Option<&Bicameral>) -> Res<()>,
 ) -> Res<Skill> {
     settings.check()?;
     super::skills::fits(&skill.spec, profile)?;
+    match (&skill.spec.arch.cortex, &core) {
+        (Some(_), None) => {
+            return Err("This skill is linked to its model's core: load the core to train it".into())
+        }
+        (None, Some(_)) => return Err("This skill has no link to its model's core".into()),
+        (Some(_), Some(c)) => {
+            yendory_engine::cortex::fits(&skill.policy()?, &c.model)?;
+            if settings.length > c.model.config.max_tokens {
+                return Err(format!(
+                    "With the core, a stretch can be at most {} ticks (the model's context)",
+                    c.model.config.max_tokens
+                ));
+            }
+        }
+        (None, None) => {}
+    }
     let clips = load_clips(data, &skill.spec, Split::Train)?;
     let held = load_clips(data, &skill.spec, Split::Test)?;
     if usable(&clips, settings.offset) < settings.length * 4 {
@@ -521,12 +597,20 @@ pub fn train(
         train_loss: 0.0,
         first: None,
         best: None,
+        core: core.as_ref().map(|c| CoreRun { trained: c.train, learning_rate: c.learning_rate }),
     };
     let fixed = skill.spec.clone();
-    let measure_now = |p: &Policy, step: u64| {
-        (!held.is_empty()).then(|| measure(p, &fixed, &held, &freq, settings.offset, step)).transpose()
+    let measure_now = |p: &Policy, step: u64, core: Option<&CoreTraining>| -> Res<Option<Measure>> {
+        if held.is_empty() {
+            return Ok(None);
+        }
+        let mut cortex = match core {
+            Some(c) => Some(super::cortex::Cortex::new(c.model.clone(), settings.length)?),
+            None => None,
+        };
+        measure(p, &fixed, &held, &freq, settings.offset, step, cortex.as_mut()).map(Some)
     };
-    let first = measure_now(&policy, skill.spec.steps)?;
+    let first = measure_now(&policy, skill.spec.steps, core.as_ref())?;
     // The accepted weights stand until a measurement beats them (on this run's held-out set).
     let mut best_loss = first.as_ref().map(|m| m.loss).unwrap_or(f64::INFINITY);
     run.first = first.clone();
@@ -543,7 +627,7 @@ pub fn train(
                 (&clips[ci], t, settings.offset)
             })
             .collect();
-        let loss = learn_step(&mut policy, &mut adam, &fixed, &batch, &settings, threads)?;
+        let loss = learn_step(&mut policy, &mut adam, &fixed, &batch, &settings, threads, core.as_mut())?;
         skill.spec.steps += 1;
         run.steps_done = step;
         recent.push_back(loss);
@@ -554,7 +638,7 @@ pub fn train(
         let stopping = stop.load(Ordering::Acquire);
         let last = step == settings.steps || stopping;
         if step % settings.measure_every == 0 || last {
-            let m = measure_now(&policy, skill.spec.steps)?;
+            let m = measure_now(&policy, skill.spec.steps, core.as_ref())?;
             let accepted = match &m {
                 Some(m) if m.loss < best_loss => {
                     best_loss = m.loss;
@@ -571,9 +655,22 @@ pub fn train(
                     run.best = m.clone();
                 }
             }
-            skill.latest.clone_from(&policy.w);
-            skill.adam = adam.clone();
-            save(&skill)?;
+            match core.as_ref().filter(|c| c.train) {
+                // The core learned too: the model is saved only as a pair measured together,
+                // the accepted skill with the core it was measured with.
+                Some(c) => {
+                    if accepted {
+                        skill.latest.clone_from(&policy.w);
+                        skill.adam = adam.clone();
+                        save(&skill, Some(&c.model))?;
+                    }
+                }
+                None => {
+                    skill.latest.clone_from(&policy.w);
+                    skill.adam = adam.clone();
+                    save(&skill, None)?;
+                }
+            }
             progress(&Progress {
                 step,
                 steps: settings.steps,
@@ -609,9 +706,14 @@ pub fn train(
         skill.spec.notes = serde_json::json!({});
     }
     skill.spec.notes["runs"] = serde_json::to_value(&all).map_err(|e| e.to_string())?;
-    skill.latest.clone_from(&policy.w);
-    skill.adam = adam;
-    save(&skill)?;
+    if core.as_ref().is_some_and(|c| c.train) {
+        // The latest weights go with the core last saved: the accepted pair.
+        skill.latest.clone_from(&skill.accepted);
+    } else {
+        skill.latest.clone_from(&policy.w);
+        skill.adam = adam;
+    }
+    save(&skill, None)?;
     Ok(skill)
 }
 
@@ -630,9 +732,10 @@ mod tests {
         assert_eq!(bin_of(&bins, 2.9), 3);
     }
 
-    #[test]
-    fn the_network_learns_what_the_picture_says_and_beats_the_baseline() {
-        let data = std::env::temp_dir().join(format!("tools-train-{}", std::process::id()));
+    /// A small game and recordings where W follows a bright picture, written directly (tick k's
+    /// controls are what was used after picture k-1): two for training, one held out.
+    fn synthetic(name: &str) -> (std::path::PathBuf, Profile) {
+        let data = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data);
         let mut profile = crate::live::profile::range_profile();
         profile.capture.width = 32;
@@ -692,6 +795,12 @@ mod tests {
             }
             wr.finish("stopped").unwrap();
         }
+        (data, profile)
+    }
+
+    #[test]
+    fn the_network_learns_what_the_picture_says_and_beats_the_baseline() {
+        let (data, profile) = synthetic("tools-train");
         let skill = crate::live::skills::new_skill(&data, &profile, Size::Small, 3).unwrap();
         let settings = Settings {
             steps: 150,
@@ -710,9 +819,10 @@ mod tests {
             skill,
             settings,
             false,
+            None,
             &stop,
             |p| seen.push(p.clone()),
-            |k| {
+            |k, _| {
                 saved.push(k.clone());
                 Ok(())
             },
@@ -745,14 +855,137 @@ mod tests {
             done,
             Settings { steps: 20, measure_every: 10, ..Settings::default() },
             false,
+            None,
             &stop,
             |_| {},
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .unwrap();
         assert_eq!(runs(&more.spec).len(), 2);
         assert_eq!(more.spec.steps, 170);
         assert_eq!(more.adam.t, 170);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    fn cores() -> Vec<Bicameral> {
+        use yendory_engine::model::brain::{design_for, BrainChoice};
+        use yendory_engine::model::Config;
+        let bica = Bicameral::with_config(
+            Config {
+                vocab: 140,
+                d: 32,
+                heads: 2,
+                ff: 48,
+                blocks: 2,
+                split: 1,
+                loops: 1,
+                window_chars: 2,
+                r1: 16,
+                r2: 16,
+                max_tokens: 16,
+                ..Config::default()
+            },
+            5,
+        );
+        let (mut c, n) = design_for(
+            &BrainChoice {
+                width: 64,
+                transformer: Some(60_000),
+                memory: Some(10_000),
+                controller: Some(2_000),
+                ..BrainChoice::default()
+            },
+            140,
+        )
+        .unwrap();
+        c.max_tokens = 16;
+        vec![bica, Bicameral::with_design(c, Some(n), 7)]
+    }
+
+    #[test]
+    fn a_skill_linked_to_its_core_learns_and_the_core_learns_only_when_asked() {
+        let (data, profile) = synthetic("tools-train-core");
+        for core in cores() {
+            let (width, right) = core.sense_widths();
+            let skill = crate::live::skills::new_skill(&data, &profile, Size::Small, 3)
+                .unwrap()
+                .with_cortex(Some(yendory_engine::skill::CortexLink { width, right }))
+                .unwrap();
+            let settings = Settings {
+                steps: 60,
+                batch: 8,
+                length: 4,
+                learning_rate: 2e-3,
+                measure_every: 30,
+                ..Settings::default()
+            };
+            let stop = AtomicBool::new(false);
+            // Without its core it can't train (and a skill without a link can't take one).
+            assert!(train(
+                &data,
+                &profile,
+                skill.clone(),
+                settings.clone(),
+                false,
+                None,
+                &stop,
+                |_| {},
+                |_, _| Ok(())
+            )
+            .is_err());
+            // The core plays its part but stays as it is: only the skill is saved.
+            let mut core_saves = 0;
+            let frozen = train(
+                &data,
+                &profile,
+                skill.clone(),
+                settings.clone(),
+                false,
+                Some(CoreTraining { model: core.clone(), train: false, learning_rate: 1e-3 }),
+                &stop,
+                |_| {},
+                |_, c| {
+                    core_saves += c.is_some() as usize;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(core_saves, 0);
+            let run = runs(&frozen.spec).pop().unwrap();
+            assert_eq!(run.core, Some(CoreRun { trained: false, learning_rate: 1e-3 }));
+            let best = run.best.unwrap();
+            assert!(best.loss < run.first.unwrap().loss, "the linked skill learns");
+            assert!(best.loss < best.baseline_loss, "{} vs {}", best.loss, best.baseline_loss);
+            // The core learns too: the model is saved as a pair (the accepted skill with its core).
+            let mut saved: Vec<(Skill, Vec<f32>)> = Vec::new();
+            let trained = train(
+                &data,
+                &profile,
+                skill,
+                settings,
+                false,
+                Some(CoreTraining { model: core.clone(), train: true, learning_rate: 1e-3 }),
+                &stop,
+                |_| {},
+                |k, c| {
+                    if let Some(c) = c {
+                        saved.push((k.clone(), c.weights.clone()));
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(!saved.is_empty());
+            for (k, w) in &saved {
+                assert_eq!(k.latest, k.accepted, "saved with the core it was measured with");
+                assert_ne!(*w, core.weights, "the core's weights learned");
+            }
+            assert_eq!(trained.latest, trained.accepted);
+            // The skill's link has learned to carry something back.
+            let p = trained.policy().unwrap();
+            let out = p.slot("link.out.w").unwrap().range();
+            assert!(p.w[out].iter().any(|v| *v != 0.0));
+        }
         let _ = std::fs::remove_dir_all(&data);
     }
 }

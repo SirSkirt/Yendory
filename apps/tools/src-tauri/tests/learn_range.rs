@@ -162,6 +162,7 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
         skill,
         settings,
         false,
+        None,
         &AtomicBool::new(false),
         |p| {
             if let Some(m) = &p.measure {
@@ -175,7 +176,7 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
                 );
             }
         },
-        |_| Ok(()),
+        |_, _| Ok(()),
     )
     .unwrap();
     eprintln!("trained in {:.0} s", t0.elapsed().as_secs_f64());
@@ -228,6 +229,7 @@ fn a_network_learns_to_hit_targets_from_recorded_play() {
         &arena,
         trained,
         settings,
+        None,
         &AtomicBool::new(false),
         |p| {
             if p.phase == "done" {

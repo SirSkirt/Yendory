@@ -321,6 +321,16 @@
         <label class="check-inline"><input type="radio" name="trFrom" value="continue" checked> where training last stopped</label>
         <label class="check-inline"><input type="radio" name="trFrom" value="fresh"> the accepted weights, with a new optimizer</label>
       </div>
+      <div class="core-box" id="coreBox">
+        <h4>The model's core</h4>
+        <p class="note" id="coreState">—</p>
+        <div class="actions"><button type="button" id="coreLink">Link to the core</button><button type="button" class="quiet" id="coreUnlink" hidden>Remove the link</button></div>
+        <div id="coreTrain" hidden>
+          <label class="check-inline"><input type="checkbox" id="coreTrainOn"> Train the core too</label>
+          <span class="field-row"><label for="coreRate">Core's learning rate</label><input id="coreRate" type="number" min="0.0000001" max="0.01" step="0.00001" value="0.0001" class="narrow-num"></span>
+          <p class="note" id="coreTrainNote"></p>
+        </div>
+      </div>
       <div class="actions"><button type="button" class="primary" id="trStart">Train</button><button type="button" id="trStop" hidden>Stop (keeps the best)</button><button type="button" id="trDelete">Delete the player</button></div>
       <div class="meter" id="trMeter" hidden><div id="trBar"></div></div>
       <p class="note" id="trNote"></p>

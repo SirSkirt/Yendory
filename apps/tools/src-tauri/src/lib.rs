@@ -91,6 +91,22 @@ pub(crate) fn network_read_parts(app: &AppHandle, method: &str, params: Value, t
     r
 }
 
+/// Downloads in parts what `method` offers (`model.checkpoint`).
+pub(crate) fn network_download(app: &AppHandle, method: &str, params: Value) -> Res<Vec<u8>> {
+    let started = std::time::Instant::now();
+    let client = app.state::<Tools>().network(app)?;
+    let r = client.download(method, params).map_err(|e| e.message);
+    match &r {
+        Ok(b) => debug::info(format!(
+            "Network {method} ({}): downloaded in parts in {:.2} s",
+            debug::size(b.len()),
+            started.elapsed().as_secs_f64()
+        )),
+        Err(e) => debug::warn(format!("Network {method}: failed: {e}")),
+    }
+    r
+}
+
 /// The model Tools has open, if any.
 pub(crate) fn open_model_now(app: &AppHandle) -> Option<OpenModel> {
     app.state::<Tools>().open.lock().unwrap().clone()
@@ -564,6 +580,7 @@ pub fn run() {
             live::nova::play_start,
             live::nova::play_stop,
             live::nova::evaluate_start,
+            live::nova::skill_link,
             live::nova::generations_start,
             live::nova::generations_stop,
             live::checks::checks_run,

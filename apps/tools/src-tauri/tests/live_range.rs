@@ -271,6 +271,7 @@ fn a_generation_plays_selects_and_keeps_the_champion_unless_beaten() {
         &arena,
         skill,
         settings,
+        None,
         &AtomicBool::new(false),
         |p| phases.push(p.phase.clone()),
         |_| {
@@ -297,6 +298,70 @@ fn a_generation_plays_selects_and_keeps_the_champion_unless_beaten() {
     } else {
         assert_eq!(out.spec.lineage.generation, 0);
         assert_eq!(out.accepted, champion, "a champion that was not beaten must not change");
+    }
+    drop(range);
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+#[test]
+fn a_linked_skill_plays_the_range_with_its_core_in_real_time() {
+    use std::sync::atomic::AtomicBool;
+    use yendory_tools_lib::live::autoplay::{play, Brain, Decide, Setup};
+    use yendory_tools_lib::live::cortex::Cortex;
+    use yendory_tools_lib::live::policy::Size;
+    use yendory_tools_lib::live::skills;
+    if std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipped: no X11 display (run under xvfb-run)");
+        return;
+    }
+    let _one = DISPLAY.lock().unwrap_or_else(|e| e.into_inner());
+    let data = std::env::temp_dir().join(format!("tools-core-play-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    let prof = range_profile();
+    let mut range = start_range(11);
+    let window = wait_for_window(&mut range, 11);
+    front(window);
+    // Both architectures at Nova-2 size (1.2M weights), as the Hub makes them.
+    let neuro = {
+        let p = yendory_engine::model::neuro::presets().into_iter().next().unwrap();
+        yendory_engine::Bicameral::with_design(p.config, Some(p.design), 3)
+    };
+    let bicameral = yendory_engine::Bicameral::with_config(yendory_engine::model::Config::default(), 3);
+    for core in [neuro, bicameral] {
+        let (width, right) = core.sense_widths();
+        let skill = skills::new_skill(&data, &prof, Size::Small, 5)
+            .unwrap()
+            .with_cortex(Some(yendory_engine::skill::CortexLink { width, right }))
+            .unwrap();
+        let mut brain = Brain::with_core(skill.policy().unwrap(), Cortex::new(core, 16).unwrap()).unwrap();
+        let controller = Mutex::new(Controller::new(
+            sys::open().unwrap(),
+            window,
+            prof.permitted().unwrap(),
+            prof.limits.clone(),
+        ));
+        let mut desk = sys::open().unwrap();
+        let setup = Setup {
+            data: &data,
+            profile: &prof,
+            window,
+            decide: Decide::Sampled,
+            record_as: None,
+            seconds: Some(4.0),
+            seed: 1,
+        };
+        let played =
+            play(setup, &mut brain, desk.as_mut(), &controller, &AtomicBool::new(false), |_| {}).unwrap();
+        eprintln!(
+            "{} core: {} ticks in {} ms ({})",
+            if right == 0 { "Neuro" } else { "Bicameral" },
+            played.ticks,
+            played.ms,
+            played.ended
+        );
+        assert_eq!(played.ended, "the time was up");
+        // 20 decisions a second for 4 s, the core taking part in each: most of them on time.
+        assert!(played.ticks >= 64, "{} ticks: the core is too slow for real time", played.ticks);
     }
     drop(range);
     let _ = std::fs::remove_dir_all(&data);
