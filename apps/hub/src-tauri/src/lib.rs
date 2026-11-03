@@ -178,6 +178,7 @@ pub fn run() {
             library::list_models,
             library::model_options,
             library::create_model,
+            library::plan_model,
             library::import_model,
             library::rename_model,
             library::delete_model,

@@ -77,14 +77,14 @@
     <!-- New model -->
     <section class="view page" id="view-new" hidden>
       <h2><span class="sec">§</span>New model</h2>
-      <p class="lede">An untrained model, made by the Yendory Engine exactly as Studio makes one, and saved in the models folder every program reads. Teach it in Studio.</p>
+      <p class="lede">An untrained model, made by the Yendory Engine exactly as Studio makes one, and saved in the models folder every program reads. Teach it conversation in Studio, games in Yendory Tools, or both.</p>
       <div class="form-grid">
         <label for="newName">Name</label>
         <input id="newName" maxlength="60" placeholder="e.g. Echo" autocomplete="off">
         <label for="archChoice">Architecture</label>
         <select id="archChoice">
           <option value="bicameral" data-note="Transformer + Dense hemisphere: Neural Nova's architecture">Nova Bicameral (default)</option>
-          <option value="neuro" data-note="A brain of specialised networks. Studio's builder makes other designs.">Nova Neuro (experimental)</option>
+          <option value="neuro" data-note="A modular brain: choose its networks and how large each is">Nova Neuro (experimental)</option>
         </select>
         <label for="vocabChoice">Vocabulary</label>
         <span class="with-custom">
@@ -116,13 +116,41 @@
         <label for="newShelfChoice">Shelf</label>
         <select id="newShelfChoice"></select>
       </div>
-      <h3>Size</h3>
-      <table class="ledger" id="sizeTable">
-        <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">File</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p class="note" id="sizeNote">—</p>
-      <p class="note">Growth, the training device and Neuro designs of your own are chosen in Studio; growth and the vocabulary limit and context can be changed there later too.</p>
+      <div class="design-ways" id="designWays" hidden>
+        <label class="check-inline"><input type="radio" name="designWay" value="build" checked> Choose the networks</label>
+        <label class="check-inline"><input type="radio" name="designWay" value="preset"> A ready-made design</label>
+      </div>
+      <div id="brainBuilder" hidden>
+        <h3>Brain</h3>
+        <p class="note">A Nova Neuro brain is made of networks that each do one kind of work and talk through a shared communication bus. Take one network, all of them, or any mix, each as large as you like: the Engine sizes each network as close as it can to what you choose and shows its exact count.</p>
+        <div class="form-grid">
+          <label for="brainWidth">Width</label>
+          <select id="brainWidth">
+            <option value="128" data-note="Nova-2's width; the smallest networks">128</option>
+            <option value="192" data-note="Between">192</option>
+            <option value="256" data-note="Room for larger networks" selected>256</option>
+            <option value="320">320</option>
+            <option value="384">384</option>
+            <option value="512" data-note="The widest">512</option>
+          </select>
+        </div>
+        <p class="note">The width every network reads and writes: the words' vectors, the transformer and the bus. Wider networks hold more in each step and cost more for the same depth.</p>
+        <table class="ledger brain-table" id="brainTable">
+          <thead><tr><th>Network</th><th>Size</th><th class="num">Weights</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="note" id="brainNote">—</p>
+      </div>
+      <div id="presetSizes">
+        <h3>Size</h3>
+        <table class="ledger" id="sizeTable">
+          <thead><tr><th></th><th>Size</th><th class="num">Parameters</th><th class="num">File</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="note" id="sizeNote">—</p>
+      </div>
+      <p class="note">Growth, the training device and every width of a Neuro design are set in Studio; growth and the vocabulary limit and context can be changed there later too.</p>
+      <p class="caution" id="sharedTraining">One model, one set of weights: training in Studio may overwrite training done in Yendory Tools, and training in Tools may overwrite training done in Studio.</p>
       <div class="actions">
         <button type="button" class="primary" id="createModel">Create untrained model</button>
         <button type="button" class="quiet" id="cancelNew">Cancel</button>

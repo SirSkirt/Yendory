@@ -253,7 +253,7 @@ fn chat_streams_stops_and_reloads() {
 }
 
 #[test]
-fn game_skills_are_saved_into_neuro_models() {
+fn game_skills_are_saved_into_models_in_one_message_or_in_parts() {
     use yendory_client::floats::{decode, encode};
     use yendory_engine::skill::{check_arch, Lineage, Size, Skill, SkillSpec};
     let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -320,9 +320,15 @@ fn game_skills_are_saved_into_neuro_models() {
     assert_eq!(e.code, "refused");
     hub.call("models.close", json!({"id": neuro})).unwrap();
 
-    // Not into a Bicameral model; not with weights that don't fit.
+    // Into a Bicameral model too (Network 0.1.3); not with weights that don't fit.
     tools.call("models.open", json!({"id": bica})).unwrap();
-    assert!(save(&tools, &bica, &skill).unwrap_err().message.contains("Neuro"));
+    save(&tools, &bica, &skill).unwrap();
+    let file = yendory_engine::Bicameral::load(
+        n.data.join("org.yendory.studio/models").join(&bica).join("model.nnova2"),
+    )
+    .unwrap();
+    assert!(file.neuro.is_none());
+    assert_eq!(file.skills[0].latest, skill.latest);
     let mut short = skill.clone();
     short.accepted.pop();
     assert_eq!(save(&tools, &neuro, &short).unwrap_err().code, "invalid");
@@ -337,4 +343,40 @@ fn game_skills_are_saved_into_neuro_models() {
     let listed = hub.call("models.list", json!({})).unwrap();
     let meta = listed.as_array().unwrap().iter().find(|m| m["meta"]["id"] == neuro.as_str()).unwrap();
     assert_eq!(meta["meta"]["skills"], json!([]));
+
+    // A skill too large for one message (over 64 MB of base64) goes in parts, both ways.
+    let mut big_spec = spec.clone();
+    big_spec.game = "ravenfield".into();
+    big_spec.arch = yendory_engine::skill::Arch::new(384, 216, 3, 2, 1, vec![-4.0, 0.0, 4.0], Size::Small);
+    let mut big = Skill::new(big_spec).unwrap();
+    let n_weights = big.accepted.len();
+    assert!(n_weights * 16 * 4 / 3 > 64 << 20, "{n_weights} weights fit one message");
+    big.latest[n_weights - 1] = 2.5;
+    big.adam.v[7] = 0.125;
+    big.adam.t = 9;
+    let mut data = yendory_client::floats::to_bytes(&big.accepted);
+    for a in [&big.latest, &big.adam.m, &big.adam.v] {
+        data.extend_from_slice(&yendory_client::floats::to_bytes(a));
+    }
+    let up = tools.upload(&data).unwrap();
+    tools
+        .call("model.skill.save", json!({"id": bica, "spec": big.spec, "upload": up, "t": big.adam.t}))
+        .unwrap();
+    // The upload is used up.
+    assert!(tools
+        .call("model.skill.save", json!({"id": bica, "spec": big.spec, "upload": up, "t": 1}))
+        .is_err());
+    let head = tools.call("model.skill", json!({"id": bica, "game": "ravenfield", "parts": true})).unwrap();
+    assert_eq!(head["bytes"].as_u64().unwrap() as usize, data.len());
+    assert_eq!(head["t"], 9);
+    let back =
+        tools.read_parts("model.skill.read", json!({"id": bica, "game": "ravenfield"}), data.len()).unwrap();
+    assert!(back == data, "the skill read in parts differs");
+    // An upload that is not the skill's size is refused, and another program can't use it.
+    let small = tools.upload(&data[..1000]).unwrap();
+    assert!(tools
+        .call("model.skill.save", json!({"id": bica, "spec": big.spec, "upload": small, "t": 1}))
+        .is_err());
+    let theirs = tools.upload(&data[..16]).unwrap();
+    assert!(hub.call("upload.part", json!({"upload": theirs, "data": "AAAA"})).is_err());
 }

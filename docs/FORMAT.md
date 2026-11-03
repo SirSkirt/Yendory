@@ -54,7 +54,14 @@ trainer's notes). After the learned words:
 | Adam m, v | f32 × k each | |
 
 No bytes may follow. A Neuro model without skills is written as format 1, byte for byte as
-before; a Bicameral model never carries skills. Engines before 0.9.4 refuse format 2 ("Unsupported
+before.
+
+**A Bicameral model with game skills** (Engine 0.9.5) keeps the `.nnova2` layout above and adds,
+after the learned words: the magic `SKILLHDR`, a u32 length and the skills' descriptions (a JSON
+list of `SkillSpec`, at most 16 MiB), then the same `SKILLSET` section. Without skills nothing
+follows the words, so the file is the Nova-2 file the numpy reference reads, byte for byte.
+Engines before 0.9.5 (and the reference) refuse a Bicameral file with skills ("Unexpected Nova-2
+checkpoint trailer") rather than dropping them. Engines before 0.9.4 refuse format 2 ("Unsupported
 Nova Neuro checkpoint (nova-neuro format 2)") instead of opening the model and dropping its skills
 when they save it. On load: at most 64 skills, one per game, each architecture checked and at
 most 64M weights, every value finite, the step and lengths exact.

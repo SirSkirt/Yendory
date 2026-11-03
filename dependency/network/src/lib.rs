@@ -28,6 +28,10 @@ pub const ENGINE: &str = env!("YENDORY_ENGINE_VERSION");
 /// Longest line before `hello` (4 KiB) and after it (64 MiB).
 const MAX_HELLO: u64 = 4 << 10;
 const MAX_LINE: u64 = 64 << 20;
+/// The most one upload may hold (a skill's four arrays at the Engine's largest skill).
+const MAX_UPLOAD: usize = 1100 << 20;
+/// The most one part of a transfer may carry (`upload.part`, `model.skill.read`).
+const MAX_PART: usize = 16 << 20;
 
 pub struct Options {
     /// Stop after this long with no program connected and nothing open.
@@ -97,6 +101,9 @@ struct Open {
     clients: HashSet<u64>,
 }
 
+/// An upload: the size announced, and the bytes that have arrived.
+type Upload = (usize, Vec<u8>);
+
 struct State {
     models: PathBuf,
     port: u16,
@@ -114,6 +121,10 @@ struct State {
     /// Replies being written (`model.chat` with a `stream`), by program and stream, and the flag
     /// that stops each one (`model.stop`).
     streams: Mutex<HashMap<(u64, String), Arc<AtomicBool>>>,
+    /// Transfers in parts (`upload.begin`, `upload.part`), by program and upload: the size
+    /// announced and what has arrived. Dropped when the program disconnects.
+    uploads: Mutex<HashMap<(u64, u64), Upload>>,
+    next_upload: AtomicU64,
 }
 
 impl State {
@@ -171,6 +182,7 @@ impl State {
     /// A program left: its open models are closed (dropped when no one else has them).
     fn forget_client(&self, id: u64) {
         self.clients.lock().unwrap().remove(&id);
+        self.uploads.lock().unwrap().retain(|(c, _), _| *c != id);
         self.streams.lock().unwrap().retain(|(c, _), stop| {
             // Its replies stop at the next token.
             if *c == id {
@@ -256,6 +268,8 @@ pub fn serve(opts: Options) -> Res<()> {
         service_file,
         token,
         streams: Mutex::new(HashMap::new()),
+        uploads: Mutex::new(HashMap::new()),
+        next_upload: AtomicU64::new(1),
     });
     {
         let state = state.clone();
@@ -454,6 +468,13 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
             ))
         }
         "models.options" => Ok(serde_json::to_value(library::options()).unwrap_or_default()),
+        "models.plan" => {
+            // The exact plan of a Neuro brain chosen network by network: each network's
+            // weights, the total and the file's size (nothing is made).
+            let choice: library::NewModel =
+                serde_json::from_value(p.clone()).map_err(|e| invalid(e.to_string()))?;
+            library::plan(&choice).map_err(refused)
+        }
         "models.create" => {
             let choice: library::NewModel =
                 serde_json::from_value(p.clone()).map_err(|e| invalid(e.to_string()))?;
@@ -615,7 +636,9 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
         }
         "model.skill" => {
             // One skill with its weights: the accepted ones, the latest, and the optimizer's
-            // moments and step (floats in base64, yendory_client::floats).
+            // moments and step (floats in base64, yendory_client::floats). With `parts`, only
+            // its description, step and size in bytes: the weights are read with
+            // `model.skill.read` (a large skill does not fit one message).
             let id = str_param(p, "id")?;
             let game = str_param(p, "game")?;
             let model = state.held(id, client)?;
@@ -625,43 +648,118 @@ fn dispatch(state: &State, client: u64, method: &str, p: &Value) -> Answer {
                 .iter()
                 .find(|k| k.spec.game == game)
                 .ok_or_else(|| refused("This model has no skill for that game".into()))?;
+            if p.get("parts").and_then(Value::as_bool) == Some(true) {
+                return Ok(json!({"spec": k.spec, "t": k.adam.t, "bytes": 16 * k.accepted.len()}));
+            }
             use yendory_client::floats::encode;
             Ok(json!({
                 "spec": k.spec, "accepted": encode(&k.accepted), "latest": encode(&k.latest),
                 "m": encode(&k.adam.m), "v": encode(&k.adam.v), "t": k.adam.t,
             }))
         }
+        "model.skill.read" => {
+            // Part of a skill's weights: bytes `offset..offset + length` of its accepted
+            // weights, latest weights, Adam m and v, one after another (f32 little-endian).
+            let id = str_param(p, "id")?;
+            let game = str_param(p, "game")?;
+            let offset = p.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let length = p.get("length").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if length == 0 || length > MAX_PART || !offset.is_multiple_of(4) || !length.is_multiple_of(4) {
+                return Err(invalid(format!("Read 4 to {MAX_PART} bytes at a time, at whole values")));
+            }
+            let model = state.held(id, client)?;
+            let model = model.lock().unwrap();
+            let k = model
+                .skills
+                .iter()
+                .find(|k| k.spec.game == game)
+                .ok_or_else(|| refused("This model has no skill for that game".into()))?;
+            let n = k.accepted.len();
+            if offset + length > 16 * n {
+                return Err(invalid("Past the end of the skill's weights".to_string()));
+            }
+            let arrays = [&k.accepted, &k.latest, &k.adam.m, &k.adam.v];
+            let mut out = Vec::with_capacity(length);
+            for i in offset / 4..(offset + length) / 4 {
+                out.extend_from_slice(&arrays[i / n][i % n].to_le_bytes());
+            }
+            Ok(json!({"data": yendory_client::bytes::encode(&out), "bytes": 16 * n}))
+        }
+        "upload.begin" => {
+            let bytes = p.get("bytes").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if bytes == 0 || bytes > MAX_UPLOAD {
+                return Err(invalid(format!("An upload holds 1 to {MAX_UPLOAD} bytes")));
+            }
+            let id = state.next_upload.fetch_add(1, Ordering::Relaxed);
+            state.uploads.lock().unwrap().insert((client, id), (bytes, Vec::new()));
+            Ok(json!({"upload": id}))
+        }
+        "upload.part" => {
+            let id = p.get("upload").and_then(Value::as_u64).ok_or_else(|| invalid("`upload` is missing"))?;
+            let data = yendory_client::bytes::decode(str_param(p, "data")?).map_err(invalid)?;
+            if data.len() > MAX_PART {
+                return Err(invalid(format!("A part holds at most {MAX_PART} bytes")));
+            }
+            let mut uploads = state.uploads.lock().unwrap();
+            let (size, got) =
+                uploads.get_mut(&(client, id)).ok_or_else(|| invalid("No such upload".to_string()))?;
+            if got.len() + data.len() > *size {
+                return Err(invalid("More than the upload announced"));
+            }
+            if got.capacity() == 0 {
+                got.reserve_exact(*size);
+            }
+            got.extend_from_slice(&data);
+            Ok(json!({"received": got.len()}))
+        }
         "model.skill.save" => {
-            // Adds or replaces the skill for `spec.game` and saves the model's file. Refused when
-            // another program has the model open (its next save would undo this), and for
-            // models that are not Nova Neuro.
+            // Adds or replaces the skill for `spec.game` and saves the model's file (Bicameral or
+            // Neuro). Refused when another program has the model open (its next save would undo
+            // this). The weights come in the message (base64) or, for a large skill, as an
+            // upload sent in parts (`upload`).
             let id = str_param(p, "id")?;
             state.not_open_elsewhere(id, client, "game skill").map_err(refused)?;
             let spec: yendory_engine::skill::SkillSpec =
                 serde_json::from_value(p.get("spec").cloned().unwrap_or_default())
                     .map_err(|e| invalid(format!("`spec`: {e}")))?;
-            use yendory_client::floats::decode;
-            let arr = |k: &str| decode(str_param(p, k)?).map_err(invalid);
-            let skill = yendory_engine::skill::Skill {
-                spec,
-                accepted: arr("accepted")?,
-                latest: arr("latest")?,
-                adam: yendory_engine::skill::Adam {
-                    m: arr("m")?,
-                    v: arr("v")?,
-                    t: p.get("t").and_then(Value::as_u64).unwrap_or(0),
-                },
+            let t = p.get("t").and_then(Value::as_u64).unwrap_or(0);
+            let skill = if let Some(up) = p.get("upload").and_then(Value::as_u64) {
+                // The weights sent in parts: accepted, latest, Adam m and v, one after another.
+                let (size, data) = state
+                    .uploads
+                    .lock()
+                    .unwrap()
+                    .remove(&(client, up))
+                    .ok_or_else(|| invalid("No such upload"))?;
+                let n = yendory_engine::skill::layout_len(&spec.arch);
+                if data.len() != size || size != 16 * n {
+                    return Err(invalid("The upload is not the skill's weights (or did not all arrive)"));
+                }
+                let mut all = yendory_client::floats::from_bytes(&data).map_err(invalid)?;
+                drop(data);
+                let v = all.split_off(3 * n);
+                let m = all.split_off(2 * n);
+                let latest = all.split_off(n);
+                yendory_engine::skill::Skill {
+                    spec,
+                    accepted: all,
+                    latest,
+                    adam: yendory_engine::skill::Adam { m, v, t },
+                }
+            } else {
+                use yendory_client::floats::decode;
+                let arr = |k: &str| decode(str_param(p, k)?).map_err(invalid);
+                yendory_engine::skill::Skill {
+                    spec,
+                    accepted: arr("accepted")?,
+                    latest: arr("latest")?,
+                    adam: yendory_engine::skill::Adam { m: arr("m")?, v: arr("v")?, t },
+                }
             };
             skill.check().map_err(invalid)?;
             let held = state.held(id, client)?;
             let _w = state.library.lock().unwrap();
             let mut model = held.lock().unwrap();
-            if model.neuro.is_none() {
-                return Err(refused(
-                    "Game skills are kept only by Nova Neuro models: make a Neuro model in Yendory Hub"
-                        .into(),
-                ));
-            }
             let mut next = model.clone();
             match next.skills.iter_mut().find(|k| k.spec.game == skill.spec.game) {
                 Some(k) => *k = skill,

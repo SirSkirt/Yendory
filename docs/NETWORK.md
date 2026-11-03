@@ -63,7 +63,8 @@ Error codes: `unauthorized`, `invalid`, `refused` (a rule said no; the message s
 | `shutdown` | `force` (optional) | `true`; refused while another program is connected |
 | `models.list` | | `[{meta, fileBytes, openBy}]`, newest first (`meta` is meta.json as written) |
 | `models.options` | | sizes and Neuro designs, with parameters, per-word cost, bytes per parameter |
-| `models.create` | `name`, `architecture`, `preset`, `wordLimit`, `context` | the new model's entry |
+| `models.create` | `name`, `architecture`, `preset`, `wordLimit`, `context`; for a Neuro brain chosen network by network, `preset` `"custom"` and `brain` (`BrainChoice`: `width`, and for each network wanted about how many weights: `transformer`, `memory`, `associative`, `relational`, `experts`, `consolidation`, `controller`) (0.1.3) | the new model's entry |
+| `models.plan` | the same as `models.create` | `{parameters, fileBytes, networks: [{name, parameters}], config, design}`: what it would make (each Neuro network's exact weights), nothing made (0.1.3) |
 | `models.import` | `path`, `name` (optional) | the new model's entry |
 | `models.rename` | `id`, `name` | the entry (every other meta.json field kept) |
 | `models.delete` | `id` | `true`; refused while any program has it open |
@@ -75,14 +76,23 @@ Error codes: `unauthorized`, `invalid`, `refused` (a rule said no; the message s
 | `model.stop` | `stream` | `true` when that reply of this program was being written (it stops after the current token), else `false` (0.1.1) |
 | `models.reload` | `id` | the entry; reads the model's file again for every program that has it open, after the caller wrote it itself (Studio, while it still trains on its own) (0.1.1) |
 | `model.skills` | `id` | the open model's game skills: each one's description (`SkillSpec`: game, name, size, arch, controls, lineage, steps, notes), no weights (0.1.2) |
-| `model.skill` | `id`, `game` | `{spec, accepted, latest, m, v, t}`: one skill with its accepted weights, latest weights and optimizer state; floats as base64 little-endian f32 (`yendory_client::floats`) (0.1.2) |
-| `model.skill.save` | `id`, `spec`, `accepted`, `latest`, `m`, `v`, `t` | the entry; adds or replaces the skill for `spec.game` and saves the model's file (format 2, docs/FORMAT.md) and a `skills` summary in meta.json. Refused for a model that is not Nova Neuro, for weights that don't fit the skill's network, and while another program has the model open (0.1.2) |
+| `model.skill` | `id`, `game`, `parts` (optional) | `{spec, accepted, latest, m, v, t}`: one skill with its accepted weights, latest weights and optimizer state; floats as base64 little-endian f32 (`yendory_client::floats`) (0.1.2). With `parts`: `{spec, t, bytes}` only, the weights to be read with `model.skill.read` (0.1.3) |
+| `model.skill.read` | `id`, `game`, `offset`, `length` (at most 16 MB, whole values) | `{data, bytes}`: those bytes (base64) of the skill's accepted weights, latest weights, Adam m and v, one after another as little-endian f32 (0.1.3) |
+| `model.skill.save` | `id`, `spec`, `t`, and the weights: `accepted`, `latest`, `m`, `v` (base64), or `upload` (an upload of the four arrays one after another) | the entry; adds or replaces the skill for `spec.game` and saves the model's file (docs/FORMAT.md: Neuro format 2, or a Bicameral file with skills, 0.1.3) and a `skills` summary in meta.json. Refused for weights that don't fit the skill's network and while another program has the model open (0.1.2) |
+| `upload.begin` | `bytes` (at most 1,100 MB) | `{upload}`: a transfer in parts for a method that takes an upload; it belongs to this program and is dropped when it disconnects (0.1.3) |
+| `upload.part` | `upload`, `data` (base64, at most 16 MB) | `{received}` (0.1.3) |
 | `model.skill.delete` | `id`, `game` | the entry; the file goes back to format 1 when no skill is left (0.1.2) |
 
 Events: `models.changed` (`id`, `change`: created, imported, renamed, deleted),
 `network.stopping` (`reason`), and `model.token` (`stream`, `text`; only to the program whose
 `model.chat` is being written). A model a program opened is closed when it disconnects; another
 program can't rename it, and no one can delete it, while it is open.
+
+**Large messages.** A message is one line of at most 64 MB. Anything larger goes in parts:
+`upload.begin` and `upload.part` toward the Network, `model.skill.read` from it
+(`yendory_client`: `Client::upload`, `Client::read_parts`, 16 MB a part). A skill's weights
+in one message are four arrays as base64, about 21 bytes a weight, so a skill over about 3
+million weights must go in parts.
 
 ## Studio on the Network (the port)
 

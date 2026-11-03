@@ -244,6 +244,13 @@ pub async fn model_options(app: AppHandle, hub: tauri::State<'_, Hub>) -> Res<Va
     hub.call(&app, "models.options", json!({}))
 }
 
+/// The exact plan of a model a choice would make (each Neuro network's weights, the total, the
+/// file's size), without making it.
+#[tauri::command]
+pub async fn plan_model(app: AppHandle, hub: tauri::State<'_, Hub>, choice: Value) -> Res<Value> {
+    hub.call(&app, "models.plan", choice)
+}
+
 #[tauri::command]
 pub async fn create_model(
     app: AppHandle,

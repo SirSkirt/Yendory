@@ -539,7 +539,7 @@ async function openNew() {
   if (!S.options) return;
   $("newName").value = "";
   $("newShelfChoice").replaceChildren(...S.shelves.shelves.map(s => el("option", { value: s.id, selected: s.id === currentShelf()?.id }, s.name)));
-  renderSizes();
+  renderDesign();
   show("new");
   $("newName").focus();
 }
@@ -553,7 +553,106 @@ function contextChoice() {
   const v = $("contextChoice").value;
   return v === "custom" ? Number($("contextCustom").value) : Number(v);
 }
+// ---- New model: a Nova Neuro brain chosen network by network ------------------------------------
+// The Network sizes each network as the Engine builds it (models.plan) and gives the exact counts.
+const NETWORKS = [
+  { id: "transformer", name: "Transformer", note: "Reads the words in order with attention: language, and finding what matters earlier in the context.", on: true, size: 2_000_000 },
+  { id: "memory", name: "Working memory", note: "Keeps a running state from step to step (a gated recurrent network): what is happening now.", on: true, size: 500_000 },
+  { id: "associative", name: "Associative memory", note: "Learned patterns recalled by similarity: facts and habits it has seen many times.", on: true, size: 500_000 },
+  { id: "relational", name: "Relational network", note: "Slots for the things being talked about, and how they connect (who has what, where).", on: false, size: 250_000 },
+  { id: "experts", name: "Experts", note: "Several small networks, and a router that learns which to use when: specialisation.", on: false, size: 1_000_000 },
+  { id: "consolidation", name: "Consolidation", note: "Squeezes what the bus holds into a short code: a compact summary to remember by.", on: false, size: 250_000 },
+];
+const BRAIN_SIZES = [50e3, 100e3, 250e3, 500e3, 1e6, 2e6, 4e6, 6e6, 8e6, 12e6, 16e6, 24e6, 32e6, 48e6, 64e6, 100e6];
+const CONTROLLER_SIZES = [0, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 1e6, 2e6];
+const B = { nets: Object.fromEntries(NETWORKS.map(n => [n.id, { on: n.on, size: n.size }])), controller: 0, plan: null, asked: 0 };
+const sizeName = n => (n >= 1e6 ? `${n / 1e6}M` : `${n / 1e3}K`) + " weights";
+
+function brainChoice() {
+  const c = { width: Number($("brainWidth").value) };
+  for (const n of NETWORKS) if (B.nets[n.id].on) c[n.id] = B.nets[n.id].size;
+  if (B.controller) c.controller = B.controller;
+  return c;
+}
+const modulesOn = () => NETWORKS.some(n => n.id !== "transformer" && B.nets[n.id].on);
+
+function buildingBrain() {
+  return $("archChoice").value === "neuro" && document.querySelector("input[name=designWay]:checked")?.value === "build";
+}
+
+function renderDesign() {
+  const neuro = $("archChoice").value === "neuro";
+  $("designWays").hidden = !neuro;
+  $("brainBuilder").hidden = !buildingBrain();
+  $("presetSizes").hidden = buildingBrain();
+  if (buildingBrain()) planBrain(); else renderSizes();
+}
+
+function renderBrain() {
+  const plan = B.plan;
+  // Numbers from the last plan are only shown for networks still chosen.
+  const got = id => plan?.networks?.find(x => x.name === id)?.parameters;
+  const cell = n => (n == null ? "—" : fmt(n));
+  const rows = NETWORKS.map(n => {
+    const st = B.nets[n.id];
+    const box = el("input", { type: "checkbox", checked: st.on, "aria-label": n.name });
+    box.addEventListener("change", () => { st.on = box.checked; planBrain(); });
+    const pick = el("select", { "aria-label": `${n.name}: size`, disabled: !st.on },
+      ...BRAIN_SIZES.map(v => el("option", { value: String(v), selected: v === st.size }, sizeName(v))));
+    pick.addEventListener("change", () => { st.size = Number(pick.value); planBrain(); });
+    return el("tr", { class: st.on ? "" : "off" },
+      el("td", {}, el("label", { class: "net-name" }, box, el("span", {}, el("b", {}, n.name), el("p", { class: "note" }, n.note)))),
+      el("td", {}, pick),
+      el("td", { class: "num" }, st.on ? cell(got(n.id)) : "—"));
+  });
+  // The Executive Controller exists when there is a network besides the transformer to weigh.
+  const ctl = el("select", { "aria-label": "Executive Controller: size", disabled: !modulesOn() },
+    ...CONTROLLER_SIZES.map(v => el("option", { value: String(v), selected: v === B.controller }, v ? sizeName(v) : "automatic (small)")));
+  ctl.addEventListener("change", () => { B.controller = Number(ctl.value); planBrain(); });
+  rows.push(el("tr", { class: modulesOn() ? "" : "off" },
+    el("td", {}, el("span", { class: "net-name" }, el("span", {}, el("b", {}, "Executive Controller"),
+      el("p", { class: "note" }, modulesOn() ? "Reads the bus and decides how much each network contributes, step by step." : "Only with a network besides the transformer: it weighs those networks.")))),
+    el("td", {}, ctl),
+    el("td", { class: "num" }, modulesOn() ? cell(got("controller")) : "—")));
+  for (const [id, name, note] of [["bus", "Communication bus", "How the networks exchange what they hold (made to fit the networks chosen)."], ["words", "Words", "The vectors of the characters and words it reads and writes (from the vocabulary)."]]) {
+    if (got(id) == null) continue;
+    rows.push(el("tr", { class: "fixed" }, el("td", {}, el("span", { class: "net-name" }, el("span", {}, el("b", {}, name), el("p", { class: "note" }, note)))), el("td", {}, ""), el("td", { class: "num" }, cell(got(id)))));
+  }
+  if (plan) rows.push(el("tr", { class: "total" }, el("td", {}, "In all"), el("td", {}, bytes(plan.fileBytes)), el("td", { class: "num" }, fmt(plan.parameters))));
+  $("brainTable").tBodies[0].replaceChildren(...rows);
+  $("brainNote").textContent = B.error
+    ? B.error
+    : plan && !B.pending ? `The file holds the weights and the optimizer's state (12 bytes per weight).${vocabLimit() != null ? " With a vocabulary limit the words grow as it learns them; this is the size once every slot is used." : ""}` : "Working out the sizes…";
+  $("brainNote").classList.toggle("warn", !!B.error);
+  $("createModel").disabled = !!B.error || !plan || !!B.pending;
+}
+
+let planTimer = 0;
+function planBrain() {
+  // The last plan stays shown (the page keeps its place) until the new one arrives.
+  B.pending = true;
+  renderBrain();
+  clearTimeout(planTimer);
+  planTimer = setTimeout(async () => {
+    const n = ++B.asked;
+    try {
+      const plan = await invoke("plan_model", { choice: { name: "plan", architecture: "neuro", preset: "custom", brain: brainChoice(), wordLimit: vocabLimit(), context: contextChoice() || 256 } });
+      if (n !== B.asked) return;
+      B.plan = plan; B.error = null; B.pending = false;
+    } catch (e) {
+      if (n !== B.asked) return;
+      B.plan = null; B.pending = false;
+      B.error = /no method/.test(String(e))
+        ? "Choosing the networks needs the Yendory Network 0.1.3 or later: update it on Downloads & updates. The ready-made designs work now."
+        : String(e);
+    }
+    if (buildingBrain()) renderBrain();
+  }, 150);
+}
+
 function renderSizes() {
+  if (buildingBrain()) { planBrain(); return; }
+  $("createModel").disabled = false;
   const arch = $("archChoice").value;
   const sizes = S.options[arch];
   const perParam = S.options.bytesPerParameter || 12;
@@ -583,18 +682,21 @@ async function createModel() {
   if (wordLimit != null && !(Number.isInteger(wordLimit) && wordLimit > 0)) { toast("Enter the vocabulary limit as a whole number of words", true); return; }
   const context = contextChoice();
   if (!(Number.isInteger(context) && context > 0)) { toast("Enter the context as a whole number of tokens", true); return; }
-  const preset = $("sizeTable").querySelector("input:checked")?.value;
+  const building = buildingBrain();
+  const preset = building ? "custom" : $("sizeTable").querySelector("input:checked")?.value;
   const shelf = $("newShelfChoice").value;
   const button = $("createModel");
   button.disabled = true; button.textContent = "Creating…";
-  const id = await act("create_model", { choice: { name, architecture: $("archChoice").value, preset, wordLimit, context }, shelf });
+  const choice = { name, architecture: $("archChoice").value, preset, wordLimit, context };
+  if (building) choice.brain = brainChoice();
+  const id = await act("create_model", { choice, shelf });
   button.disabled = false; button.textContent = "Create untrained model";
   if (!id) return;
   S.sel = id; S.shelf = shelf; store.set("shelf", shelf);
   clearSearch();
   await loadLibrary();
   show("shelf");
-  toast(`Created ${name}. Open it in Studio to teach it.`);
+  toast(`Created ${name}. Teach it in Studio or Yendory Tools.`);
 }
 
 // ---- Downloads & updates -------------------------------------------------------------------------
@@ -727,7 +829,10 @@ function wire() {
     const next = spines[i + (e.key === "ArrowRight" ? 1 : -1)];
     if (next) { e.preventDefault(); S.sel = next.dataset.id; render(); $("shelf").querySelector(`[data-id="${CSS.escape(S.sel)}"]`)?.focus(); }
   });
-  $("archChoice").addEventListener("change", renderSizes);
+  $("archChoice").addEventListener("change", renderDesign);
+  for (const r of document.querySelectorAll("input[name=designWay]")) r.addEventListener("change", renderDesign);
+  $("brainWidth").addEventListener("change", planBrain);
+  $("contextChoice").addEventListener("change", () => { if (buildingBrain()) planBrain(); });
   $("vocabChoice").addEventListener("change", () => { $("vocabCustom").hidden = $("vocabChoice").value !== "custom"; renderSizes(); });
   $("vocabCustom").addEventListener("input", renderSizes);
   $("contextChoice").addEventListener("change", () => { $("contextCustom").hidden = $("contextChoice").value !== "custom"; });

@@ -357,13 +357,11 @@ fn read_loop(stream: TcpStream, pending: Pending, events: mpsc::Sender<Event>, a
     }
 }
 
-/// Weights on the wire: little-endian f32 values in base64 (standard alphabet, padded), as the
-/// Network's skill methods send and take them (docs/NETWORK.md).
-pub mod floats {
+/// Bytes on the wire: base64 (standard alphabet, padded).
+pub mod bytes {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    pub fn encode(values: &[f32]) -> String {
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    pub fn encode(bytes: &[u8]) -> String {
         let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
         for chunk in bytes.chunks(3) {
             let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
@@ -379,7 +377,7 @@ pub mod floats {
         out
     }
 
-    pub fn decode(text: &str) -> Result<Vec<f32>, String> {
+    pub fn decode(text: &str) -> Result<Vec<u8>, String> {
         let text = text.trim_end_matches('=');
         let mut val = [0u8; 256];
         for (i, &c) in ALPHABET.iter().enumerate() {
@@ -390,7 +388,7 @@ pub mod floats {
         for c in text.bytes() {
             let v = val[c as usize];
             if v == 0 {
-                return Err("Weights are not valid base64".into());
+                return Err("The data is not valid base64".into());
             }
             acc = (acc << 6) | (v - 1) as u32;
             bits += 6;
@@ -399,10 +397,74 @@ pub mod floats {
                 bytes.push((acc >> bits) as u8);
             }
         }
-        if bytes.len() % 4 != 0 {
+        Ok(bytes)
+    }
+}
+
+/// The most bytes in one part of a transfer in parts (base64 makes a message a third larger,
+/// well under the 64 MB a message may have).
+pub const PART_BYTES: usize = 16 << 20;
+
+impl Client {
+    /// Sends `data` to the Network in parts (`upload.begin`, `upload.part`) and returns the
+    /// upload's id, for a method that takes an upload (`model.skill.save`). The upload belongs
+    /// to this connection and is dropped when it ends.
+    pub fn upload(&self, data: &[u8]) -> Result<u64, Error> {
+        let begun = self.call("upload.begin", serde_json::json!({"bytes": data.len()}))?;
+        let id = begun["upload"].as_u64().ok_or_else(|| Error::new("failed", "No upload id"))?;
+        for part in data.chunks(PART_BYTES) {
+            self.call("upload.part", serde_json::json!({"upload": id, "data": bytes::encode(part)}))?;
+        }
+        Ok(id)
+    }
+
+    /// Reads `total` bytes in parts from a method that takes `offset` and `length` and answers
+    /// `data` (base64): `model.skill.read`.
+    pub fn read_parts(&self, method: &str, params: Value, total: usize) -> Result<Vec<u8>, Error> {
+        let mut out = Vec::with_capacity(total);
+        while out.len() < total {
+            let mut p = params.clone();
+            p["offset"] = out.len().into();
+            p["length"] = PART_BYTES.min(total - out.len()).into();
+            let answer = self.call(method, p)?;
+            let part = bytes::decode(answer["data"].as_str().unwrap_or_default())
+                .map_err(|e| Error::new("failed", e))?;
+            if part.is_empty() {
+                return Err(Error::new("failed", "The Network sent an empty part"));
+            }
+            out.extend_from_slice(&part);
+        }
+        if out.len() != total {
+            return Err(Error::new("failed", "The Network sent more than asked for"));
+        }
+        Ok(out)
+    }
+}
+
+/// Weights on the wire: little-endian f32 values in base64 (standard alphabet, padded), as the
+/// Network's skill methods send and take them (docs/NETWORK.md).
+pub mod floats {
+    pub fn encode(values: &[f32]) -> String {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        super::bytes::encode(&bytes)
+    }
+
+    pub fn decode(text: &str) -> Result<Vec<f32>, String> {
+        let bytes = super::bytes::decode(text).map_err(|_| "Weights are not valid base64".to_string())?;
+        from_bytes(&bytes)
+    }
+
+    /// Little-endian f32 values from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Vec<f32>, String> {
+        if !bytes.len().is_multiple_of(4) {
             return Err("Weights are not whole numbers of f32 values".into());
         }
         Ok(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect())
+    }
+
+    /// Little-endian bytes of f32 values.
+    pub fn to_bytes(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
 
     #[cfg(test)]

@@ -179,6 +179,9 @@ pub struct NewModel {
     #[serde(default)]
     pub word_limit: Option<usize>,
     pub context: usize,
+    /// A Neuro brain chosen network by network (with `preset` "custom").
+    #[serde(default)]
+    pub brain: Option<yendory_engine::model::brain::BrainChoice>,
 }
 
 /// The untrained model a choice describes, built as Studio builds it.
@@ -187,6 +190,11 @@ pub fn build(choice: &NewModel) -> Res<Bicameral> {
         "bicameral" => {
             let p = size_presets().into_iter().find(|p| p.id == choice.preset).ok_or("Unknown model size")?;
             (p.config, None)
+        }
+        "neuro" if choice.preset == "custom" => {
+            let brain = choice.brain.as_ref().ok_or("Choose the brain's networks")?;
+            let (config, design) = yendory_engine::model::brain::design_for(brain, BASE + 256)?;
+            (config, Some(design))
         }
         "neuro" => {
             let p = engine_neuro::presets()
@@ -264,6 +272,31 @@ pub fn install(
         return Err(e);
     }
     Ok(entry(&dir, meta))
+}
+
+/// What a choice would make, without making it: each network's weights (Neuro), the total
+/// (with every word slot in use) and the file's size.
+pub fn plan(choice: &NewModel) -> Res<Value> {
+    let model = build(choice)?;
+    let full = match choice.word_limit {
+        Some(limit) => Config { vocab: BASE + limit, ..model.config.clone() },
+        None => model.config.clone(),
+    };
+    let parameters = parameters(&full, model.neuro.as_ref());
+    let networks: Vec<Value> = match &model.neuro {
+        Some(design) => yendory_engine::model::brain::breakdown(&full, design)
+            .into_iter()
+            .map(|(name, n)| json!({"name": name, "parameters": n}))
+            .collect(),
+        None => vec![],
+    };
+    Ok(json!({
+        "parameters": parameters,
+        "fileBytes": parameters * 12,
+        "networks": networks,
+        "config": model.config,
+        "design": model.neuro,
+    }))
 }
 
 pub fn create(models: &Path, choice: &NewModel) -> Res<Value> {
@@ -368,7 +401,37 @@ mod tests {
             preset: preset.into(),
             word_limit,
             context,
+            brain: None,
         }
+    }
+
+    #[test]
+    fn a_brain_chosen_network_by_network_is_planned_and_made_as_planned() {
+        use yendory_engine::model::brain::BrainChoice;
+        let mut c = choice("neuro", "custom", None, 256);
+        assert!(plan(&c).is_err(), "no networks chosen");
+        c.brain = Some(BrainChoice {
+            width: 256,
+            transformer: Some(6_000_000),
+            memory: Some(500_000),
+            controller: Some(1_000_000),
+            ..BrainChoice::default()
+        });
+        let p = plan(&c).unwrap();
+        let nets: Vec<&str> =
+            p["networks"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+        assert_eq!(nets, ["words", "transformer", "bus", "controller", "memory"]);
+        let sum: u64 =
+            p["networks"].as_array().unwrap().iter().map(|n| n["parameters"].as_u64().unwrap()).sum();
+        assert_eq!(sum, p["parameters"].as_u64().unwrap());
+        let dir = temp("custom");
+        let made = create(&dir, &c).unwrap();
+        let (_, m) = load(&dir, made["meta"]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(m.parameter_count() as u64, sum);
+        assert!(
+            m.neuro.as_ref().unwrap().memory.is_some() && m.neuro.as_ref().unwrap().associative.is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn temp(name: &str) -> PathBuf {

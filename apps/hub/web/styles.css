@@ -275,3 +275,16 @@ table { border-collapse: collapse; width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---- New model: the Neuro brain builder ------------------------------------------------------ */
+.design-ways { display: flex; flex-wrap: wrap; gap: 18px; margin: 18px 0 4px; }
+.brain-table td { vertical-align: middle; }
+.brain-table .net-name { display: flex; align-items: flex-start; gap: 10px; }
+.brain-table .net-name input { margin-top: 4px; }
+.brain-table .net-name b { font: 600 15.5px var(--serif); }
+.brain-table tr.off td:not(:first-child) { opacity: .45; }
+.brain-table tr.fixed td { color: var(--ink-soft); }
+.brain-table tr.total td { border-top: 1.5px solid var(--rule-strong); font-weight: 600; }
+.brain-table select { min-width: 9em; }
+.caution { font-size: 13.5px; max-width: 75ch; border-left: 3px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); }
+

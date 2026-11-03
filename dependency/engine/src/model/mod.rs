@@ -1,6 +1,7 @@
 //! The Bicameral model (architecture "Nova-2 Bicameral"). Faithful Rust implementation of
 //! Claude's NumPy reference (`reference/nova2_ref.py`), with three independently
 //! parameterized pathways and one shared objective.
+pub mod brain;
 mod cache;
 mod checkpoint;
 #[cfg(test)]
