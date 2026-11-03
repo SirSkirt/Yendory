@@ -588,3 +588,25 @@ and measure each on 2.6; the core-cut row shows what the core adds in each.
 Not yet: the core learning through generations (they keep it frozen), and the interconnect
 between separate models (after the architectures are compared).
 
+## Every CPU thread (Tools 0.2.1, Engine 0.9.7)
+
+Training and measuring used one thread per stretch of a batch (and at most 16), and measuring
+the held-out recordings used one thread. Now:
+
+- **A training step has three parts**: every tick's convolutions (the skill's eyes) on every
+  thread; each stretch's memory, controls and core, a stretch to a thread; then every tick's
+  convolutions backwards on every thread (Engine 0.9.7 leaves that part to Tools:
+  `Policy::sequence_loss_parts`, `conv_backward`). The middle part uses as many threads as the
+  batch has stretches, so a batch of at least the computer's threads keeps every one busy (2.5
+  says so beside Batch).
+- **Measuring** computes the convolutions of 256 ticks at a time on every thread, and the core's
+  pieces (it starts again at every pause and every stretch) each on its own thread; only the
+  memory and controls run in order.
+- **The debug log** says how many threads train, the steps a second, and how long each
+  measurement took.
+
+Measured on this sandbox's 4 cores (a linked Small skill with a Neuro-Core 4M core learning,
+128x72 colour, batch 8, stretch 16): 1.2 steps a second on one core, 3.7 on four; measuring 1,200
+held-out ticks 4.4 s on one core, 1.2 s on four. The GPU is not used yet (that is the larger
+change: the skill and its core built from the Engine's GPU operations).
+

@@ -316,7 +316,7 @@
       <div class="field-row"><label for="trSteps">Steps</label><input id="trSteps" type="number" min="1" max="1000000" class="narrow-num"><span class="note">each step learns from a batch of short stretches of your play</span></div>
       <div class="field-row"><label for="trRate">Learning rate</label><input id="trRate" type="number" min="0.000001" max="0.1" step="0.0001" class="narrow-num"></div>
       <div class="field-row"><label for="trOffset">Reaction</label><input id="trOffset" type="number" min="0" max="20" class="narrow-num"><span class="note">ticks between a picture and the controls learned for it (1: the very next tick; people react in a few hundred milliseconds)</span></div>
-      <div class="field-row"><label for="trBatch">Batch</label><input id="trBatch" type="number" min="1" max="256" class="narrow-num"><span class="note">stretches a step</span><label for="trLength">Stretch</label><input id="trLength" type="number" min="1" max="64" class="narrow-num"><span class="note">ticks, the memory carried through</span></div>
+      <div class="field-row"><label for="trBatch">Batch</label><input id="trBatch" type="number" min="1" max="256" class="narrow-num"><span class="note" id="trBatchNote">stretches a step</span><label for="trLength">Stretch</label><input id="trLength" type="number" min="1" max="64" class="narrow-num"><span class="note">ticks, the memory carried through</span></div>
       <div class="field-row checks"><span class="field-label">Start from</span>
         <label class="check-inline"><input type="radio" name="trFrom" value="continue" checked> where training last stopped</label>
         <label class="check-inline"><input type="radio" name="trFrom" value="fresh"> the accepted weights, with a new optimizer</label>

@@ -1114,6 +1114,15 @@ function renderTrainPanel() {
   drawTrainChart();
   renderCore(k);
   renderGenerations(k);
+  // Training uses every CPU thread for the pictures; the memory, controls and core take one
+  // stretch to a thread, so a batch of at least the threads keeps them all busy.
+  const th = T.data?.threads;
+  if (th) {
+    const b = Number($("trBatch").value);
+    $("trBatchNote").textContent = b >= th
+      ? `stretches a step (this computer has ${th} threads: all of them work)`
+      : `stretches a step (this computer has ${th} threads: the pictures use all of them; the memory, controls and core use one a stretch, so a batch of ${th} keeps every thread busy)`;
+  }
 }
 
 // The model's core: a linked skill plays with it (the core reads what the skill sees, its state
@@ -1513,6 +1522,7 @@ function wire() {
   $("coreLink").addEventListener("click", () => linkCore(true));
   $("coreUnlink").addEventListener("click", () => linkCore(false));
   $("coreTrainOn").addEventListener("change", () => { const k = skillNow(); if (k) renderCore(k); });
+  $("trBatch").addEventListener("input", () => { if (skillNow()) renderTrainPanel(); });
   $("trStop").addEventListener("click", () => invoke("train_stop"));
   $("trDelete").addEventListener("click", deleteSkill);
   listen("train-progress", e => trainProgress(e.payload));

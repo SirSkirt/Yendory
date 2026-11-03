@@ -218,7 +218,7 @@ pub fn run(
     let demos = train::load_clips(arena.data, &skill.spec, Split::Train)?;
     // The person's offset (from their last training run), so their recordings mean the same.
     let demo_offset = train::runs(&skill.spec).last().map(|r| r.settings.offset).unwrap_or(1);
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
+    let threads = train::cpu_threads();
     // A linked skill plays and learns with its model's core (frozen here: generations change
     // the skill and its link), in the stretches it was trained with.
     let stretch = train::runs(&skill.spec).last().map(|r| r.settings.length).unwrap_or(8);

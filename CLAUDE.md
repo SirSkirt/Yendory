@@ -7,6 +7,11 @@ games (and later use apps) through Nexus (docs/GAMES.md). The suite's other part
 own branches: Yendory Hub and the shared `dependency/` (the Engine, the Yendory Network, the
 client library) on `yendory-hub`, Yendory Studio on `yendory-studio`.
 
+Who works on what: the Tools dev (sessions on this branch) works mostly on Tools and the Hub,
+and on the Engine sometimes, when Tools needs it; the Studio dev works on the Engine and
+Studio. When the Tools dev changes the Engine, say so for the Studio dev (what changed, and the
+commit Studio's pin needs).
+
 Tools holds no copy of the Engine or the Network: it uses `yendory-client` and `yendory-engine`
 from yendory-hub, pinned to one commit in `apps/tools/src-tauri/Cargo.toml`; move the pin on
 purpose. Every model is opened and every line it writes comes through the Network. Tools uses the
@@ -33,7 +38,7 @@ Models are handed between programs through Studio's models folder and `--model <
 
 ## Version numbers
 
-Tools is at **0.2.0**. A push that changes Tools raises its last digit by one, and the last digit
+Tools is at **0.2.1**. A push that changes Tools raises its last digit by one, and the last digit
 carries over after 9: 0.1.9 → 0.2.0 → … → 0.9.9 → 1.0.0. The new number goes in the same push,
 in every place that holds it:
 

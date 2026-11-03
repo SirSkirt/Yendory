@@ -52,6 +52,8 @@ pub struct SkillsView {
     /// A new skill of each size for the game as it is now: its weights, and why it can't be
     /// kept in a model (None: it can).
     sizes: Vec<SizeView>,
+    /// The CPU threads training uses (all of them).
+    threads: usize,
 }
 
 #[derive(Serialize)]
@@ -83,6 +85,7 @@ pub async fn skills_view(app: AppHandle, id: String) -> Res<SkillsView> {
         training_now: app.state::<Live>().training_stop.lock().unwrap().is_some(),
         generations_now: app.state::<Live>().generations.load(Ordering::Acquire),
         sizes,
+        threads: train::cpu_threads(),
     })
 }
 

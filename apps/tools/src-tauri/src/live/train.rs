@@ -18,7 +18,7 @@ use crate::Res;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use yendory_engine::model::{Ablation, Focus};
+use yendory_engine::model::{Ablation, Focus, KvCache};
 use yendory_engine::Bicameral;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +145,52 @@ pub struct Clip {
     pub targets: Vec<Target>,
     /// Where each stretch (between pauses) begins.
     pub starts: Vec<bool>,
+}
+
+/// Ticks whose convolutions are computed together (on every thread) when measuring.
+const MEASURE_BLOCK: usize = 256;
+
+/// The CPU threads training and measuring use: every one the processor has.
+pub fn cpu_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 256)
+}
+
+/// `f` for every item, on up to `threads` threads (each takes the next item when it is free);
+/// the results in the items' order.
+pub(crate) fn par_map<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    f: impl Fn(&T) -> Res<R> + Sync,
+) -> Res<Vec<R>> {
+    use std::sync::atomic::AtomicUsize;
+    let next = AtomicUsize::new(0);
+    let threads = threads.clamp(1, items.len().max(1));
+    let parts: Vec<Res<Vec<(usize, R)>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| -> Res<Vec<(usize, R)>> {
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= items.len() {
+                            return Ok(out);
+                        }
+                        out.push((i, f(&items[i])?));
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("A worker thread failed".into())))
+            .collect()
+    });
+    let mut all = Vec::with_capacity(items.len());
+    for p in parts {
+        all.extend(p?);
+    }
+    all.sort_by_key(|x| x.0);
+    Ok(all.into_iter().map(|x| x.1).collect())
 }
 
 /// The nearest mouse step's index.
@@ -289,8 +335,9 @@ pub fn measure(
     freq: &Frequencies,
     offset: usize,
     step: u64,
-    mut cortex: Option<&mut super::cortex::Cortex>,
+    core: Option<(&Bicameral, usize)>,
 ) -> Res<Measure> {
+    let threads = cpu_threads();
     let a = &p.arch;
     let zero = vec![0f32; a.goal];
     let names: Vec<String> = info.keys.iter().chain(info.buttons.iter()).cloned().collect();
@@ -302,77 +349,109 @@ pub fn measure(
     let common_mx = freq.mx.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0);
     let common_my = freq.my.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0);
     for clip in clips {
+        let ticks = clip.targets.len();
+        // The core's goal at every tick. The core starts again at every pause and every
+        // stretch, so those pieces are independent: each on its own thread. Its input is what the
+        // skill saw (the convolutions, on every thread).
+        let goals: Option<Vec<Vec<f32>>> = match core {
+            None => None,
+            Some((model, stretch)) => {
+                let all: Vec<usize> = (0..ticks).collect();
+                let mut sights = Vec::with_capacity(ticks);
+                for block in all.chunks(MEASURE_BLOCK) {
+                    sights.extend(par_map(block, threads, |&t| {
+                        Ok(p.sight(&p.see(&input_at(info, clip, t)?)))
+                    })?);
+                }
+                let mut pieces: Vec<std::ops::Range<usize>> = Vec::new();
+                for t in 0..ticks {
+                    match pieces.last_mut() {
+                        Some(r) if !clip.starts[t] && r.len() < stretch => r.end = t + 1,
+                        _ => pieces.push(t..t + 1),
+                    }
+                }
+                let per_piece = par_map(&pieces, threads, |r| {
+                    let mut cache = KvCache::new(model, Ablation::default());
+                    r.clone()
+                        .map(|t| {
+                            let (left, right) = p.link_in(std::slice::from_ref(&sights[t]));
+                            Ok(p.link_out(&cache.sense_append(model, &left, &right)?))
+                        })
+                        .collect::<Res<Vec<_>>>()
+                })?;
+                Some(per_piece.into_iter().flatten().collect())
+            }
+        };
         let mut m = vec![0f32; a.memory];
-        for t in 0..clip.targets.len() {
-            if clip.starts[t] {
-                m = vec![0f32; a.memory];
-                if let Some(c) = cortex.as_deref_mut() {
-                    c.reset();
+        let all: Vec<usize> = (0..ticks).collect();
+        for block in all.chunks(MEASURE_BLOCK) {
+            // The convolutions of a block of ticks on every thread, then the memory and the
+            // controls in order (the memory runs through the recording).
+            let seen = par_map(block, threads, |&t| Ok(p.see(&input_at(info, clip, t)?)))?;
+            for (&t, seen) in block.iter().zip(seen) {
+                if clip.starts[t] {
+                    m = vec![0f32; a.memory];
                 }
-            }
-            let seen = p.see(&input_at(info, clip, t)?);
-            let goal = match cortex.as_deref_mut() {
-                Some(c) => c.goal(p, p.sight(&seen))?,
-                None => zero.clone(),
-            };
-            let cache = p.forward_seen(seen, &m, &goal);
-            m = cache.m.clone();
-            if !valid(clip, t, offset) {
-                continue;
-            }
-            let target = clip.targets[t + offset];
-            let l = &cache.logits;
-            n += 1.0;
-            let mut tick = 0f64;
-            let mut tick_base = 0f64;
-            let mut key_part = (0f64, 0f64);
-            for (i, (&z, &q)) in
-                l.keys.iter().chain(&l.buttons).zip(freq.keys.iter().chain(&freq.buttons)).enumerate()
-            {
-                let y = if i < a.keys {
-                    (target.keys >> i) & 1
-                } else {
-                    ((target.buttons >> (i - a.keys)) & 1) as u64
-                } as f64;
-                let e = super::policy::bce(z, y as f32) as f64;
-                let eb = -(y * q.ln() + (1.0 - y) * (1.0 - q).ln());
-                tick += e;
-                tick_base += eb;
-                if i < a.keys {
-                    key_part.0 += e;
-                    key_part.1 += eb;
+                let goal = goals.as_ref().map(|g| &g[t]).unwrap_or(&zero);
+                let cache = p.forward_seen(seen, &m, goal);
+                m = cache.m.clone();
+                if !valid(clip, t, offset) {
+                    continue;
                 }
-                let on = sigmoid(z) > 0.5;
-                used[i] += y;
-                pred[i] += on as u8 as f64;
-                match (on, y > 0.5) {
-                    (true, true) => tp[i] += 1.0,
-                    (true, false) => fp[i] += 1.0,
-                    (false, true) => fneg[i] += 1.0,
-                    _ => {}
-                }
-            }
-            kl += key_part.0;
-            bkl += key_part.1;
-            if !a.mouse_bins.is_empty() {
-                for (zs, want, f, common) in
-                    [(&l.mx, target.mx, &freq.mx, common_mx), (&l.my, target.my, &freq.my, common_my)]
+                let target = clip.targets[t + offset];
+                let l = &cache.logits;
+                n += 1.0;
+                let mut tick = 0f64;
+                let mut tick_base = 0f64;
+                let mut key_part = (0f64, 0f64);
+                for (i, (&z, &q)) in
+                    l.keys.iter().chain(&l.buttons).zip(freq.keys.iter().chain(&freq.buttons)).enumerate()
                 {
-                    let pr = softmax(zs);
-                    let e = -(pr[want].max(1e-12) as f64).ln();
-                    let eb = -f[want].max(1e-12).ln();
+                    let y = if i < a.keys {
+                        (target.keys >> i) & 1
+                    } else {
+                        ((target.buttons >> (i - a.keys)) & 1) as u64
+                    } as f64;
+                    let e = super::policy::bce(z, y as f32) as f64;
+                    let eb = -(y * q.ln() + (1.0 - y) * (1.0 - q).ln());
                     tick += e;
                     tick_base += eb;
-                    ml += e;
-                    bml += eb;
-                    let best =
-                        pr.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0);
-                    macc += (best == want) as u8 as f64 / 2.0;
-                    bmacc += (common == want) as u8 as f64 / 2.0;
+                    if i < a.keys {
+                        key_part.0 += e;
+                        key_part.1 += eb;
+                    }
+                    let on = sigmoid(z) > 0.5;
+                    used[i] += y;
+                    pred[i] += on as u8 as f64;
+                    match (on, y > 0.5) {
+                        (true, true) => tp[i] += 1.0,
+                        (true, false) => fp[i] += 1.0,
+                        (false, true) => fneg[i] += 1.0,
+                        _ => {}
+                    }
                 }
+                kl += key_part.0;
+                bkl += key_part.1;
+                if !a.mouse_bins.is_empty() {
+                    for (zs, want, f, common) in
+                        [(&l.mx, target.mx, &freq.mx, common_mx), (&l.my, target.my, &freq.my, common_my)]
+                    {
+                        let pr = softmax(zs);
+                        let e = -(pr[want].max(1e-12) as f64).ln();
+                        let eb = -f[want].max(1e-12).ln();
+                        tick += e;
+                        tick_base += eb;
+                        ml += e;
+                        bml += eb;
+                        let best =
+                            pr.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0);
+                        macc += (best == want) as u8 as f64 / 2.0;
+                        bmacc += (common == want) as u8 as f64 / 2.0;
+                    }
+                }
+                loss += tick;
+                base += tick_base;
             }
-            loss += tick;
-            base += tick_base;
         }
     }
     let d = n.max(1.0);
@@ -440,8 +519,10 @@ pub(crate) fn usable(clips: &[Clip], offset: usize) -> usize {
     clips.iter().map(|c| (0..c.targets.len()).filter(|&t| valid(c, t, offset)).count()).sum()
 }
 
-/// One learning step on a batch of sequences (clip, start, offset), shared out over `threads`;
-/// returns the batch's mean loss per sequence.
+/// One learning step on a batch of sequences (clip, start, offset), shared out over `threads`
+/// in three parts: every tick's convolutions (on every thread), each sequence's memory, controls
+/// and core (a sequence to a thread), then every tick's convolutions backwards (on every thread).
+/// Returns the batch's mean loss per sequence.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn learn_step(
     policy: &mut Policy,
@@ -457,54 +538,58 @@ pub(crate) fn learn_step(
     let length = settings.length;
     let core_ref = core.as_deref().map(|c| &c.model);
     let cn = core_ref.map(|c| c.weights.len()).unwrap_or(0);
-    type Part = (Vec<f32>, Vec<f32>, Loss);
-    let parts: Vec<Res<Part>> = std::thread::scope(|s| {
-        let handles: Vec<_> = batch
-            .chunks(batch.len().div_ceil(threads.max(1)).max(1))
-            .map(|chunk| {
-                let policy = &*policy;
-                s.spawn(move || -> Res<Part> {
-                    let mut g = vec![0f32; n];
-                    let mut cg = vec![0f32; cn];
-                    let mut total = Loss::default();
-                    for &(c, t0, offset) in chunk {
-                        let mut inputs = Vec::new();
-                        let mut targets = Vec::new();
-                        for t in t0..t0 + length {
-                            if t >= c.targets.len() || !valid(c, t, offset) || (t > t0 && c.starts[t]) {
-                                break;
-                            }
-                            inputs.push(input_at(info, c, t)?);
-                            targets.push(c.targets[t + offset]);
-                        }
-                        total += match core_ref {
-                            Some(c) => yendory_engine::cortex::sequence_loss(
-                                policy,
-                                c,
-                                &inputs,
-                                &targets,
-                                &mut g,
-                                &mut cg,
-                                scale,
-                                Ablation::default(),
-                            )?,
-                            None => policy.sequence_loss(&inputs, &targets, &mut g, scale),
-                        };
-                    }
-                    Ok((g, cg, total))
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err("A training thread failed".into())))
-            .collect()
-    });
+    // The ticks of each sequence (up to `length`, within its stretch) and their targets.
+    let seqs: Vec<(&Clip, Vec<usize>, Vec<Target>)> = batch
+        .iter()
+        .map(|&(c, t0, offset)| {
+            let ticks: Vec<usize> = (t0..t0 + length)
+                .take_while(|&t| t < c.targets.len() && valid(c, t, offset) && (t == t0 || !c.starts[t]))
+                .collect();
+            let targets = ticks.iter().map(|&t| c.targets[t + offset]).collect();
+            (c, ticks, targets)
+        })
+        .collect();
+    // 1. Every tick's convolutions.
+    let items: Vec<(usize, usize)> =
+        seqs.iter().enumerate().flat_map(|(i, s)| s.1.iter().map(move |&t| (i, t))).collect();
+    let policy_ref = &*policy;
+    let mut seen = par_map(&items, threads, |&(i, t)| Ok(policy_ref.see(&input_at(info, seqs[i].0, t)?)))?;
+    let mut by_seq: Vec<std::sync::Mutex<Vec<_>>> = Vec::with_capacity(seqs.len());
+    for s in &seqs {
+        let rest = seen.split_off(s.1.len());
+        by_seq.push(std::sync::Mutex::new(std::mem::replace(&mut seen, rest)));
+    }
+    // 2. Each sequence's memory, controls and core, a sequence to a thread.
+    type Part = (Vec<f32>, Vec<f32>, Loss, Vec<yendory_engine::skill::ConvBack>);
+    let order: Vec<usize> = (0..seqs.len()).collect();
+    let parts: Vec<Part> = par_map(&order, threads, |&i| {
+        let seen = std::mem::take(&mut *by_seq[i].lock().unwrap());
+        let targets = &seqs[i].2;
+        let mut g = vec![0f32; n];
+        let mut cg = vec![0f32; cn];
+        let (loss, convs) = match core_ref {
+            Some(c) => yendory_engine::cortex::sequence_loss_parts(
+                policy_ref,
+                c,
+                seen,
+                targets,
+                &mut g,
+                &mut cg,
+                scale,
+                Ablation::default(),
+            )?,
+            None => {
+                let (l, _, convs) = policy_ref.sequence_loss_parts(seen, None, targets, &mut g, scale);
+                (l, convs)
+            }
+        };
+        Ok((g, cg, loss, convs))
+    })?;
     let mut g = vec![0f32; n];
     let mut cg = vec![0f32; cn];
     let mut loss = Loss::default();
-    for part in parts {
-        let (pg, pcg, pl) = part?;
+    let mut convs = Vec::new();
+    for (pg, pcg, pl, pc) in parts {
         for (a, b) in g.iter_mut().zip(&pg) {
             *a += b;
         }
@@ -512,12 +597,22 @@ pub(crate) fn learn_step(
             *a += b;
         }
         loss += pl;
+        convs.extend(pc);
     }
-    // The core learns at its own rate with the model's own optimizer (its gradient clipped
-    // on its own).
-    if let Some(c) = core {
-        if c.train {
-            c.model.adam_step(&cg, c.learning_rate, Focus::Joint)?;
+    // 3. Every tick's convolutions backwards: each thread adds into its own gradient.
+    let lanes = threads.clamp(1, convs.len().max(1));
+    let per_lane: Vec<Vec<usize>> = (0..lanes).map(|l| (l..convs.len()).step_by(lanes).collect()).collect();
+    let grads = par_map(&per_lane, lanes, |idx| {
+        let mut lg = vec![0f32; n];
+        for &i in idx {
+            policy_ref.conv_backward(&convs[i], &mut lg);
+        }
+        Ok(lg)
+    })?;
+    drop(convs);
+    for lg in grads {
+        for (a, b) in g.iter_mut().zip(&lg) {
+            *a += b;
         }
     }
     // Clip the gradient's length at 1.
@@ -530,6 +625,13 @@ pub(crate) fn learn_step(
         g.iter_mut().for_each(|v| *v *= k);
     }
     adam.step(policy, &g, settings.learning_rate, settings.weight_decay);
+    // The core learns at its own rate with the model's own optimizer (its gradient clipped
+    // on its own).
+    if let Some(c) = core {
+        if c.train {
+            c.model.adam_step(&cg, c.learning_rate, Focus::Joint)?;
+        }
+    }
     Ok(loss.total / batch.len().max(1) as f64)
 }
 
@@ -604,20 +706,30 @@ pub fn train(
         if held.is_empty() {
             return Ok(None);
         }
-        let mut cortex = match core {
-            Some(c) => Some(super::cortex::Cortex::new(c.model.clone(), settings.length)?),
-            None => None,
-        };
-        measure(p, &fixed, &held, &freq, settings.offset, step, cortex.as_mut()).map(Some)
+        measure(p, &fixed, &held, &freq, settings.offset, step, core.map(|c| (&c.model, settings.length)))
+            .map(Some)
     };
+    let clock = std::time::Instant::now();
     let first = measure_now(&policy, skill.spec.steps, core.as_ref())?;
+    crate::debug::info(format!(
+        "Training on {} CPU threads, {} sequences a step{}; measuring the held-out recordings took {:.1} s",
+        cpu_threads(),
+        settings.batch,
+        match &core {
+            Some(c) if c.train => ", with the core learning",
+            Some(_) => ", with the core playing its part",
+            None => "",
+        },
+        clock.elapsed().as_secs_f64()
+    ));
+    let mut since = std::time::Instant::now();
     // The accepted weights stand until a measurement beats them (on this run's held-out set).
     let mut best_loss = first.as_ref().map(|m| m.loss).unwrap_or(f64::INFINITY);
     run.first = first.clone();
     progress(&Progress { step: 0, steps: settings.steps, train_loss: 0.0, measure: first, accepted: false });
 
     let starts = sequence_starts(&clips, settings.length, settings.offset);
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
+    let threads = cpu_threads();
     let mut rng = Rng::new(settings.seed ^ skill.spec.steps);
     let mut recent = std::collections::VecDeque::new();
     for step in 1..=settings.steps {
@@ -638,7 +750,20 @@ pub fn train(
         let stopping = stop.load(Ordering::Acquire);
         let last = step == settings.steps || stopping;
         if step % settings.measure_every == 0 || last {
+            let trained_for = since.elapsed().as_secs_f64();
+            let clock = std::time::Instant::now();
             let m = measure_now(&policy, skill.spec.steps, core.as_ref())?;
+            let steps_since = (step % settings.measure_every).max(if step % settings.measure_every == 0 {
+                settings.measure_every
+            } else {
+                1
+            });
+            crate::debug::info(format!(
+                "Training: step {step}, {:.1} steps a second; measuring took {:.1} s",
+                steps_since as f64 / trained_for.max(1e-9),
+                clock.elapsed().as_secs_f64()
+            ));
+            since = std::time::Instant::now();
             let accepted = match &m {
                 Some(m) if m.loss < best_loss => {
                     best_loss = m.loss;

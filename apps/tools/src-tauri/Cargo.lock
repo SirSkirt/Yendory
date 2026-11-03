@@ -4996,7 +4996,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 [[package]]
 name = "yendory-client"
 version = "0.1.0"
-source = "git+https://github.com/SirSkirt/Yendory?rev=cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8#cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8"
+source = "git+https://github.com/SirSkirt/Yendory?rev=4fa9bd5c607806820e858b937e6415690dd965f3#4fa9bd5c607806820e858b937e6415690dd965f3"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -5005,8 +5005,8 @@ dependencies = [
 
 [[package]]
 name = "yendory-engine"
-version = "0.9.6"
-source = "git+https://github.com/SirSkirt/Yendory?rev=cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8#cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8"
+version = "0.9.7"
+source = "git+https://github.com/SirSkirt/Yendory?rev=4fa9bd5c607806820e858b937e6415690dd965f3#4fa9bd5c607806820e858b937e6415690dd965f3"
 dependencies = [
  "serde",
  "serde_json",
@@ -5014,7 +5014,7 @@ dependencies = [
 
 [[package]]
 name = "yendory-tools"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
  "gtk",

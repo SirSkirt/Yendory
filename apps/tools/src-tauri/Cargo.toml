@@ -1,6 +1,6 @@
 [package]
 name = "yendory-tools"
-version = "0.2.0"
+version = "0.2.1"
 description = "Yendory Tools: games and apps that trained Yendory models play and use, through Nexus"
 edition = "2021"
 publish = false
@@ -25,8 +25,8 @@ flate2 = "1"
 # The Yendory Network client (every model move is written by the Network) and the Engine for what
 # needs no model: Nexus's markers and announcements, and checking lessons. From yendory-hub
 # (dependency/), pinned to one commit; move the pin on purpose.
-yendory-client = { git = "https://github.com/SirSkirt/Yendory", rev = "cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8" }
-yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8" }
+yendory-client = { git = "https://github.com/SirSkirt/Yendory", rev = "4fa9bd5c607806820e858b937e6415690dd965f3" }
+yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "4fa9bd5c607806820e858b937e6415690dd965f3" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # A second copy of Tools hands its --model to the running one (docs/HANDOFF.md on yendory-hub).
