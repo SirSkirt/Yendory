@@ -40,19 +40,28 @@ What goes through the Network so far (step 1 of docs/NETWORK.md, "Studio on the 
 
 ## Game skills
 
-A Nova Neuro model can carry game skills in its own file (Engine 0.9.4, docs/FORMAT.md on the Hub
-branch). Yendory Tools trains them and saves them into the model through the Network; Studio
+A model can carry game skills in its own file (Nova Neuro since Engine 0.9.4, Nova Bicameral since
+0.9.5; docs/FORMAT.md on the Hub branch). Yendory Tools trains them and saves them into the model through the Network; Studio
 opens, trains and saves such models (Studio 0.9.6 and later) and never changes their skills.
 Whenever Studio writes a model, the file's own skills go with it: a skill added or removed in Tools
 while Studio had the model open is kept (or stays removed), and `meta.json` lists the skills the
 file holds (`skills`), with any field other programs wrote kept as written
-(`apps/studio/src-tauri/src/skills.rs`). Studio needs Network 0.1.2 or later, whose Engine reads
-these files.
+(`apps/studio/src-tauri/src/skills.rs`). Studio needs Network 0.1.4 or later, whose Engine reads
+these files (Studio 0.9.8 builds on Engine 0.9.6, yendory-hub `cc5b78d`).
 
-Studio shows them (0.9.7): the page bar says how many the open model has (a link to them), the
-model card lists them, and the Brain page draws them. On the Nova Neuro plate they are a region
-outside the brain, joined to the bus by a dashed fibre that carries nothing yet (a skill's goal
-input is zeros until Tools' Command Mode gives it a command; text never passes through a skill).
+**A skill linked to the core** (Engine 0.9.6): the model's core reads what the skill sees and its
+state comes back as the skill's goal input. The link is made for the core's width (and, for
+Bicameral, its right hemisphere's input), so Studio does not offer a growth step that would change
+it while a linked skill needs it (the growth panel lists it as not offered, with the reason), and
+refuses one if asked. Training the model in Studio changes how a linked skill plays; the Brain
+page says so on the skill's card. A skill whose link was made for a core of another width is
+shown as not fitting.
+
+Studio shows them (0.9.7; Bicameral models and links since 0.9.8): the page bar says how many the open model has (a link to them), the
+model card lists them, and the Brain page draws them. On both plates (Nova Neuro and Bicameral)
+they are a region outside the brain, joined to the core by a fibre: dashed while no skill is
+linked (a skill's goal input is zeros until Tools' Command Mode gives it a command; text never
+passes through a skill), solid for a linked skill.
 Below the plate, each skill's network is drawn layer by layer (pictures, convolutions, encoder,
 goal input, working memory, controls), one dot per unit; every figure is measured from the saved
 weights (the size of each unit's accepted weights, and how far training has moved them since).

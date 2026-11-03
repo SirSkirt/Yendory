@@ -1,8 +1,9 @@
 "use strict";
-// Game skills of the open Nova Neuro model (Engine 0.9.4): networks the model carries in its own
-// file to play games, trained in Yendory Tools. Studio keeps them as they are and shows them: on
-// the page bar, the model card, and the Brain page (the plate's skills region and one card per
-// skill, drawn from its saved weights).
+// Game skills of the open model (Nova Neuro since Engine 0.9.4, Bicameral since 0.9.5, linked to
+// the core since 0.9.6): networks the model carries in its own file to play games, trained in
+// Yendory Tools. Studio keeps them as they are and shows them: on the page bar, the model card,
+// and the Brain page (the plate's skills region and one card per skill, drawn from its saved
+// weights).
 
 let skillViews = [];
 
@@ -11,7 +12,7 @@ const SKILL_GROUPS = {
   vision: "Vision (convolutions, encoder)",
   memory: "Working memory",
   heads: "Controls (heads)",
-  interconnect: "Goal input",
+  interconnect: "Goal input and link to the core",
 };
 
 function skillDot(level, detail, show) {
@@ -81,8 +82,26 @@ function skillCard(k) {
     net.append(arrow("→"), skillLayer(k, layer(`conv${i}`), `Convolution ${i + 1}`, `${c.kernel}×${c.kernel}, stride ${c.stride} → ${ch}×${h}×${w}`, show));
   });
   net.append(arrow("→"), skillLayer(k, layer("encoder"), "Encoder", `${fmt(a.hidden)} units`, show));
+  const link = a.cortex;
+  if (link) {
+    // The link to the model's core: the core reads the encoder's sight (link in, and for
+    // Bicameral the right hemisphere's input) and its state comes back as the goal input.
+    const box = el("div", { class: "skill-layer goal" }, el("h5", {}, "Link to the core"),
+      el("div", { class: "size" }, `core ${fmt(link.width)} wide${link.right ? ` · right input ${fmt(link.right)}` : ""} · ${k.linkProblem ? "does not fit this core" : "fits this core"}`));
+    for (const [id, what] of [["linkIn", "in, to each of the core's units"], ["linkRight", "in, to the right hemisphere's input"], ["linkOut", "back, to each goal input"]]) {
+      const l = layer(id);
+      if (!l) continue;
+      const peak = Math.max(1e-9, ...l.units);
+      const dots = el("div", { class: "skill-dots" });
+      l.units.forEach((v, i) => dots.append(skillDot(v / peak,
+        `${k.name} · link ${what} · unit ${i + 1} · weight size ${v.toFixed(5)} · moved ${l.changed[i].toFixed(5)} since the accepted weights${id === "linkOut" && v === 0 ? " (the way back starts at zero: until it is trained the skill plays as without the core)" : ""}`, show)));
+      box.append(el("div", { class: "size" }, `${what}`), dots);
+    }
+    net.append(arrow("⇄"), box);
+  }
   if (a.goal) {
-    net.append(arrow("+"), skillLayer(k, layer("goal"), "Goal input", `${a.goal} wide · zeros until Command Mode gives a command`, show,
+    net.append(arrow("+"), skillLayer(k, layer("goal"), "Goal input",
+      `${a.goal} wide · ${link ? "the core's state, through the link" : "zeros until Command Mode gives a command"}`, show,
       " (a goal input's figure is its column in the encoder's goal weights)"));
   }
   if (a.memory) {
@@ -123,13 +142,18 @@ function skillCard(k) {
       el("tr", {}, el("th", {}, "Training"), el("td", {}, `${fmt(k.steps)} steps; the accepted weights (the ones that play) were kept at step ${fmt(k.acceptedStep)}`)),
       el("tr", {}, el("th", {}, "Lineage"), el("td", {}, `generation ${lineage.generation} · ${lineage.method}${lineage.parent ? ` · from ${lineage.parent}` : " · a new network"}`)),
       el("tr", {}, el("th", {}, "Network"), el("td", {}, `${k.size} · ${fmt(k.parameters)} weights`)),
+      el("tr", {}, el("th", {}, "Core"), k.arch.cortex
+        ? el("td", {}, k.linkProblem
+          ? el("span", { class: "link-problem" }, `linked, but ${k.linkProblem.replace(/^The skill's/, "its")}. It cannot play with this core until Yendory Tools links it again.`)
+          : "linked: the model's core reads what this skill sees, and its state comes back as the goal input. Training the model in Studio also changes how it plays.")
+        : el("td", {}, "not linked: the skill plays on its own")),
       el("tr", {}, el("th", {}, "Made"), el("td", {}, skillTime(k.created)))),
     net, detail, el("div", { class: "table-scroll" }, groups), notes);
 }
 
 // The open model's skills, wherever Studio shows them.
 async function showSkills(meta) {
-  const listed = meta?.architecture === "neuro" ? meta.skills || [] : [];
+  const listed = meta?.skills || [];
   let views = [];
   if (listed.length) {
     try { views = await invoke("model_skills"); } catch (e) { log("warn", `Game skills: ${e}`); }
@@ -146,7 +170,7 @@ window.showSkills = showSkills;
 
 // Page bar: "· 2 game skills" opens the Brain page at the skills.
 function skillsLink(meta) {
-  const n = meta?.architecture === "neuro" ? (meta.skills || []).length : 0;
+  const n = (meta?.skills || []).length;
   if (!n) return null;
   const a = el("a", { href: "#", class: "skills-link", title: (meta.skills || []).map(s => s.name).join(", ") }, `${n} game skill${n === 1 ? "" : "s"}`);
   a.addEventListener("click", e => {

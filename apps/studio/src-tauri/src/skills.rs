@@ -1,6 +1,12 @@
-//! Game skills (Engine 0.9.4; docs/FORMAT.md, "Nova Neuro and game skills", on yendory-hub):
-//! networks a Nova Neuro model carries in its own file to play games. Yendory Tools trains them and
-//! saves them into the model through the Yendory Network; Studio never changes them.
+//! Game skills (docs/FORMAT.md, "Nova Neuro and game skills", on yendory-hub): networks a model
+//! carries in its own file to play games (Nova Neuro since Engine 0.9.4, Nova Bicameral since
+//! 0.9.5). Yendory Tools trains them and saves them into the model through the Yendory Network;
+//! Studio never changes them.
+//!
+//! A skill can be linked to the model's own core (Engine 0.9.6, `cortex.rs`): the core reads what
+//! the skill sees and its state comes back as the skill's goal input. The link is made for the
+//! core's width, so Studio does not grow the core to another width while a linked skill needs it
+//! (`link_breaks`), and training the model in Studio changes how a linked skill plays.
 //!
 //! So the model file on disk is their record. Whenever Studio writes a model, it carries the skills
 //! the file holds at that moment, not the ones Studio read when it opened the model: a skill Tools
@@ -44,32 +50,79 @@ pub(crate) fn summary_on_file(dir: &Path) -> Option<Vec<Summary>> {
     listed(&dir.join("model.nnova2")).map(|specs| specs.iter().map(summary_of).collect())
 }
 
-/// The largest header the Engine reads (a Neuro header lists every skill and its notes).
+/// The largest skills description the Engine reads (a Neuro header lists every skill and its
+/// notes; so does a Bicameral file's skills section), and the largest Bicameral configuration.
 const MAX_HEADER: usize = 16 << 20;
+const MAX_CONFIG: usize = 8192;
 
-/// The skills a model file lists in its header, without reading its weights: empty for a file
-/// without skills (Bicameral, or Neuro format 1); `None` when there is no readable model file.
+/// The skills a model file lists, without reading its weights (docs/FORMAT.md): a Nova Neuro
+/// file lists them in its header; a Bicameral file (Engine 0.9.5) after its learned words, in a
+/// `SKILLHDR` section (the weights and words are skipped over, not read). Empty for a file
+/// without skills; `None` when there is no readable model file.
 pub(crate) fn listed(path: &Path) -> Option<Vec<SkillSpec>> {
+    use std::io::{BufReader, Seek};
     #[derive(Deserialize)]
     struct Header {
         #[serde(default)]
         skills: Vec<SkillSpec>,
     }
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut magic = [0u8; 8];
-    f.read_exact(&mut magic).ok()?;
-    match &magic {
-        b"NNOVA2\0\0" => Some(Vec::new()),
+    fn bytes(r: &mut impl Read, n: usize) -> Option<Vec<u8>> {
+        let mut out = vec![0u8; n];
+        r.read_exact(&mut out).ok()?;
+        Some(out)
+    }
+    fn u32_of(r: &mut impl Read) -> Option<usize> {
+        let mut b = [0u8; 4];
+        r.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b) as usize)
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let mut r = BufReader::new(file);
+    let magic = bytes(&mut r, 8)?;
+    match magic.as_slice() {
         b"NNEURO1\0" => {
-            let mut len = [0u8; 4];
-            f.read_exact(&mut len).ok()?;
-            let len = u32::from_le_bytes(len) as usize;
+            let len = u32_of(&mut r)?;
             if len > MAX_HEADER {
                 return None;
             }
-            let mut json = vec![0u8; len];
-            f.read_exact(&mut json).ok()?;
-            serde_json::from_slice::<Header>(&json).ok().map(|h| h.skills)
+            serde_json::from_slice::<Header>(&bytes(&mut r, len)?).ok().map(|h| h.skills)
+        }
+        b"NNOVA2\0\0" => {
+            let len = u32_of(&mut r)?;
+            if len > MAX_CONFIG {
+                return None;
+            }
+            let config: yendory_engine::Config = serde_json::from_slice(&bytes(&mut r, len)?).ok()?;
+            if config.split >= config.blocks {
+                return None;
+            }
+            let n = Bicameral::parameters_for(&config) as u64;
+            // The step, then the weights and Adam's two moments.
+            let skip = 8u64.checked_add(n.checked_mul(12)?)?;
+            if r.stream_position().ok()?.checked_add(skip)? > size {
+                return None;
+            }
+            r.seek_relative(skip as i64).ok()?;
+            if bytes(&mut r, 8)? != b"WORDUNIT" {
+                return None;
+            }
+            for _ in 0..u32_of(&mut r)? {
+                let n = u32_of(&mut r)?;
+                r.seek_relative(n as i64).ok()?;
+            }
+            let at = r.stream_position().ok()?;
+            if at == size {
+                return Some(Vec::new());
+            }
+            if at > size || bytes(&mut r, 8)? != b"SKILLHDR" {
+                return None;
+            }
+            let len = u32_of(&mut r)?;
+            if len > MAX_HEADER {
+                return None;
+            }
+            serde_json::from_slice(&bytes(&mut r, len)?).ok()
         }
         _ => None,
     }
@@ -87,8 +140,7 @@ pub(crate) fn on_file(path: &Path, model: &Bicameral) -> Option<Vec<Skill>> {
         // Removed in Tools.
         return Some(Vec::new());
     }
-    // Only Nova Neuro models carry skills (otherwise the file is of another model).
-    model.neuro.as_ref()?;
+    // Both architectures carry skills (Bicameral since Engine 0.9.5).
     Bicameral::load(path).ok().map(|m| m.skills)
 }
 
@@ -114,6 +166,8 @@ pub(crate) struct View {
     groups: Vec<GroupFigures>,
     /// The trainer's own record (Yendory Tools), as written.
     notes: serde_json::Value,
+    /// A linked skill whose link does not fit the open model's core: why.
+    link_problem: Option<String>,
 }
 
 /// One layer's units: the root mean square of each unit's weights (the accepted weights, which
@@ -146,7 +200,7 @@ fn rms(values: impl Iterator<Item = f32>) -> f32 {
     }
 }
 
-pub(crate) fn view(k: &Skill) -> View {
+pub(crate) fn view(k: &Skill, core: &Bicameral) -> View {
     use yendory_engine::skill::{layout, Group, Slot};
     let slots = layout(&k.spec.arch);
     let slot = |name: &str| slots.iter().find(|s| s.name == name);
@@ -178,6 +232,11 @@ pub(crate) fn view(k: &Skill) -> View {
     add("buttons".into(), "button.w", false);
     add("mouseX".into(), "mx.w", false);
     add("mouseY".into(), "my.w", false);
+    // The link to the core: what goes in (to each of the core's units, and its right input), and
+    // what comes back (to each goal input).
+    add("linkIn".into(), "link.in.w", false);
+    add("linkRight".into(), "link.right.w", false);
+    add("linkOut".into(), "link.out.w", false);
     let groups = [Group::Vision, Group::Memory, Group::Heads, Group::Interconnect]
         .into_iter()
         .filter_map(|g| {
@@ -209,13 +268,50 @@ pub(crate) fn view(k: &Skill) -> View {
         layers,
         groups,
         notes: s.notes.clone(),
+        link_problem: link_problem(&s.arch, core.sense_widths()),
     }
+}
+
+/// Why a skill's link does not fit a core of these widths (its width and right input), if it
+/// doesn't (as the Engine's `cortex::fits` says).
+fn link_problem(arch: &yendory_engine::skill::Arch, (d, r): (usize, usize)) -> Option<String> {
+    let link = arch.cortex.as_ref()?;
+    (link.width != d || link.right != r).then(|| {
+        format!(
+            "The skill's link was made for a core of width {} (right input {}); this model's core is {d} ({r})",
+            link.width, link.right
+        )
+    })
+}
+
+/// The widths a core of this shape gives a linked skill (the Engine's `Bicameral::sense_widths`).
+fn sense_widths(config: &yendory_engine::Config, neuro: bool) -> (usize, usize) {
+    (config.d, if neuro { 0 } else { config.window_chars * 16 })
+}
+
+/// Why `model` may not take this shape: a game skill linked to its core would no longer fit.
+pub(crate) fn link_breaks(model: &Bicameral, config: &yendory_engine::Config, neuro: bool) -> Option<String> {
+    let widths = sense_widths(config, neuro);
+    let broken: Vec<&str> = model
+        .skills
+        .iter()
+        .filter(|k| k.spec.arch.cortex.is_some() && link_problem(&k.spec.arch, widths).is_some())
+        .map(|k| k.spec.name.as_str())
+        .collect();
+    (!broken.is_empty()).then(|| {
+        format!(
+            "Not while {} {} linked to this core: the link is made for the core's width ({} wide), and this growth changes it",
+            broken.join(", "),
+            if broken.len() == 1 { "is" } else { "are" },
+            model.config.d
+        )
+    })
 }
 
 /// The open model's game skills (Brain page).
 #[tauri::command]
 pub(crate) fn model_skills(studio: State<Studio>) -> Res<Vec<View>> {
-    with_active(&studio, |a| Ok(a.model.skills.iter().map(view).collect()))
+    with_active(&studio, |a| Ok(a.model.skills.iter().map(|k| view(k, &a.model)).collect()))
 }
 
 #[cfg(test)]
@@ -243,6 +339,27 @@ mod tests {
         k.latest[0] += 0.5;
         k.adam.t = steps;
         k
+    }
+
+    /// A small Nova Bicameral model that has learned a few words (so its file has a words
+    /// section before any skills).
+    fn bicameral() -> Bicameral {
+        let c = yendory_engine::Config {
+            d: 16,
+            heads: 2,
+            ff: 24,
+            blocks: 2,
+            split: 1,
+            r1: 12,
+            r2: 10,
+            max_tokens: 32,
+            ..yendory_engine::Config::default()
+        };
+        let mut m = Bicameral::with_config(c, 5);
+        for w in ["key", "box", "where"] {
+            m.tokenizer.push_word(w.into());
+        }
+        m
     }
 
     fn neuro() -> Bicameral {
@@ -280,6 +397,18 @@ mod tests {
         assert_eq!(specs, vec![m.skills[0].spec.clone(), m.skills[1].spec.clone()]);
         Bicameral::new().save(&path).unwrap();
         assert_eq!(listed(&path), Some(Vec::new()));
+        // Bicameral (Engine 0.9.5): listed after the learned words.
+        let mut b = bicameral();
+        b.save(&path).unwrap();
+        assert_eq!(listed(&path), Some(Vec::new()));
+        b.skills = vec![skill("range", 200), skill("maze", 40)];
+        b.save(&path).unwrap();
+        assert_eq!(listed(&path).unwrap(), vec![b.skills[0].spec.clone(), b.skills[1].spec.clone()]);
+        // Cut inside the skills' section: not readable, so Studio keeps what it holds.
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() - 100_000.min(bytes.len() / 3)]).unwrap();
+        let cut = listed(&path);
+        assert!(cut.is_none() || cut.as_ref().is_some_and(|s| s.len() == 2), "{cut:?}");
         std::fs::write(&path, b"not a model").unwrap();
         assert_eq!(listed(&path), None);
         let _ = std::fs::remove_dir_all(dir);
@@ -289,9 +418,14 @@ mod tests {
     /// saved: the saved model has Studio's training and the file's skills.
     #[test]
     fn saving_keeps_the_skills_on_file() {
-        let dir = temp("save");
+        for (tag, held) in [("neuro", neuro()), ("bicameral", bicameral())] {
+            keeps_the_skills_on_file(tag, held);
+        }
+    }
+
+    fn keeps_the_skills_on_file(tag: &str, mut held: Bicameral) {
+        let dir = temp(tag);
         let path = dir.join("model.nnova2");
-        let mut held = neuro();
         let m = meta("m1");
         save_in(&dir, &m, &held, &[]).unwrap();
 
@@ -350,7 +484,7 @@ mod tests {
     #[test]
     fn a_skill_is_shown_with_figures_from_its_weights() {
         let mut k = skill("range", 30);
-        let v = view(&k);
+        let v = view(&k, &neuro());
         let a = &k.spec.arch;
         let layer = |id: &str| v.layers.iter().find(|l| l.id == id).unwrap();
         assert_eq!(layer("conv0").units.len(), a.convs[0].out);
@@ -370,6 +504,50 @@ mod tests {
         assert!(layer(&first.name.replace(".w", "")).changed[0] > 0.);
         assert_eq!(v.groups.iter().map(|g| g.parameters).sum::<usize>(), k.parameters());
         k.latest.clone_from(&k.accepted);
-        assert!(view(&k).groups.iter().all(|g| g.changed == 0.));
+        assert!(view(&k, &neuro()).groups.iter().all(|g| g.changed == 0.));
+    }
+
+    fn linked(k: &Skill, core: &Bicameral) -> Skill {
+        let (width, right) = core.sense_widths();
+        k.with_cortex(Some(yendory_engine::skill::CortexLink { width, right })).unwrap()
+    }
+
+    /// A skill linked to its model's core: its link is drawn (in, right input, back), and a core
+    /// of another width is reported, not hidden.
+    #[test]
+    fn a_linked_skill_shows_its_link_and_whether_it_fits() {
+        for core in [neuro(), bicameral()] {
+            let k = linked(&skill("range", 30), &core);
+            let v = view(&k, &core);
+            let layer = |id: &str| v.layers.iter().find(|l| l.id == id);
+            let (d, r) = core.sense_widths();
+            assert_eq!(layer("linkIn").unwrap().units.len(), d);
+            assert_eq!(layer("linkRight").map(|l| l.units.len()).unwrap_or(0), r);
+            assert_eq!(layer("linkOut").unwrap().units.len(), k.spec.arch.goal);
+            // A new link's way back is zero: the skill plays as before.
+            assert!(layer("linkOut").unwrap().units.iter().all(|&u| u == 0.));
+            assert_eq!(v.link_problem, None);
+            assert_eq!(v.groups.iter().map(|g| g.parameters).sum::<usize>(), k.parameters());
+        }
+        let k = linked(&skill("range", 30), &neuro());
+        assert!(view(&k, &bicameral()).link_problem.unwrap().contains("width"));
+        assert!(view(&skill("range", 1), &bicameral()).link_problem.is_none());
+    }
+
+    /// Studio's widths agree with the Engine's, and a shape of another width is refused while a
+    /// linked skill needs this one (the same shape, or one without linked skills, is not).
+    #[test]
+    fn growth_may_not_break_a_link() {
+        for mut core in [neuro(), bicameral()] {
+            assert_eq!(sense_widths(&core.config, core.neuro.is_some()), core.sense_widths());
+            let neuro = core.neuro.is_some();
+            let wider = yendory_engine::Config { d: core.config.d * 2, ..core.config.clone() };
+            core.skills.push(skill("maze", 3));
+            assert_eq!(link_breaks(&core, &wider, neuro), None, "no linked skill");
+            let k = linked(&skill("range", 3), &core);
+            core.skills.push(k);
+            assert_eq!(link_breaks(&core, &core.config.clone(), neuro), None);
+            assert!(link_breaks(&core, &wider, neuro).unwrap().contains("range"));
+        }
     }
 }

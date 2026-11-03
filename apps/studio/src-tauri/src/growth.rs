@@ -146,8 +146,26 @@ pub struct GrowthView {
     tokens: usize,
 }
 
+/// The growth steps the Engine offers for this model, less those that would break a game skill's
+/// link to its core (they are listed as not offered, with the reason).
+fn offered(model: &Bicameral) -> (Vec<GrowthOption>, Vec<NotOffered>) {
+    let (options, mut not_offered) = model.growth_options();
+    let mut kept = Vec::new();
+    for o in options {
+        let breaks = model
+            .grown_shape(&o.growth)
+            .ok()
+            .and_then(|(config, neuro)| crate::skills::link_breaks(model, &config, neuro.is_some()));
+        match breaks {
+            Some(reason) => not_offered.push(NotOffered { part: o.label.clone(), reason }),
+            None => kept.push(o),
+        }
+    }
+    (kept, not_offered)
+}
+
 fn view(a: &Active, rows: usize, tokens: usize) -> GrowthView {
-    let (options, not_offered) = a.model.growth_options();
+    let (options, not_offered) = offered(&a.model);
     let now = a.model.parameter_count();
     let state = |p: usize| 16 * p as u64;
     let c = &a.model.config;
@@ -330,6 +348,9 @@ pub(crate) fn grow_active(
     let before = a.model.parameter_count();
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
     let grown = a.model.grow(&option.growth, seed)?;
+    if let Some(reason) = crate::skills::link_breaks(&a.model, &grown.config, grown.neuro.is_some()) {
+        return Err(format!("{reason}; nothing was changed"));
+    }
     let check = compare_outputs(&a.model, &grown, &PROBES)?;
     if !check.preserved() {
         return Err(format!(
@@ -417,8 +438,11 @@ pub fn expand_model(
     if a.meta.growth.mode == GrowthMode::Off {
         return Err("Growth is off for this model; choose Manual or Automatic first".into());
     }
-    let (options, _) = a.model.growth_options();
-    let o = options.into_iter().find(|o| o.id == option).ok_or("Unknown growth step")?;
+    let (options, not_offered) = offered(&a.model);
+    let Some(o) = options.into_iter().find(|o| o.id == option) else {
+        let why = not_offered.into_iter().find(|n| n.part == option).map(|n| n.reason);
+        return Err(why.unwrap_or_else(|| "Unknown growth step".into()));
+    };
     let f = fit(
         o.parameters_after,
         o.activation_floats_per_token,
@@ -643,5 +667,66 @@ mod tests {
         assert_eq!(a.model.weights, grown.weights);
         assert!(!a.meta.growth.history[0].rolled_back);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A game skill linked to the core keeps the core's width: growth steps that change it are
+    /// not offered (with the reason), the others are, and growing is refused for them.
+    #[test]
+    fn growth_keeps_a_linked_skills_core_width() {
+        let p = yendory_engine::model::neuro::presets().into_iter().next().unwrap();
+        for model in [nova2(), Bicameral::with_design(p.config, Some(p.design), 3)] {
+            let (all, _) = model.growth_options();
+            let mut a = active(model, "linked");
+            let (width, right) = a.model.sense_widths();
+            let arch = yendory_engine::skill::Arch::new(
+                12,
+                9,
+                3,
+                2,
+                1,
+                vec![-3.0, 0.0, 3.0],
+                yendory_engine::skill::Size::Small,
+            );
+            let spec = yendory_engine::skill::SkillSpec {
+                game: "range".into(),
+                name: "Range".into(),
+                size: yendory_engine::skill::Size::Small,
+                seed: 1,
+                keys: vec!["w".into(), "s".into()],
+                buttons: vec!["left".into()],
+                arch,
+                lineage: yendory_engine::skill::Lineage { generation: 0, parent: None, method: "new".into() },
+                steps: 0,
+                accepted_step: 0,
+                created: 1,
+                notes: serde_json::Value::Null,
+            };
+            let k = crate::skills::Skill::new(spec)
+                .unwrap()
+                .with_cortex(Some(yendory_engine::skill::CortexLink { width, right }))
+                .unwrap();
+            a.model.skills.push(k);
+            let (kept, not_offered) = offered(&a.model);
+            let changes_width = |o: &GrowthOption| {
+                let (c, n) = a.model.grown_shape(&o.growth).unwrap();
+                (c.d, if n.is_some() { 0 } else { c.window_chars * 16 }) != (width, right)
+            };
+            assert!(kept.iter().all(|o| !changes_width(o)));
+            let blocked: Vec<&GrowthOption> = all.iter().filter(|o| changes_width(o)).collect();
+            assert_eq!(kept.len() + blocked.len(), all.len());
+            for o in &blocked {
+                let n = not_offered.iter().find(|n| n.part == o.label).unwrap();
+                assert!(n.reason.contains("Range"), "{}", n.reason);
+                let dir = temp_dir("linked");
+                assert!(grow_active(&dir, &mut a, o, false).unwrap_err().contains("nothing was changed"));
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            println!(
+                "{} options: {} kept, {} not offered for the link",
+                all.len(),
+                kept.len(),
+                blocked.len()
+            );
+        }
     }
 }

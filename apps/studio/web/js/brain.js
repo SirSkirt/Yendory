@@ -287,16 +287,48 @@ window.Brain = (() => {
   const SKILL_LAYER_NAMES = {
     encoder: "encoder", goal: "goal input", memory: "working memory", memoryGate: "memory update gate",
     keys: "key", buttons: "button", mouseX: "mouse x step", mouseY: "mouse y step",
+    linkIn: "link into the core", linkRight: "link into the right hemisphere", linkOut: "link back (goal input)",
   };
   const skillLayerName = id => SKILL_LAYER_NAMES[id] || id.replace(/^conv(\d+)$/, (_, i) => `convolution ${Number(i) + 1}`);
+  // The fibre from the skills to the core: what it carries.
+  function skillFibres(group, list, neuro) {
+    // Linked skills whose link fits this core; a link made for another core carries nothing here.
+    const linked = list.filter(k => k.arch.cortex && !k.linkProblem);
+    const misfit = list.filter(k => k.arch.cortex && k.linkProblem);
+    const names = ks => ks.map(k => k.name).join(", ");
+    const core = neuro ? "the bus and the language core" : "the transformer";
+    const coreText = linked.length
+      ? `${names(linked)} ↔ the core: linked. The core reads what ${linked.length === 1 ? "this skill sees" : "these skills see"} (link in) and its state comes back as the goal input (link back); training the model in Studio also changes how ${linked.length === 1 ? "it plays" : "they play"}.` +
+        (list.some(k => !k.arch.cortex) ? ` ${names(list.filter(k => !k.arch.cortex))}: not linked; the goal input is zeros until Yendory Tools' Command Mode gives it a command.` : "")
+      : `Game skills → ${core}: not connected. A skill's goal input is all zeros until Yendory Tools' Command Mode gives it a command; text never passes through a skill.`;
+    const misfitText = misfit.length ? ` ${names(misfit)}: linked to a core of another width, so it cannot play with this one.` : "";
+    const rightLinked = linked.filter(k => k.arch.cortex.right > 0);
+    group.querySelectorAll("[data-skill-fiber]").forEach(f => {
+      const right = f.dataset.skillFiber === "right";
+      f.classList.toggle("linked", right ? rightLinked.length > 0 : linked.length > 0);
+      f.classList.toggle("off", right && !rightLinked.length);
+      f.querySelector("title").textContent = right
+        ? `${names(rightLinked)} → the Dense pathway: linked. The right hemisphere reads what the skill sees through the link's own right-input weights.`
+        : coreText + misfitText;
+    });
+  }
+
+  // Both plates (Nova Neuro's and Nova Bicameral's) carry the skills region.
   function setSkills(skills) {
-    const group = $("nSkills"), dots = $("nSkillDots");
+    for (const p of ["n", "h"]) {
+      const list = skills || [];
+      const group = $(`${p}Skills`);
+      group.classList.toggle("absent", !list.length);
+      $(`${p}SkillsLabel`).textContent = list.length
+        ? `${list.length} game skill${list.length === 1 ? "" : "s"}${list.some(k => k.arch.cortex && !k.linkProblem) ? " · linked" : ""}`
+        : "Game skills (none)";
+      skillFibres(group, list, p === "n");
+      drawSkillDots($(`${p}SkillDots`), list);
+    }
+  }
+
+  function drawSkillDots(dots, list) {
     dots.replaceChildren();
-    const list = skills || [];
-    group.classList.toggle("absent", !list.length);
-    $("nSkillsLabel").textContent = list.length
-      ? `${list.length} game skill${list.length === 1 ? "" : "s"}`
-      : "Game skills (none)";
     if (!list.length) return;
     const R = { cx: 66, cy: 52, rx: 54, ry: 30 };
     const per = Math.max(4, Math.floor(36 / list.length));

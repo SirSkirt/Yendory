@@ -931,7 +931,7 @@
     <p class="note">Study Mode memory is not part of this network and does not appear here: it is a separate store of statements, inspected on Analyze ▸ Memory. Everything below is the network itself.</p>
     <div class="plate-wrap">
       <figure class="plate">
-        <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span></div>
+        <div class="brain-legend" id="bicaLegend"><span><i class="legend-dot language"></i> Left · language / attention</span><span><i class="legend-dot association"></i> Right · associations / dense activations</span><span><i class="legend-dot bridge"></i> Learned connection</span><span><i class="legend-dot n-skill"></i> Game skills · saved weights</span></div>
         <div class="brain-legend" id="neuroLegend" hidden><span><i class="legend-dot language"></i> Language core · attention</span><span><i class="legend-dot n-memory"></i> Working memory · state</span><span><i class="legend-dot association"></i> Associative memory · recalled patterns</span><span><i class="legend-dot n-relational"></i> Relational network · slots read</span><span><i class="legend-dot n-experts"></i> Experts · router's choice</span><span><i class="legend-dot n-code"></i> Consolidation · code</span><span><i class="legend-dot n-control"></i> Executive Controller · activity and gates</span><span><i class="legend-dot bridge"></i> Communication bus</span><span><i class="legend-dot n-skill"></i> Game skills · saved weights</span></div>
         <div class="brain-stage">
           <svg id="hemisphereBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of two trainable neural pathways joined by a trainable bridge">
@@ -944,6 +944,13 @@
             <g id="leftActivity" clip-path="url(#clipLeft)"></g><g id="rightActivity" clip-path="url(#clipRight)"></g>
             <text class="label left" x="240" y="387" text-anchor="middle" font-size="15">Transformer</text>
             <text class="label right" x="560" y="387" text-anchor="middle" font-size="15">Dense pathway</text>
+            <g id="hSkills" class="skill-plate absent">
+              <path class="n-fiber skill" data-skill-fiber="core" fill="none" d="M118 60 Q190 58 236 112"><title>Game skills</title></path>
+              <path class="n-fiber skill off" data-skill-fiber="right" fill="none" d="M100 24 Q400 -12 600 110"><title>Game skills</title></path>
+              <ellipse class="n-region skill" cx="66" cy="52" rx="54" ry="30"/>
+              <g id="hSkillDots"></g>
+              <text class="n-label skill" id="hSkillsLabel" x="66" y="99" text-anchor="middle" font-size="13">Game skills (none)</text>
+            </g>
           </svg>
           <svg id="neuroBrain" viewBox="0 0 800 410" role="img" aria-label="Schematic of Nova Neuro's networks: the language core, working memory, associative memory, the relational network, experts, consolidation and the Executive Controller, joined by a communication bus" hidden>
             <path class="n-outline" d="M110 230 C90 140 160 62 290 48 C390 22 560 28 640 80 C730 132 735 240 690 292 C650 335 575 345 515 336 C480 380 400 390 360 362 C275 374 150 340 110 230 Z"/>
@@ -977,8 +984,8 @@
             <text class="n-label consolidation" x="196" y="345" text-anchor="middle" font-size="14" data-label="consolidation">Consolidation</text>
             <text class="n-label memory" x="380" y="372" text-anchor="middle" font-size="14" data-label="memory">Working memory</text>
             <text class="n-label bus" x="276" y="100" text-anchor="middle" font-size="12">bus</text>
-            <g id="nSkills" class="absent">
-              <path class="n-fiber skill" fill="none" d="M118 62 Q214 50 290 112"><title>Bus → game skills' goal input: not connected. A skill's goal input is all zeros until Yendory Tools' Command Mode gives it a command; text never passes through a skill.</title></path>
+            <g id="nSkills" class="skill-plate absent">
+              <path class="n-fiber skill" data-skill-fiber="core" fill="none" d="M118 62 Q214 50 290 112"><title>Game skills</title></path>
               <ellipse class="n-region skill" cx="66" cy="52" rx="54" ry="30"/>
               <g id="nSkillDots"></g>
               <text class="n-label skill" id="nSkillsLabel" x="66" y="99" text-anchor="middle" font-size="13">Game skills (none)</text>
@@ -1011,7 +1018,7 @@
 
     <section class="skills-section" id="skillSection" aria-labelledby="skillHeading" hidden>
       <h3 id="skillHeading">Game skills</h3>
-      <p class="note">Networks this model carries in its own file to play games from their pictures, trained in Yendory Tools. Studio keeps them as they are. Text never passes through a skill, so inspecting a question does not light them: what is drawn here is each skill's network, with every dot measured from its saved weights. A dot's brightness is the size of that unit's weights (their root mean square) in the accepted weights, the ones that play, compared with the largest unit of the same layer (layers differ in how many inputs they weigh, so their sizes are not compared); hover or tap a dot for its figures.</p>
+      <p class="note">Networks this model carries in its own file to play games from their pictures, trained in Yendory Tools. Studio keeps them as they are. A skill can be linked to the model's core: then the core reads what the skill sees and its state comes back as the skill's goal input, so training the model here also changes how that skill plays. Text never passes through a skill, so inspecting a question does not light them: what is drawn here is each skill's network, with every dot measured from its saved weights. A dot's brightness is the size of that unit's weights (their root mean square) in the accepted weights, the ones that play, compared with the largest unit of the same layer (layers differ in how many inputs they weigh, so their sizes are not compared); hover or tap a dot for its figures.</p>
       <div id="skillList"></div>
     </section>
 

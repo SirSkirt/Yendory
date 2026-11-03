@@ -1,6 +1,6 @@
 [package]
 name = "yendory-studio"
-version = "0.9.7"
+version = "0.9.8"
 description = "Yendory Studio: create, teach, examine and export Bicameral AI models"
 edition = "2021"
 publish = false
@@ -33,8 +33,8 @@ flate2 = "1"
 sysinfo = { version = "0.37", default-features = false, features = ["disk"] }
 # The Engine and the Yendory Network client, from yendory-hub (dependency/), pinned to one commit;
 # move the pin on purpose (docs/INTEGRATION.md).
-yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "f4f03ca49b1e373fb8e420f8f0873fb658dae8ad", features = ["gpu"] }
-yendory-client = { git = "https://github.com/SirSkirt/Yendory", rev = "f4f03ca49b1e373fb8e420f8f0873fb658dae8ad" }
+yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8", features = ["gpu"] }
+yendory-client = { git = "https://github.com/SirSkirt/Yendory", rev = "cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8" }
 # Updates from the release page (signed; see src/update.rs).
 tauri-plugin-updater = "2"
 # A second copy of Studio hands its --model to the running one (src/handoff.rs).
@@ -45,7 +45,7 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "async-
 
 # Windows: DirectX 12 with the DXC shader compiler built in (instead of the old FXC fallback).
 [target.'cfg(all(windows, target_env = "msvc", not(target_arch = "aarch64")))'.dependencies]
-yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "f4f03ca49b1e373fb8e420f8f0873fb658dae8ad", features = ["gpu", "dxc"] }
+yendory-engine = { git = "https://github.com/SirSkirt/Yendory", rev = "cc5b78dfabc4a44f7af9e7c2482b4f080e3117d8", features = ["gpu", "dxc"] }
 
 [profile.release]
 codegen-units = 1

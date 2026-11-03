@@ -351,13 +351,18 @@ table { border-collapse: collapse; width: 100%; }
 #neuroBrain .n-fiber.memory { stroke: var(--neuro-memory); } #neuroBrain .n-fiber.assoc { stroke: var(--brain-right); }
 #neuroBrain .n-fiber.absent { display: none; }
 #neuroBrain circle { cursor: crosshair; transition: opacity .2s; }
-/* Game skills: outside the brain's outline, joined to the bus by a fibre that carries nothing yet. */
-#neuroBrain .n-region.skill { fill: var(--neuro-skill-fill); stroke: var(--neuro-skill); }
-#neuroBrain .n-label.skill { fill: var(--neuro-skill); }
-#neuroBrain .n-fiber.skill { stroke: var(--neuro-skill); stroke-dasharray: 3 6; opacity: .45; }
-#nSkills.absent .n-region.skill { fill: none; stroke: var(--ink-soft); stroke-dasharray: 5 5; opacity: .45; }
-#nSkills.absent .n-label.skill { fill: var(--ink-soft); opacity: .7; }
-#nSkills.absent .n-fiber.skill { display: none; }
+/* Game skills: outside the brain's outline, joined to the core by a fibre: dashed while no skill
+   is linked to it (it carries nothing), solid for a linked skill. */
+.skill-plate .n-region.skill { fill: var(--neuro-skill-fill); stroke: var(--neuro-skill); stroke-width: 2.5; }
+.skill-plate .n-label.skill { fill: var(--neuro-skill); font-family: var(--serif); font-style: italic; }
+.skill-plate .n-fiber.skill { stroke: var(--neuro-skill); stroke-width: 2; stroke-dasharray: 3 6; opacity: .45; stroke-linecap: round; }
+.skill-plate .n-fiber.skill.linked { stroke-dasharray: none; stroke-width: 2.6; opacity: .85; }
+.skill-plate .n-fiber.skill.off { display: none; }
+.skill-plate circle { cursor: crosshair; transition: opacity .2s; }
+.skill-plate.absent .n-region.skill { fill: none; stroke: var(--ink-soft); stroke-dasharray: 5 5; opacity: .45; }
+.skill-plate.absent .n-label.skill { fill: var(--ink-soft); opacity: .7; }
+.skill-plate.absent .n-fiber.skill { display: none; }
+.skill-card .link-problem { color: var(--bad); }
 .legend-dot.n-skill { background: var(--neuro-skill); }
 .skills-section { margin-top: 26px; }
 .skills-section[hidden] { display: none; }

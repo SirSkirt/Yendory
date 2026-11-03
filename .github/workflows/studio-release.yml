@@ -286,7 +286,7 @@ jobs:
           # Studio needs a Hub that installs packages and hands it models (--model), and the
           # Network version whose methods it calls (published before this Studio).
           python3 .github/scripts/package.py manifest --id studio --name "Yendory Studio" --version "$V" \
-            --notes "Yendory Studio $TAG" --requires hub=0.1.1 --requires network=0.1.2 "${ARGS[@]}" > package.json
+            --notes "Yendory Studio $TAG" --requires hub=0.1.1 --requires network=0.1.4 "${ARGS[@]}" > package.json
           cat package.json
           cp apps/studio/src-tauri/icons/128x128.png icon.png
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber package.json
