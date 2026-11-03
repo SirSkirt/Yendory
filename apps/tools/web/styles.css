@@ -465,3 +465,29 @@ main { max-width: 1112px; }
 .ledger td.worse { color: var(--bad); }
 .model-line { display: flex; gap: 12px; align-items: center; margin: 6px 0; font-size: 15px; }
 .model-line .warn { color: var(--warn); }
+
+/* ---- Debug log (bottom of the window, collapsed by default) ---------------------------------- */
+.debug { position: fixed; left: var(--side-w); right: 0; bottom: 0; z-index: 70; pointer-events: none; }
+body.sidebar-collapsed .debug { left: var(--side-rail); }
+.debug-bar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 0 14px; pointer-events: none; }
+.debug-bar > * { pointer-events: auto; }
+.debug-toggle { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--mono); padding: 3px 10px; background: var(--sheet); color: var(--ink-soft); border: 1px solid var(--rule-strong); border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; }
+.debug-toggle:hover { color: var(--ink); }
+.debug-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.debug-count { background: var(--bad); color: #fff; border-radius: 9px; padding: 0 6px; font-weight: 700; }
+.debug-count[hidden] { display: none; }
+.debug-tools { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; background: var(--sheet); padding: 2px 8px; border: 1px solid var(--rule-strong); border-bottom: none; border-radius: 6px 6px 0 0; }
+.debug-tools[hidden] { display: none; }
+.debug-tools button { font-size: 12px; padding: 2px 8px; }
+.debug-body { pointer-events: auto; height: 32vh; min-height: 140px; overflow: auto; background: var(--sheet); border-top: 2px solid var(--rule-strong); box-shadow: 0 -6px 18px color-mix(in srgb, var(--ink) 12%, transparent); }
+.debug-body[hidden] { display: none; }
+.debug-lines { list-style: none; margin: 0; padding: 6px 12px 10px; font: 12px/1.5 var(--mono); }
+.debug-lines li { white-space: pre-wrap; word-break: break-word; border-bottom: 1px dotted var(--rule); padding: 1px 0; }
+.debug-lines .when { color: var(--ink-soft); margin-right: 8px; }
+.debug-lines .from { color: var(--ink-soft); margin-right: 8px; }
+.debug-lines .warn { color: var(--warn); }
+.debug-lines .error { color: var(--bad); font-weight: 600; }
+.debug-lines .wait { color: var(--warn); }
+.debug-lines .empty { color: var(--ink-soft); font-style: italic; border: none; }
+body.debug-open main { padding-bottom: calc(32vh + 40px); }
+

@@ -4,7 +4,7 @@
 //!
 //! One skill per game: its id is the game profile's. A model made in Yendory Hub comes to Tools
 //! (Open in Tools, or Open a model…), learns a game here, and carries it wherever it goes.
-use super::policy::{Adam, Arch, Lineage, Size, Skill, SkillSpec};
+use super::policy::{layout_len, Adam, Arch, Lineage, Size, Skill, SkillSpec};
 use super::profile::Profile;
 use super::recording::{self, Split, AFTER_GAP};
 use crate::Res;
@@ -51,9 +51,66 @@ pub fn get(app: &AppHandle, game: &str) -> Res<Skill> {
     Ok(skill)
 }
 
+/// Bytes a skill of `weights` weights takes in one save message: its accepted and latest
+/// weights and the optimizer's two arrays, each as base64 text, and room for its description.
+pub fn save_bytes(weights: usize) -> usize {
+    4 * (4 * (4 * weights).div_ceil(3)) + (256 << 10)
+}
+
+/// The most weights a skill can have and still be saved through the Network (one message).
+pub fn max_weights() -> usize {
+    let mut n = crate::NETWORK_MESSAGE_LIMIT / 22;
+    while save_bytes(n + 1000) <= crate::NETWORK_MESSAGE_LIMIT {
+        n += 1000;
+    }
+    n
+}
+
+/// Why a skill of this many weights can't be kept in a model, if it can't.
+pub fn fits_network(weights: usize, profile: &Profile) -> Res<()> {
+    if weights <= max_weights() {
+        return Ok(());
+    }
+    Err(format!(
+        "This skill would have {:.1} million weights (the game's picture is {}×{}); the Yendory Network can carry a skill of at most {:.1} million for now. Make the game's picture smaller on 2.1 (for example 160×90 or 128×72)",
+        weights as f64 / 1e6,
+        profile.capture.width,
+        profile.capture.height,
+        max_weights() as f64 / 1e6
+    ))
+}
+
+/// Weights of a new skill of each size for the profile's game as it is now.
+pub fn weights_for(data: &Path, profile: &Profile) -> Vec<(Size, usize)> {
+    let channels = if profile.capture.gray { 1 } else { 3 };
+    let bins = mouse_bins(data, profile);
+    [Size::Small, Size::Medium]
+        .into_iter()
+        .map(|size| {
+            let arch = Arch::new(
+                profile.capture.width as usize,
+                profile.capture.height as usize,
+                channels,
+                profile.keys.len(),
+                profile.buttons.len(),
+                bins.clone(),
+                size,
+            );
+            (size, layout_len(&arch))
+        })
+        .collect()
+}
+
 /// Saves a skill into the open model (its file is written by the Network).
 pub fn save(app: &AppHandle, model_id: &str, k: &Skill) -> Res<Value> {
     k.check()?;
+    if k.accepted.len() > max_weights() {
+        return Err(format!(
+            "The skill has {:.1} million weights; the Yendory Network can carry at most {:.1} million in a skill for now",
+            k.accepted.len() as f64 / 1e6,
+            max_weights() as f64 / 1e6
+        ));
+    }
     crate::network_call(
         app,
         "model.skill.save",
@@ -152,4 +209,28 @@ pub fn fits(spec: &SkillSpec, profile: &Profile) -> Res<()> {
         return Err("The game's controls changed since this skill was made: set them back, or delete the skill and teach it again".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_largest_skill_fits_one_network_message() {
+        let n = max_weights();
+        assert!(save_bytes(n) <= crate::NETWORK_MESSAGE_LIMIT);
+        assert!(save_bytes(n + 1000) > crate::NETWORK_MESSAGE_LIMIT);
+        // The real message: four arrays of base64 and the description.
+        let k = vec![0.5f32; 10_000];
+        let text = encode(&k);
+        assert!(4 * text.len() + (256 << 10) <= save_bytes(k.len()));
+        // The range's picture (128x72 in colour) fits easily; a large picture does not.
+        let data = std::env::temp_dir().join("tools-skill-size");
+        let mut p = crate::live::profile::range_profile();
+        assert!(weights_for(&data, &p).iter().all(|(_, w)| fits_network(*w, &p).is_ok()));
+        p.capture.width = 640;
+        p.capture.height = 360;
+        let (_, small) = weights_for(&data, &p)[0];
+        assert!(fits_network(small, &p).is_err(), "{small}");
+    }
 }

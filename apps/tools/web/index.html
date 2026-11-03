@@ -438,6 +438,22 @@
 </div>
 </div>
 
+<!-- Debug log: what the page asked the backend, what the backend did, and every error. -->
+<section class="debug" id="debug" aria-label="Debug log">
+  <div class="debug-bar">
+    <button type="button" class="debug-toggle" id="debugToggle" aria-expanded="false" aria-controls="debugBody" title="Show or hide the debug log (Ctrl+`)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7l5 5-5 5M12 17h7"/></svg>
+      <span>Debug log</span><span class="debug-count" id="debugCount" hidden></span>
+    </button>
+    <span class="debug-tools" id="debugTools" hidden>
+      <label class="check-inline"><input type="checkbox" id="debugProblems"> Problems only</label>
+      <button type="button" class="quiet" id="debugCopy">Copy</button>
+      <button type="button" class="quiet" id="debugClear">Clear</button>
+    </span>
+  </div>
+  <div class="debug-body" id="debugBody" hidden><ol class="debug-lines" id="debugLines"></ol></div>
+</section>
+
 <script src="js/dropdown.js"></script>
 <script src="js/app.js"></script>
 </body>

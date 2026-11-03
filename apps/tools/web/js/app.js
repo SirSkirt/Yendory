@@ -3,8 +3,171 @@
 // (src-tauri); every line the model writes comes from the Yendory Network.
 
 const TAURI = window.__TAURI__;
-const invoke = (cmd, args) => TAURI.core.invoke(cmd, args);
-const listen = (event, f) => TAURI.event.listen(event, f);
+
+// ---- Debug log ----------------------------------------------------------------------------------
+// Every command the page sends (and how it ended), the backend's own lines (Network calls, failures,
+// panics: src-tauri/src/debug.rs), events that end something, and errors in the page itself.
+const D = { lines: [], open: false, unseen: 0 };
+const DEBUG_KEEP = 2000;
+// Asked many times a second (pictures, turns): logged only when they fail or are slow.
+const QUIET = new Set(["live_preview", "recording_frame", "match_step", "range_state", "debug_lines"]);
+const PROBLEMS = new Set(["warn", "error", "wait"]);
+const brief = v => {
+  let text;
+  try { text = JSON.stringify(v); } catch { text = String(v); }
+  return text && text.length > 300 ? text.slice(0, 300) + "…" : text;
+};
+const secs = ms => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+const clockOf = t => {
+  const d = new Date(t);
+  const two = n => String(n).padStart(2, "0");
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+};
+
+function dbg(level, from, text, t = Date.now()) {
+  const line = { t, level, from, text: String(text) };
+  D.lines.push(line);
+  if (D.lines.length > DEBUG_KEEP) D.lines.splice(0, D.lines.length - DEBUG_KEEP);
+  if (PROBLEMS.has(level) && !D.open) D.unseen++;
+  debugAppend(line);
+  debugBadge();
+}
+
+function debugLine(l) {
+  const li = document.createElement("li");
+  li.className = l.level;
+  const when = document.createElement("span");
+  when.className = "when";
+  when.textContent = clockOf(l.t);
+  const from = document.createElement("span");
+  from.className = "from";
+  from.textContent = l.from === "tools" ? "backend" : "page   ";
+  li.append(when, from, l.text);
+  return li;
+}
+
+function debugShown(l) {
+  return !document.getElementById("debugProblems")?.checked || PROBLEMS.has(l.level);
+}
+
+function debugAppend(l) {
+  const list = document.getElementById("debugLines");
+  if (!list || !D.open || !debugShown(l)) return;
+  const body = document.getElementById("debugBody");
+  const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 30;
+  list.querySelector(".empty")?.remove();
+  list.append(debugLine(l));
+  while (list.children.length > DEBUG_KEEP) list.firstChild.remove();
+  if (atEnd) body.scrollTop = body.scrollHeight;
+}
+
+function debugRender() {
+  const list = document.getElementById("debugLines");
+  if (!list) return;
+  const shown = D.lines.filter(debugShown);
+  list.replaceChildren(...(shown.length ? shown.map(debugLine) : [Object.assign(document.createElement("li"), { className: "empty", textContent: "Nothing logged yet." })]));
+  const body = document.getElementById("debugBody");
+  body.scrollTop = body.scrollHeight;
+}
+
+function debugBadge() {
+  const c = document.getElementById("debugCount");
+  if (!c) return;
+  c.hidden = D.open || !D.unseen;
+  c.textContent = String(D.unseen);
+  c.title = `${D.unseen} problem${D.unseen === 1 ? "" : "s"} since you last looked`;
+}
+
+function debugSetOpen(open) {
+  D.open = open;
+  if (open) D.unseen = 0;
+  store.set("debugOpen", open ? "1" : "0");
+  document.getElementById("debugBody").hidden = !open;
+  document.getElementById("debugTools").hidden = !open;
+  document.getElementById("debugToggle").setAttribute("aria-expanded", String(open));
+  document.body.classList.toggle("debug-open", open);
+  if (open) debugRender();
+  debugBadge();
+}
+
+function debugText() {
+  return D.lines.map(l => `${clockOf(l.t)} ${l.from === "tools" ? "backend" : "page   "} ${l.level.padEnd(5)} ${l.text}`).join("\n");
+}
+
+async function debugCopy() {
+  const text = debugText();
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const area = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  toast(`Copied ${D.lines.length} lines of the debug log.`);
+}
+
+async function debugStart() {
+  $("debugToggle").addEventListener("click", () => debugSetOpen(!D.open));
+  $("debugCopy").addEventListener("click", debugCopy);
+  $("debugClear").addEventListener("click", () => { D.lines = []; D.unseen = 0; debugRender(); debugBadge(); });
+  $("debugProblems").addEventListener("change", debugRender);
+  document.addEventListener("keydown", e => { if (e.ctrlKey && e.key === "`") { e.preventDefault(); debugSetOpen(!D.open); } });
+  // The backend's lines: from now on as they happen, and those from before the page opened.
+  const seen = new Set();
+  const fromTools = l => {
+    const key = `${l.t}|${l.text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    dbg(l.level, "tools", l.text, l.t);
+  };
+  await TAURI.event.listen("debug-log", e => fromTools(e.payload));
+  try {
+    const before = await TAURI.core.invoke("debug_lines");
+    const earlier = D.lines;
+    D.lines = [];
+    for (const l of before) fromTools(l);
+    D.lines.push(...earlier.filter(l => l.from !== "tools"));
+    D.lines.sort((a, b) => a.t - b.t);
+  } catch (e) { dbg("error", "page", `The backend's log could not be read: ${e}`); }
+  debugSetOpen(store.get("debugOpen", "0") === "1");
+}
+
+window.addEventListener("error", e => dbg("error", "page", `${e.message}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`));
+window.addEventListener("unhandledrejection", e => dbg("error", "page", `Unhandled: ${e.reason?.stack || e.reason}`));
+{
+  const original = console.error.bind(console);
+  console.error = (...args) => { dbg("error", "page", args.map(a => (a instanceof Error ? a.stack || a.message : typeof a === "string" ? a : brief(a))).join(" ")); original(...args); };
+}
+
+let callNo = 0;
+// Every command, logged: what was asked, how long it took, how it ended, and a note when an
+// answer is slow to come (a command that never answers shows as asked and waiting).
+const invoke = async (cmd, args) => {
+  const n = ++callNo;
+  const t0 = performance.now();
+  const quiet = QUIET.has(cmd);
+  if (!quiet) dbg("info", "page", `→ ${cmd} #${n}${args && Object.keys(args).length ? " " + brief(args) : ""}`);
+  const waiting = setTimeout(() => dbg("wait", "page", `… ${cmd} #${n} has not answered after 10 s (still waiting)`), 10000);
+  try {
+    const result = await TAURI.core.invoke(cmd, args);
+    const ms = performance.now() - t0;
+    if (!quiet || ms > 3000) dbg("info", "page", `← ${cmd} #${n} answered in ${secs(ms)}`);
+    return result;
+  } catch (e) {
+    dbg("error", "page", `← ${cmd} #${n} failed after ${secs(performance.now() - t0)}: ${e}`);
+    throw e;
+  } finally {
+    clearTimeout(waiting);
+  }
+};
+// Events that end something are logged (progress and status are too frequent).
+const listen = (event, f) => TAURI.event.listen(event, e => {
+  if (/-(failed|done)$|^live-stopped$|^model-handed$/.test(event)) {
+    dbg(event.endsWith("-failed") ? "error" : "info", "page", `event ${event}${e.payload != null ? " " + brief(e.payload) : ""}`);
+  }
+  return f(e);
+});
 const $ = id => document.getElementById(id);
 const el = (tag, attrs = {}, ...children) => {
   const e = document.createElement(tag);
@@ -879,6 +1042,24 @@ async function renderTrain() {
   $("newSkillForm").hidden = !m || !!d.problem || has;
   $("newSkillNote").hidden = $("newSkillForm").hidden;
   $("newSkill").textContent = m ? `Teach ${m.name} ${game}` : "Add the skill";
+  // Each size's weights for this game's picture, and whether the Network can carry it.
+  for (const sz of d.sizes || []) {
+    const o = $("newSkillSize").querySelector(`option[value=${sz.size}]`);
+    if (!o) continue;
+    const weights = `${short(sz.weights)} weights`;
+    o.dataset.note = sz.problem ? `${weights}: too large for the Network` : `${weights}; ${sz.size === "small" ? "quicker" : "slower"}`;
+    o.disabled = !!sz.problem;
+  }
+  const chosen = (d.sizes || []).find(sz => sz.size === $("newSkillSize").value);
+  if (chosen?.problem) {
+    const ok = (d.sizes || []).find(sz => !sz.problem);
+    if (ok) $("newSkillSize").value = ok.size;
+  }
+  const blocked = (d.sizes || []).length && (d.sizes || []).every(sz => sz.problem);
+  $("newSkill").disabled = !!blocked;
+  $("newSkillNote").textContent = blocked
+    ? (d.sizes[0].problem + ".")
+    : "A new skill starts untrained (random weights). It takes the game's controls and picture as they are now, and its mouse steps from the sizes of your mouse movements in your training recordings.";
   // Players kept in Tools by 0.1.4.
   $("oldPlayers").hidden = !d.oldPlayers.length;
   $("oldPlayersBody").replaceChildren(...d.oldPlayers.map(p => el("tr", {},
@@ -1329,6 +1510,7 @@ function wire() {
 
 async function start() {
   if (store.get("collapsed", "0") === "1") document.body.classList.add("sidebar-collapsed");
+  await debugStart();
   wire();
   await loadLive();
   if (S.route === "profiles") await refreshWindows();

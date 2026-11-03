@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use yendory_client::Client;
 
+pub mod debug;
 pub mod games;
 mod handoff;
 pub mod lessons;
@@ -51,6 +52,9 @@ pub struct OpenModel {
 }
 
 /// A Network call from anywhere in Tools (the connection is made, or remade, as needed).
+/// The most the Network reads as one message (yendory-client and the Network: 64 MB a line).
+pub(crate) const NETWORK_MESSAGE_LIMIT: usize = 64 << 20;
+
 pub(crate) fn network_call(app: &AppHandle, method: &str, params: Value) -> Res<Value> {
     app.state::<Tools>().call(app, method, params)
 }
@@ -79,10 +83,15 @@ impl Tools {
         if let Some(c) = slot.as_ref().filter(|c| c.is_alive()) {
             return Ok(c.clone());
         }
+        debug::info("Connecting to the Yendory Network (starting it if needed)");
         let client = Arc::new(
-            Client::start_and_connect("Yendory Tools", VERSION, Duration::from_secs(15))
-                .map_err(|e| e.message)?,
+            Client::start_and_connect("Yendory Tools", VERSION, Duration::from_secs(15)).map_err(|e| {
+                debug::error(format!("The Yendory Network: {}", e.message));
+                e.message
+            })?,
         );
+        let h = &client.hello;
+        debug::info(format!("Connected to the Yendory Network {} (Engine {})", h.network, h.engine));
         if let Some(events) = client.take_events() {
             let app = app.clone();
             std::thread::spawn(move || {
@@ -99,14 +108,39 @@ impl Tools {
     }
 
     fn call(&self, app: &AppHandle, method: &str, params: Value) -> Res<Value> {
+        // The Network reads one message of at most 64 MB; a longer one is never answered (the
+        // call would wait for ever), so it is refused here with the reason.
+        let bytes = serde_json::to_vec(&params).map(|v| v.len()).unwrap_or(0) + method.len() + 64;
+        if bytes > NETWORK_MESSAGE_LIMIT {
+            let e = format!(
+                "Too large to send to the Yendory Network: {} in one message, and it takes at most {}",
+                debug::size(bytes),
+                debug::size(NETWORK_MESSAGE_LIMIT)
+            );
+            debug::error(format!("Network {method}: {e}"));
+            return Err(e);
+        }
+        let started = std::time::Instant::now();
         let client = self.network(app)?;
-        match client.call(method, params.clone()) {
+        let result = match client.call(method, params.clone()) {
             Err(e) if e.code == "disconnected" => {
+                debug::warn(format!("Network {method}: the connection was lost; connecting again"));
                 *self.network.lock().unwrap() = None;
                 self.network(app)?.call(method, params).map_err(|e| e.message)
             }
             other => other.map_err(|e| e.message),
+        };
+        let took = started.elapsed().as_secs_f64();
+        match &result {
+            Ok(_) => {
+                debug::info(format!("Network {method} ({}): answered in {took:.2} s", debug::size(bytes)))
+            }
+            Err(e) => debug::warn(format!(
+                "Network {method} ({}): failed after {took:.2} s: {e}",
+                debug::size(bytes)
+            )),
         }
+        result
     }
 
     /// Writes the open model's next line after `context` (one line; whether it was cut off).
@@ -445,11 +479,13 @@ pub fn run() {
         .manage(Tools::default())
         .manage(live::Live::default())
         .setup(|app| {
+            debug::start(app.handle());
             *app.state::<Tools>().handed.lock().unwrap() = handoff::model_argument(std::env::args());
             live::watch_stop_keys(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            debug::debug_lines,
             about,
             models,
             open_model,

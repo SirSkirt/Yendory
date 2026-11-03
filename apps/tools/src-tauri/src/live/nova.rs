@@ -49,12 +49,27 @@ pub struct SkillsView {
     testing: Recs,
     training_now: bool,
     generations_now: bool,
+    /// A new skill of each size for the game as it is now: its weights, and why it can't be
+    /// kept in a model (None: it can).
+    sizes: Vec<SizeView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeView {
+    size: Size,
+    weights: usize,
+    problem: Option<String>,
 }
 
 #[tauri::command]
 pub async fn skills_view(app: AppHandle, id: String) -> Res<SkillsView> {
     let data = data_dir(&app)?;
-    profile::load(&data, &id)?;
+    let p = profile::load(&data, &id)?;
+    let sizes = skills::weights_for(&data, &p)
+        .into_iter()
+        .map(|(size, weights)| SizeView { size, weights, problem: skills::fits_network(weights, &p).err() })
+        .collect();
     let model = crate::open_model_now(&app);
     let problem = skills::open_model(&app).err();
     let skills = if problem.is_none() { skills::list(&app)? } else { vec![] };
@@ -67,6 +82,7 @@ pub async fn skills_view(app: AppHandle, id: String) -> Res<SkillsView> {
         testing: recs(&data, &id, Split::Test),
         training_now: app.state::<Live>().training_stop.lock().unwrap().is_some(),
         generations_now: app.state::<Live>().generations.load(Ordering::Acquire),
+        sizes,
     })
 }
 
@@ -84,6 +100,14 @@ pub async fn skill_create(app: AppHandle, id: String, size: Size) -> Res<SkillSp
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
     let skill = skills::new_skill(&data, &p, size, seed)?;
+    skills::fits_network(skill.accepted.len(), &p)?;
+    crate::debug::info(format!(
+        "Adding a {:?} skill for {} to {}: {} weights",
+        size,
+        p.name,
+        m.name,
+        skill.accepted.len()
+    ));
     skills::save(&app, &m.id, &skill)?;
     Ok(skill.spec)
 }

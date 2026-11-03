@@ -506,3 +506,24 @@ episodes of 20 s, a new network can win its test by luck. More test episodes (or
 make each decision more trustworthy at the cost of time; whether the method itself improves play
 needs longer runs than this test makes.
 
+## Debug log, and how large a skill can be (Tools 0.1.8)
+
+**Debug log**: a collapsible log at the bottom of the window (the *Debug log* tab, or Ctrl+\`).
+It shows every command the page sends to the backend and how it ended (with its time; one with
+no answer after 10 s is marked as still waiting), the backend's own lines (each call to the
+Yendory Network with its size and time, connecting, the emergency stop keys, and any failure,
+panics included), events that end something (`…-done`, `…-failed`), and errors in the page.
+Commands asked many times a second (pictures, turns) appear only when they fail or are slow.
+*Problems only* filters, *Copy* puts the whole log on the clipboard. The backend keeps its latest
+2,000 lines in memory only; nothing is written to disk.
+
+**Skill size**: a skill is saved through the Network in one message, which the Network reads up
+to 64 MB; the skill's weights go in it four times (accepted, latest and the optimizer's two
+arrays) as base64 text, so a skill can have at most about 3.1 million weights. Its size follows
+the game's picture: a Small skill at 128×72 has about 0.3 million, at 320×180 about 2.8 million,
+at 640×360 about 12.8 million. 2.5 Train shows each size's weights for the game's picture as it
+is now and refuses a size that can't be kept, with the reason. Before 0.1.8 such a save was sent
+anyway; the Network could not read it and the call never answered (Teach seemed to do nothing).
+Tools now refuses any Network message over 64 MB with the reason instead of waiting. Carrying
+larger skills needs the Network to take a skill in parts (a change on yendory-hub).
+

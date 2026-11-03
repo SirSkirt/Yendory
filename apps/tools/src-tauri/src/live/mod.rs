@@ -178,9 +178,14 @@ impl Live {
 pub fn watch_stop_keys(app: &AppHandle) {
     let handle = app.clone();
     let result = sys::stop_key_watch(Box::new(move || {
+        crate::debug::warn("The emergency stop keys were pressed: everything held is released");
         handle.state::<Live>().emergency_stop();
         let _ = handle.emit("live-stopped", ());
     }));
+    match &result {
+        Ok(()) => crate::debug::info("Watching the emergency stop keys (Ctrl+Alt+End)"),
+        Err(e) => crate::debug::error(format!("The emergency stop keys can't be watched: {e}")),
+    }
     *app.state::<Live>().stop_keys.lock().unwrap() = Some(result);
 }
 
